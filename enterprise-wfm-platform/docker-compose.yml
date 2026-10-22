@@ -1,0 +1,83 @@
+# WFM platform, single server, host networking: every container shares the host network stack, so all
+# services reach each other on 127.0.0.1 and the ports below are the real host ports.
+#
+#   admin web app :3000     employee portal :3001     gateway API :4000
+#   engine gRPC :50051 (loopback)   redis :6379 (loopback)   nats :4222 (loopback)
+#
+# Needs Linux with Docker Engine. Host networking does not work on Docker Desktop for Windows/Mac by default.
+#
+# 1. cp backend/.env.example backend/gateway/.env and fill it in (DATABASE_URL, JWT_SECRET, CORS_ORIGIN, ...).
+#    DATABASE_URL points at your PostgreSQL, e.g. postgres://wfm:pw@127.0.0.1:5432/wfm_platform
+# 2. docker compose up -d --build
+#    No PostgreSQL yet? Set POSTGRES_PASSWORD and run: docker compose --profile db up -d --build
+#    Do not enable the "db" profile if PostgreSQL already runs on this host (both would use port 5432).
+
+x-common: &common
+  network_mode: host
+  restart: unless-stopped
+  init: true
+
+services:
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    command: ["redis-server", "--bind", "127.0.0.1", "--appendonly", "yes", "--save", "60", "1"]
+    volumes: [redis-data:/data]
+
+  nats:
+    <<: *common
+    image: nats:2.10-alpine
+    # JetStream is required (durable streams); state lives in the volume.
+    command: ["-js", "-sd", "/data", "-a", "127.0.0.1", "-p", "4222"]
+    volumes: [nats-data:/data]
+
+  postgres:
+    <<: *common
+    profiles: ["db"]
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wfm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD to use the db profile}
+      POSTGRES_DB: ${POSTGRES_DB:-wfm_platform}
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    volumes: [pg-data:/var/lib/postgresql/data]
+
+  engine:
+    <<: *common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      target: engine
+    image: wfm-engine:latest
+    environment:
+      ENGINE_ADDR: 127.0.0.1:50051        # loopback: the engine has no authentication
+
+  gateway:
+    <<: *common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      target: gateway
+    image: wfm-gateway:latest
+    env_file: backend/gateway/.env
+    environment:                          # override the env file: this infrastructure runs on this host
+      REDIS_URL: redis://127.0.0.1:6379
+      NATS_URL: nats://127.0.0.1:4222
+      ENGINE_ADDR: 127.0.0.1:50051
+      PORT: "4000"
+    depends_on: [redis, nats, engine]
+
+  web:
+    <<: *common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_AG_GRID_LICENSE: ${VITE_AG_GRID_LICENSE:-}
+    image: wfm-web:latest
+    depends_on: [gateway]
+
+volumes:
+  redis-data:
+  nats-data:
+  pg-data:

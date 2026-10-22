@@ -1,0 +1,11 @@
+{
+  "name": "wfm-database-reader-connector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads a customer's own database on a watermark column and relays new rows out to the WFM Integration Station. Postgres today; see index.mjs for adding another engine's driver.",
+  "main": "index.mjs",
+  "dependencies": {
+    "pg": "^8.11.0"
+  }
+}

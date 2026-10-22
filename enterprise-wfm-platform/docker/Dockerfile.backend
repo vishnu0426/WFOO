@@ -1,0 +1,36 @@
+# Backend images: build one with --target.
+#   docker build -f docker/Dockerfile.backend --target gateway -t wfm-gateway .
+#   docker build -f docker/Dockerfile.backend --target engine  -t wfm-engine  .
+# The build context is the repository root (enterprise-wfm-platform/).
+
+# ---------- gateway: Node.js REST /api/v1 + WebSocket /ws, applies DB migrations on start ----------
+FROM node:22-slim AS gateway
+ENV NODE_ENV=production
+# Keep the repo layout: config.ts finds ../../proto and ../../db/migrations relative to src/.
+WORKDIR /app/backend/gateway
+COPY backend/gateway/package.json backend/gateway/package-lock.json ./
+# tsx is a devDependency and is what runs the TypeScript, so install everything.
+RUN npm ci --include=dev
+COPY backend/gateway/tsconfig.json ./
+COPY backend/gateway/src ./src
+COPY backend/proto /app/backend/proto
+COPY backend/db /app/backend/db
+USER node
+EXPOSE 4000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# Settings come from the environment (compose env_file); there is no .env inside the image.
+CMD ["npx", "tsx", "src/index.ts"]
+
+# ---------- engine: Python gRPC (forecasting, staffing, OR-Tools schedule solver) ----------
+FROM python:3.12-slim AS engine
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app/backend/engine
+COPY backend/engine/requirements.txt ./
+# pytest is only needed for the test suites.
+RUN grep -v '^pytest' requirements.txt > req.prod.txt && pip install -r req.prod.txt
+COPY backend/engine/*.py ./
+RUN rm -f test_*.py && useradd -r -u 10001 wfm
+USER wfm
+ENV ENGINE_ADDR=127.0.0.1:50051
+EXPOSE 50051
+CMD ["python", "server.py"]

@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/* the portal's own accent, distinct from the admin app's near-black primary -- used for the active nav item,
+   primary buttons and today's highlight, so the two apps read as related but not identical. A real @theme block,
+   not a plain :root declaration, is what makes Tailwind v4 generate bg-accent / text-accent / border-accent etc. */
+@theme {
+  --color-accent: #2458A8;
+  --color-accent-dark: #1C4687;
+  --color-accent-bg: #EAF0FA;
+}
+
+@layer base {
+  body {
+    background-color: #fafaf8;
+    color: #171717;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

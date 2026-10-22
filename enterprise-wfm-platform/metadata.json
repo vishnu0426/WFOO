@@ -1,0 +1,6 @@
+{
+  "name": "Enterprise WFM Platform",
+  "description": "Production-grade enterprise workforce management platform with multi-echelon forecasting, capacity planning, schedule optimization, intraday adherence, and data management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

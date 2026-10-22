@@ -1,0 +1,201 @@
+syntax = "proto3";
+package wfm;
+
+// Stateless workforce-planning engine (Python). Called by the Node gateway over gRPC.
+service Engine {
+  // v2 forecasting: model tournament per queue, reconciliation, staffing and intraday reforecast
+  rpc ForecastSeries(SeriesRequest) returns (SeriesResponse);
+  rpc Staffing(StaffingRequest) returns (StaffingResponse);
+  rpc Intraday(IntradayRequest) returns (IntradayResponse);
+  // phase 2: shift assignment by constraint programming (OR-Tools CP-SAT)
+  rpc Schedule(ScheduleRequest) returns (ScheduleResponse);
+}
+
+// ---------------------------------------------------------------------------
+// v2 forecasting
+// ---------------------------------------------------------------------------
+
+// One observation or forecast value. slot = interval index within the day (0..slots_per_day-1); -1 means a whole day.
+message Point {
+  string day = 1;      // YYYY-MM-DD
+  int32 slot = 2;
+  double volume = 3;
+  double aht_sec = 4;
+  double p10 = 5;      // forecast only: lower band
+  double p90 = 6;      // forecast only: upper band
+}
+
+message QueueSeries {
+  int32 queue_id = 1;
+  string name = 2;
+  string channel = 3;            // voice | chat | email
+  repeated Point daily = 4;      // full daily history (slot = -1)
+  repeated Point slots = 5;      // interval history, recent weeks only (used for the intraday profile and AHT)
+}
+
+message EventInfo {
+  string name = 1;
+  string kind = 2;               // holiday | campaign | outage | other
+  string start_day = 3;
+  string end_day = 4;
+  double uplift_pct = 5;         // analyst uplift; 0 = learn from history when possible
+  int32 queue_id = 6;            // 0 = every queue
+  int32 lead_days = 7;           // uplift ramps up linearly over this many days before start_day; 0 = none
+  int32 lag_days = 8;            // uplift ramps back down over this many days after end_day; 0 = none
+}
+
+message SeriesRequest {
+  repeated QueueSeries queues = 1;
+  repeated string dates = 2;     // days to forecast (ascending, contiguous)
+  int32 slots_per_day = 3;       // 96 (15 min) / 48 (30 min); 0 = daily only (long-term)
+  repeated EventInfo events = 4;
+  string model = 5;              // "auto" (tournament) or a fixed model name
+  bool reconcile = 6;            // make queue forecasts add up to the group forecast
+}
+
+message ModelScore {
+  string model = 1;
+  double wape = 2;               // weighted absolute percentage error over the backtest
+  double mase = 3;               // MAE scaled by seasonal-naive in-sample MAE
+  double bias = 4;               // (forecast - actual) / actual
+  bool selected = 5;
+  double mae = 6;                // mean absolute error, contacts per day
+  double rmse = 7;               // root mean squared error, contacts per day
+  double mape = 8;               // mean absolute percentage error over non-zero days
+  string stability = 9;          // HIGH | MEDIUM | VARIABLE: how much the error moves between backtest folds
+}
+
+message SeriesForecast {
+  int32 queue_id = 1;            // 0 = group total
+  string model = 2;              // model actually used
+  repeated ModelScore scores = 3;
+  repeated Point backtest = 4;   // daily: volume = actual, aht_sec = forecast of the chosen model (rolling origin)
+  repeated Point daily = 5;
+  repeated Point slots = 6;
+  repeated string notes = 7;
+  int32 cleaned_days = 8;        // outlier / event days replaced before fitting
+  double sigma_rel = 9;          // relative forecast error used for the bands
+}
+
+message SeriesResponse {
+  repeated SeriesForecast series = 1;
+}
+
+message ChannelParams {
+  string channel = 1;
+  double service_level = 2;      // e.g. 0.8
+  int32 answer_sec = 3;          // e.g. 20
+  double occupancy_cap = 4;      // e.g. 0.85
+  string method = 5;             // erlang_c | erlang_a
+  int32 patience_sec = 6;        // erlang_a only: mean time to abandon
+  double concurrency = 7;        // chat: simultaneous conversations per agent
+  int32 open_slot = 8;           // async work is spread over [open_slot, close_slot)
+  int32 close_slot = 9;
+  int32 turnaround_hours = 10;   // back-office only: target turnaround window: workload is smoothed over this many hours instead of requiring same-day completion. 0/unset = same-day (24h)
+}
+
+message StaffInput {
+  string channel = 1;
+  string day = 2;
+  int32 slot = 3;
+  double volume = 4;
+  double aht_sec = 5;
+}
+
+message StaffingRequest {
+  repeated StaffInput inputs = 1;
+  repeated ChannelParams params = 2;
+  int32 interval_min = 3;        // 15
+  double shrinkage = 4;          // e.g. 0.3
+  bool blend = 5;                // cross-skilled agents: voice + chat share one pool
+}
+
+message StaffOutput {
+  string channel = 1;
+  string day = 2;
+  int32 slot = 3;
+  double base = 4;               // agents on the phone/chat/queue
+  double required = 5;           // agents on the schedule (base grossed up for shrinkage)
+  double occupancy = 6;
+  double service_level = 7;
+  double asa_sec = 8;
+  double abandon = 9;
+  bool warn = 10;                // model assumptions are shaky here (small team / very high occupancy)
+}
+
+message StaffingResponse {
+  repeated StaffOutput out = 1;
+}
+
+message IntradayRequest {
+  repeated Point forecast = 1;   // today's interval forecast (one queue or the group)
+  repeated Point actuals = 2;    // completed intervals so far
+  int32 current_slot = 3;        // first interval that has not completed yet
+}
+
+message IntradayResponse {
+  repeated Point adjusted = 1;   // reforecast for the intervals from current_slot on
+  double ratio = 2;              // applied actual / forecast ratio
+  double credibility = 3;        // 0..1, how much the actuals were trusted
+}
+
+// ---------------------------------------------------------------------------
+// phase 2: scheduling (OR-Tools CP-SAT)
+// ---------------------------------------------------------------------------
+
+// One person's hard limits. Times are in 15-minute slots. Days are indexes from the first day of the period.
+message SchedEmployee {
+  int32 id = 1;
+  int32 max_week_slots = 2;      // hard cap on scheduled slots in a full week
+  int32 min_week_slots = 3;      // soft target (contract hours); shortfall is penalised
+  int32 max_consecutive = 4;     // most days worked in a row
+  int32 rest_slots = 5;          // minimum gap between the end of one shift and the start of the next
+  int32 max_days_week = 6;
+}
+
+// A shift this person could work: employee x day x template x start time, already filtered for availability and time off.
+message ShiftOption {
+  int32 employee = 1;
+  int32 day = 2;
+  int32 template = 3;
+  int32 start_slot = 4;          // slot of the day; may be followed by length_slots past midnight
+  int32 length_slots = 5;
+  int32 preference = 6;          // 1 preferred, 0 neutral, -1 disliked
+  int32 paid_slots = 7;          // paid part of the shift (meal excluded); counts toward weekly hours. 0 = whole shift
+}
+
+message ScheduleRequest {
+  int32 days = 1;
+  int32 first_dow = 2;                       // weekday of day 0, Monday = 0
+  repeated int32 required = 3;               // days * 96 people needed on shift per slot
+  repeated SchedEmployee employees = 4;
+  repeated ShiftOption options = 5;
+  int32 time_limit_sec = 6;
+  int32 w_under = 7;                         // penalty per missing person-slot
+  int32 w_over = 8;                          // penalty per surplus person-slot
+  int32 w_hours = 9;                         // penalty per slot below an employee's contract minimum
+  int32 w_pref = 10;                         // reward per preferred shift (negative for disliked)
+  int32 w_fair = 11;                         // penalty on the spread of weekend shifts between people
+  int32 workers = 12;
+}
+
+message Assignment {
+  int32 employee = 1;
+  int32 day = 2;
+  int32 template = 3;
+  int32 start_slot = 4;
+  int32 length_slots = 5;
+}
+
+message ScheduleResponse {
+  repeated Assignment assignments = 1;
+  string status = 2;             // OPTIMAL | FEASIBLE | INFEASIBLE | UNKNOWN
+  double objective = 3;
+  double best_bound = 4;
+  double gap = 5;                // 0..1, how far the answer can be from the best possible
+  double wall_sec = 6;
+  int32 variables = 7;
+  int32 constraints = 8;
+  int32 under_slots = 9;         // person-slots still uncovered
+  int32 over_slots = 10;
+}
