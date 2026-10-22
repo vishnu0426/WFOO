@@ -185,7 +185,7 @@ integrationsAdmin.post('/:id/entity-matches/suggest', requires('config:read'), a
     const candidates = b.entityType === 'queue'
       ? await tx.q<any>('SELECT id, name, code FROM queues WHERE tenant_id = :t AND ($1::uuid IS NULL OR wfm_group_id = $1)', [connector.wfmGroupId])
       : b.entityType === 'employee'
-        ? await tx.q<any>('SELECT id, (first_name || \' \' || last_name) AS name, employee_number AS code FROM employees WHERE tenant_id = :t')
+        ? await tx.q<any>('SELECT id, (first_name || \' \' || last_name) AS name, employee_number AS code, extension AS alt_code FROM employees WHERE tenant_id = :t')
         : await tx.q<any>('SELECT id, name, code FROM skills WHERE tenant_id = :t');
     return suggestEntityMatches(b.seen, candidates);
   });

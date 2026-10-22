@@ -30,7 +30,7 @@ export function mapFields(raw: unknown, maps: FieldMap[]): Record<string, unknow
 
 // ---------------------------------------------------------------- entity matching
 
-export interface EntityCandidate { id: string; name: string; code?: string }
+export interface EntityCandidate { id: string; name: string; code?: string; altCode?: string }
 export interface EntitySeen { sourceId: string; sourceLabel: string }
 export interface EntitySuggestion { sourceId: string; sourceLabel: string; targetId: string | null; targetName: string | null; score: number }
 
@@ -55,7 +55,14 @@ export function suggestEntityMatches(seen: EntitySeen[], candidates: EntityCandi
   return seen.map((s) => {
     let best: EntityCandidate | null = null, bestScore = 0;
     for (const c of candidates) {
-      const score = Math.max(similarity(s.sourceLabel, c.name), c.code ? similarity(s.sourceLabel, c.code) : 0, similarity(s.sourceId, c.name));
+      // sourceId is the vendor's own raw identifier (e.g. a SIP handle like "1002@agnoshin.com") -- it was only ever
+      // compared against our display NAME before, never our own code or an employee's stored extension, so an opaque
+      // id that happens to equal one of those exactly (the common case once extensions are imported) scored 0.
+      const score = Math.max(
+        similarity(s.sourceLabel, c.name), c.code ? similarity(s.sourceLabel, c.code) : 0, similarity(s.sourceId, c.name),
+        c.code ? similarity(s.sourceId, c.code) : 0,
+        c.altCode ? Math.max(similarity(s.sourceLabel, c.altCode), similarity(s.sourceId, c.altCode)) : 0,
+      );
       if (score > bestScore) { bestScore = score; best = c; }
     }
     return { sourceId: s.sourceId, sourceLabel: s.sourceLabel, targetId: bestScore >= floor ? best!.id : null, targetName: bestScore >= floor ? best!.name : null, score: Math.round(bestScore * 100) / 100 };
