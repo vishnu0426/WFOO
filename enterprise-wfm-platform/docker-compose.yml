@@ -6,7 +6,7 @@
 #
 # Needs Linux with Docker Engine. Host networking does not work on Docker Desktop for Windows/Mac by default.
 #
-# 1. cp backend/.env.example backend/gateway/.env and fill it in (DATABASE_URL, JWT_SECRET, CORS_ORIGIN, ...).
+# 1. cp backend/.env.example backend/.env and fill it in (DATABASE_URL, JWT_SECRET, CORS_ORIGIN, ...).
 #    DATABASE_URL points at your PostgreSQL, e.g. postgres://wfm:pw@127.0.0.1:5432/wfm_platform
 # 2. docker compose up -d --build
 #    No PostgreSQL yet? Set POSTGRES_PASSWORD and run: docker compose --profile db up -d --build
@@ -59,7 +59,7 @@ services:
       dockerfile: docker/Dockerfile.backend
       target: gateway
     image: wfm-gateway:latest
-    env_file: backend/gateway/.env
+    env_file: backend/.env
     environment:                          # override the env file: this infrastructure runs on this host
       REDIS_URL: redis://127.0.0.1:6379
       NATS_URL: nats://127.0.0.1:4222
