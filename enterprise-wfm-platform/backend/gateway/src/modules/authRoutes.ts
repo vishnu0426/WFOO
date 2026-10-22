@@ -65,11 +65,11 @@ const NewUser = z.object({
   email: z.string().email().optional(),
   role: z.enum(ROLES),
   employeeId: z.string().uuid().optional(),
-  password: z.string().min(10, 'must be at least 10 characters'),
+  password: z.string().min(8, 'must be at least 8 characters'),
 });
 const UserPatch = z.object({
   displayName: z.string().min(1).max(120).optional(), email: z.string().email().nullable().optional(),
-  role: z.enum(ROLES).optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional(), password: z.string().min(10).optional(),
+  role: z.enum(ROLES).optional(), status: z.enum(['ACTIVE', 'DISABLED']).optional(), password: z.string().min(8).optional(),
 });
 
 authed.get('/users', requires('users:read'), async (req, res) => {

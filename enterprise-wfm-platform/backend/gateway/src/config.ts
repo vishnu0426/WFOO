@@ -13,6 +13,8 @@ export const config = {
   databaseUrl: need('DATABASE_URL'),
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
   natsUrl: process.env.NATS_URL || 'nats://localhost:4222',
+  natsUser: process.env.NATS_USER || undefined,
+  natsPass: process.env.NATS_PASS || undefined,
   engineAddr: process.env.ENGINE_ADDR || '127.0.0.1:50051',
   port: Number(process.env.PORT || 4000),
   corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),

@@ -34,10 +34,10 @@ const PasswordCard: React.FC = () => {
         <form onSubmit={submit} className="space-y-3">
           {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
           <Field label="Current password"><Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus /></Field>
-          <Field label="New password" hint="At least 10 characters"><Input type="password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
+          <Field label="New password" hint="At least 8 characters"><Input type="password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
           <Field label="Confirm new password"><Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></Field>
           <div className="flex gap-2">
-            <Btn variant="primary" type="submit" disabled={busy || !current || next.length < 10 || !confirm}>{busy ? 'Saving…' : 'Save new password'}</Btn>
+            <Btn variant="primary" type="submit" disabled={busy || !current || next.length < 8 || !confirm}>{busy ? 'Saving…' : 'Save new password'}</Btn>
             <Btn type="button" onClick={reset}>Cancel</Btn>
           </div>
         </form>

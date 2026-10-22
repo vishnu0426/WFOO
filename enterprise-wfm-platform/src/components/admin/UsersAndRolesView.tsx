@@ -113,8 +113,8 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
                 <Field label="Full name"><Input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="Jane Doe" /></Field>
                 <Field label="Email"><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="optional" /></Field>
                 <Field label="Role"><Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>)}</Select></Field>
-                <Field label="Temporary password" hint="10+ characters"><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
-                <div className="md:col-span-5 flex gap-2"><Btn variant="primary" onClick={createUser} disabled={busy || !form.username || !form.displayName || form.password.length < 10}>Create</Btn><Btn onClick={() => setShowNew(false)}>Cancel</Btn></div>
+                <Field label="Temporary password" hint="8+ characters"><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+                <div className="md:col-span-5 flex gap-2"><Btn variant="primary" onClick={createUser} disabled={busy || !form.username || !form.displayName || form.password.length < 8}>Create</Btn><Btn onClick={() => setShowNew(false)}>Cancel</Btn></div>
               </div>
             )}
             {!users.data?.length ? <Empty title="No users yet" /> : (
@@ -140,7 +140,7 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
                               <Field label="Role"><Select value={edit.role} disabled={isSelf} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>)}</Select></Field>
                               <Field label="Status"><Select value={edit.status} disabled={isSelf} onChange={(e) => setEdit({ ...edit, status: e.target.value as WUser['status'] })}><option value="ACTIVE">Active</option><option value="DISABLED">Disabled</option></Select></Field>
                               <Field label="Reset password" hint="leave blank to keep it"><Input type="text" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
-                              <Btn variant="primary" onClick={saveEdit} disabled={busy || (!!edit.password && edit.password.length < 10)}>Save</Btn>
+                              <Btn variant="primary" onClick={saveEdit} disabled={busy || (!!edit.password && edit.password.length < 8)}>Save</Btn>
                             </div>
                           </td></tr>
                         )}

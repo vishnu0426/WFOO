@@ -45,7 +45,7 @@ export const jetStreamEnabled = () => js !== null;
 const STREAM = 'WFM';
 
 export async function connectNats(): Promise<void> {
-  nc = await connect({ servers: config.natsUrl, name: 'wfm-gateway', maxReconnectAttempts: -1 });
+  nc = await connect({ servers: config.natsUrl, user: config.natsUser, pass: config.natsPass, name: 'wfm-gateway', maxReconnectAttempts: -1 });
   try {
     const jsm = await nc.jetstreamManager();
     const cfg = { name: STREAM, subjects: ['wfm.>'], retention: RetentionPolicy.Limits, storage: StorageType.File, max_age: 7 * 24 * 3600 * 1e9 };

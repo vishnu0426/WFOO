@@ -62,7 +62,7 @@ selfAdmin.get('/logins', requires('users:read'), async (req, res) => {
 /** Give an employee a login for the app. The temporary password is shown once; they should change it. */
 selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
   const p = me(req);
-  const b = parse(z.object({ employeeId: uuid, username: z.string().min(3).max(60).regex(/^[a-zA-Z0-9._-]+$/).optional(), password: z.string().min(10).max(100).optional(), role: z.enum(['AGENT', 'SUPERVISOR_RTA', 'SCHEDULER']).default('AGENT') }), req.body);
+  const b = parse(z.object({ employeeId: uuid, username: z.string().min(3).max(60).regex(/^[a-zA-Z0-9._-]+$/).optional(), password: z.string().min(8).max(100).optional(), role: z.enum(['AGENT', 'SUPERVISOR_RTA', 'SCHEDULER']).default('AGENT') }), req.body);
   const password = b.password ?? randomBytes(9).toString('base64url');
   const out = await withTenant(p.tenantId, async (tx) => {
     const e = await tx.one<any>('SELECT id, employee_number, first_name, last_name, email FROM employees WHERE tenant_id = :t AND id = $1', [b.employeeId]);
@@ -80,7 +80,7 @@ selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
 /** Issues a new temporary password for an existing login (e.g. the person forgot it, or it was never delivered). Shown once, same as creation. */
 selfAdmin.put('/logins/:userId/reset-password', requires('users:write'), async (req, res) => {
   const p = me(req), userId = parse(uuid, req.params.userId);
-  const b = parse(z.object({ password: z.string().min(10).max(100).optional() }), req.body);
+  const b = parse(z.object({ password: z.string().min(8).max(100).optional() }), req.body);
   const password = b.password ?? randomBytes(9).toString('base64url');
   const out = await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>('SELECT id, username FROM users WHERE tenant_id = :t AND id = $1 AND employee_id IS NOT NULL', [userId]);
@@ -162,7 +162,7 @@ selfService.get('/profile', requires('self:use'), async (req, res) => {
 
 /** Manually typed change of your own password -- requires the current one, unlike the admin-triggered reset above. */
 selfService.put('/change-password', requires('self:use'), async (req, res) => {
-  const p = me(req), b = parse(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(10).max(100) }), req.body);
+  const p = me(req), b = parse(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(8).max(100) }), req.body);
   await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>('SELECT id, password_hash FROM users WHERE tenant_id = :t AND id = $1', [p.userId]);
     if (!u || !(await bcrypt.compare(b.currentPassword, u.passwordHash))) throw bad('Current password is incorrect.');
