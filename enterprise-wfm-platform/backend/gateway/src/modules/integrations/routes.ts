@@ -148,6 +148,51 @@ integrationsAdmin.put('/:id/field-maps', requires('config:write'), async (req, r
   res.json({ ok: true });
 });
 
+/** Dry run: the exact same mapping + resolution logic live ingest uses (natsSubscriber.ts's handleOne), against the
+ * connector's last real sample, but entirely read-only -- no ingest, no write to integration_event_rules (a PENDING
+ * rule is only ever created by a REAL message, never by testing one), no entity-match writes. Lets an admin see
+ * whether a field map is right before it's saved and starts governing live traffic, the same way CSV import's own
+ * dry run previews a commit before it happens. */
+integrationsAdmin.post('/:id/field-maps/test', requires('config:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const b = parse(z.object({ maps: z.array(z.object({ targetField: z.string().min(1), sourcePath: z.string().min(1), transform: z.string().nullable().optional() })).max(100) }), req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const connector = await tx.one<any>('SELECT preset, last_sample FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]);
+    if (!connector) throw notFound('Connector');
+    if (connector.lastSample == null) throw bad("This connector hasn't received a real message yet -- there's nothing to test against.");
+    const preset = presetById(connector.preset);
+    if (!preset) throw bad('Unknown preset');
+
+    const raw = connector.lastSample;
+    const maps: FieldMap[] = b.maps.map((m) => ({ targetField: m.targetField, sourcePath: m.sourcePath, transform: (m.transform || null) as FieldMap['transform'] }));
+    const mapped = mapFields(raw, maps);
+    const issues: string[] = [];   // a real problem -- this message would be dropped or rejected
+    const notes: string[] = [];    // informational -- the message would be accepted, just not the way someone might expect at a glance
+    let resolved: Record<string, unknown> = mapped;
+
+    if (preset.writesTo === 'agent_state') {
+      let state = mapped.state !== undefined ? String(mapped.state) : undefined;
+      let reason = mapped.reason ? String(mapped.reason) : undefined;
+      let skipped = false;
+      if (mapped.eventType !== undefined && !state) {
+        const rule = await tx.one<any>('SELECT action, state, reason FROM integration_event_rules WHERE tenant_id = :t AND connector_id = $1 AND event_type = $2', [id, String(mapped.eventType)]);
+        if (!rule) issues.push(`Event type '${mapped.eventType}' has never been seen by this connector -- a real message like this would start out PENDING and be dropped until a rule is set under "Event types".`);
+        else if (rule.action === 'PENDING') issues.push(`Event type '${mapped.eventType}' is already PENDING -- messages like this are being dropped right now until a rule is set.`);
+        else if (rule.action === 'SKIP') { skipped = true; notes.push(`Event type '${mapped.eventType}' is set to be ignored on purpose -- this message is correctly accepted and produces no state change.`); }
+        else { state = rule.state ?? undefined; reason = rule.reason ?? reason; }
+      }
+      if (!mapped.employeeNumber) issues.push('Agent extension is not mapped, or nothing was found at that path in the sample.');
+      if (!state && !skipped && !issues.length) issues.push('State is not mapped, and this event type carries no state of its own.');
+      resolved = { employeeNumber: mapped.employeeNumber ?? null, state: state ?? null, reason: reason ?? null, at: mapped.at ?? null, eventType: mapped.eventType ?? null };
+    } else if (preset.writesTo === 'interval_history') {
+      const parsed = LiveRows.safeParse({ rows: [{ queueId: mapped.queueId, queue: mapped.queue, day: String(mapped.day ?? ''), time: mapped.time ? String(mapped.time) : undefined, slot: mapped.slot !== undefined ? Number(mapped.slot) : undefined, volume: Number(mapped.volume ?? 0), ahtSec: mapped.ahtSec !== undefined ? Number(mapped.ahtSec) : undefined, abandoned: mapped.abandoned !== undefined ? Number(mapped.abandoned) : undefined }] });
+      if (!parsed.success) issues.push(parsed.error.issues[0]?.message ?? 'Does not match the shape interval history needs');
+    }
+    return { raw, mapped, resolved, issues, notes, ok: issues.length === 0 };
+  });
+  res.json(out);
+});
+
 integrationsAdmin.get('/:id/event-rules', requires('config:read'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   res.json(await withTenant(p.tenantId, (tx) => tx.q<any>('SELECT event_type, action, state, reason, seen_count, last_seen_at FROM integration_event_rules WHERE tenant_id = :t AND connector_id = $1 ORDER BY last_seen_at DESC', [id])));

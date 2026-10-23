@@ -16,6 +16,9 @@ const describe = (subject: string, p: any): Omit<LiveEvent, 'id' | 'at'> | null 
     case 'forecast.reject': return { title: 'Forecast returned to draft', description: `${p.name}${who}`, module: 'forecasting', subSection: 'forecast-dashboard', tone: 'warn' };
     case 'forecast.publish': return { title: 'Forecast published', description: `${p.name}${who}`, module: 'forecasting', subSection: 'forecast-dashboard', tone: 'success' };
     case 'data.imported': return { title: 'History import committed', description: `Interval history was updated${who}`, module: 'data-management', subSection: 'staged-imports', tone: 'success' };
+    case 'integration.error': return { title: 'Integration error', description: `${p.name}: ${p.message}`, module: 'configuration', subSection: 'integration-station', tone: 'warn' };
+    case 'integration.recovered': return { title: 'Integration recovered', description: `${p.name} is receiving data again`, module: 'configuration', subSection: 'integration-station', tone: 'success' };
+    case 'integration.event-type-pending': return { title: 'New event type needs a rule', description: `${p.name}: '${p.eventType}' is waiting for a rule, or it'll keep being dropped`, module: 'configuration', subSection: 'integration-station', tone: 'warn' };
     default: return null;
   }
 };

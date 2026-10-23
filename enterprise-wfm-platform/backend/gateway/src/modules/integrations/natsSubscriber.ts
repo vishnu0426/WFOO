@@ -8,6 +8,7 @@
  */
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
 import { raw, withTenant } from '../../db.ts';
+import { publish } from '../../infra.ts';
 import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
 import { presetById, type Preset } from './presets.ts';
@@ -24,12 +25,24 @@ async function loadFieldMaps(connectorId: string, tenantId: string): Promise<Fie
 
 /** `sampleRaw`, when given, is kept in `last_sample` independently of success/failure -- it's what the drag-and-drop
  * field mapper in Integration Station builds its draggable source list from, so it has to survive the mapping
- * actually getting fixed (unlike `last_error`, which clears on the first success). */
+ * actually getting fixed (unlike `last_error`, which clears on the first success).
+ *
+ * Notifies on a genuine transition only (healthy -> broken, or broken -> healthy again) -- a connector stuck in
+ * one state can process thousands of messages a day, and nobody needs to be told "still broken" that many times.
+ * The RETURNING clause reads the row's PRE-update error on the same write, so detecting the transition costs
+ * nothing extra. */
 async function mark(connectorId: string, tenantId: string, ok: boolean, message?: string, sampleRaw?: unknown) {
   try {
-    await withTenant(tenantId, (tx) => tx.exec(
-      'UPDATE integration_connectors SET last_received_at = CASE WHEN $2 THEN now() ELSE last_received_at END, last_error = $3, last_sample = coalesce($4::jsonb, last_sample) WHERE tenant_id = :t AND id = $1',
+    const rows = await withTenant(tenantId, (tx) => tx.q<any>(
+      `WITH old AS (SELECT last_error, name FROM integration_connectors WHERE tenant_id = :t AND id = $1)
+       UPDATE integration_connectors SET last_received_at = CASE WHEN $2 THEN now() ELSE last_received_at END, last_error = $3, last_sample = coalesce($4::jsonb, last_sample)
+       WHERE tenant_id = :t AND id = $1
+       RETURNING (SELECT last_error FROM old) AS previous_error, (SELECT name FROM old) AS connector_name`,
       [connectorId, ok, ok ? null : (message ?? null), sampleRaw !== undefined ? JSON.stringify(sampleRaw) : null]));
+    const previousError = rows[0]?.previousError ?? null;
+    const name = rows[0]?.connectorName ?? 'Connector';
+    if (!ok && !previousError && message) publish(tenantId, ['integration', 'error'], { connectorId, name, message });
+    else if (ok && previousError) publish(tenantId, ['integration', 'recovered'], { connectorId, name });
   } catch { /* bookkeeping is best effort, never blocks ingest */ }
 }
 
@@ -56,13 +69,18 @@ async function resolveEmployeeNumber(connectorId: string, tenantId: string, sour
   } catch { return sourceId; }
 }
 
-/** Counts every sighting of an event type and returns its rule, creating a PENDING rule the first time it appears. */
-async function recordEventType(connectorId: string, tenantId: string, eventType: string) {
+/** Counts every sighting of an event type and returns its rule, creating a PENDING rule the first time it appears.
+ * `seen_count` defaults to 0 and is only bumped by the ON CONFLICT branch, so a result of 0 means this exact
+ * INSERT just created the row -- the one moment worth telling someone about, not every later sighting while it
+ * sits unresolved. */
+async function recordEventType(connectorId: string, tenantId: string, connectorName: string, eventType: string) {
   const rows = await withTenant(tenantId, (tx) => tx.q<any>(
     `INSERT INTO integration_event_rules (tenant_id, connector_id, event_type) VALUES (:t, $1, $2)
      ON CONFLICT (connector_id, event_type) DO UPDATE SET seen_count = integration_event_rules.seen_count + 1, last_seen_at = now()
-     RETURNING action, state, reason`, [connectorId, eventType]));
-  return { action: rows[0].action as 'PENDING' | 'STATE' | 'SKIP', state: rows[0].state as string | null, reason: rows[0].reason as string | null };
+     RETURNING action, state, reason, seen_count`, [connectorId, eventType]));
+  const r = rows[0];
+  if (r.seenCount === 0 && r.action === 'PENDING') publish(tenantId, ['integration', 'event-type-pending'], { connectorId, name: connectorName, eventType });
+  return { action: r.action as 'PENDING' | 'STATE' | 'SKIP', state: r.state as string | null, reason: r.reason as string | null };
 }
 
 async function handleOne(connector: any, preset: Preset, subject: string, data: Uint8Array) {
@@ -76,7 +94,7 @@ async function handleOne(connector: any, preset: Preset, subject: string, data: 
       let state = m.state !== undefined ? String(m.state) : undefined;
       let reason = m.reason ? String(m.reason) : undefined;
       if (m.eventType !== undefined) {
-        const rule = await recordEventType(connector.id, connector.tenantId, String(m.eventType));
+        const rule = await recordEventType(connector.id, connector.tenantId, connector.name, String(m.eventType));
         // only the event type decides what happens when the message carries no state of its own (logins, logouts,
         // heartbeats); a message that already has a state (e.g. EVT_AGENT_READY with state=READY) goes straight
         // through on that, the event-type rule is just there to count it -- it must never block a real state change

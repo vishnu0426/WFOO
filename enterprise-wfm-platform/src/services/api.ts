@@ -240,6 +240,8 @@ export type ConnectorCreated = Connector & { apiKey: string | null; webhookSecre
 export type IntegrationFieldMap = { targetField: string; sourcePath: string; transform: string | null };
 export type EntitySuggestion = { sourceId: string; sourceLabel: string; targetId: string | null; targetName: string | null; score: number };
 export type EntityMatchRow = { entityType: string; sourceId: string; sourceLabel: string; targetId: string | null };
+export type EventRule = { eventType: string; action: 'PENDING' | 'STATE' | 'SKIP'; state: string | null; reason: string | null; seenCount: number; lastSeenAt: string };
+export type MapTestResult = { raw: unknown; mapped: Record<string, unknown>; resolved: Record<string, unknown>; issues: string[]; notes: string[]; ok: boolean };
 
 // ---------------------------------------------------------------- dynamic break re-optimization
 export type BreakSuggestion = { shiftId: string; employeeName: string; type: 'MEAL' | 'BREAK'; fromSlot: number; toSlot: number; from: string; to: string; deficitReduction: number };

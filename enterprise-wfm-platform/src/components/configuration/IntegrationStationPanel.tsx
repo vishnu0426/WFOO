@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { api, Connector, ConnectorCreated, EntitySuggestion, IntegrationCatalog, IntegrationField, IntegrationFieldMap, when } from "../../services/api";
+import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, IntegrationCatalog, IntegrationField, IntegrationFieldMap, MapTestResult, when } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi } from "../forecasting/hooks";
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select } from "../forecasting/ui";
@@ -149,6 +149,11 @@ const TARGET_FIELDS: Record<string, string[]> = {
   interval_history: ['queueId', 'queue', 'day', 'time', 'slot', 'volume', 'ahtSec', 'abandoned'],
 };
 
+/** Display names for the fixed target keys -- the key itself (e.g. "employeeNumber") is what the backend reads and
+ * must never change, but most vendors' agent identifier is really an extension/SIP handle, not our employee_number,
+ * so the on-screen label says what it actually is. Renaming the underlying key here would silently break ingest. */
+const FIELD_LABEL: Record<string, string> = { employeeNumber: 'Agent extension', state: 'State', reason: 'Reason', at: 'Timestamp', eventType: 'Event type' };
+
 /** Flattens a sample payload into draggable {path, value} leaves, e.g. {a:{b:1}} -> [{path:'a.b', value:1}]. Capped so one huge payload can't flood the picker. */
 function flattenSample(obj: unknown, prefix = '', out: { path: string; value: string }[] = []): { path: string; value: string }[] {
   if (out.length >= 60) return out;
@@ -182,6 +187,14 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
   };
 
   const saveMaps = () => run(async () => { setBusy(true); try { await api(`/integrations/${connector.id}/field-maps`, { method: "PUT", body: rows }); } finally { setBusy(false); } });
+  const [testResult, setTestResult] = useState<MapTestResult | null>(null);
+  const [testError, setTestError] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
+  const testMaps = async () => {
+    setTestBusy(true); setTestError(""); setTestResult(null);
+    try { setTestResult(await api<MapTestResult>(`/integrations/${connector.id}/field-maps/test`, { method: "POST", body: { maps: rows } })); }
+    catch (e: any) { setTestError(e.message); } finally { setTestBusy(false); }
+  };
   const setStatus = (status: string) => run(async () => { await api(`/integrations/${connector.id}`, { method: "PUT", body: { status } }); onChanged(); });
   const remove = () => { if (!confirm(`Delete "${connector.name}"?`)) return; run(async () => { await api(`/integrations/${connector.id}`, { method: "DELETE" }); onDeleted(); }); };
 
@@ -201,7 +214,7 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
         <div><div className="text-[#737373]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>
         <div><div className="text-[#737373]">Last received</div><div className="font-semibold">{connector.lastReceivedAt ? when(connector.lastReceivedAt) : "never"}</div></div>
         <div><div className="text-[#737373]">Created</div><div className="font-semibold">{when(connector.createdAt)} by {connector.createdBy}</div></div>
-        <div><div className="text-[#737373]">Config</div><div className="font-semibold">{Object.entries(connector.config).map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
+        <div><div className="text-[#737373]">Config</div><div className="font-semibold">{Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
       </div>
       {connector.lastError && <Banner kind="err">Last error: {connector.lastError}</Banner>}
 
@@ -223,7 +236,7 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
               return (
                 <div key={tf} onDragOver={canWrite ? (e) => e.preventDefault() : undefined} onDrop={canWrite ? dropOnTarget(tf) : undefined}
                   className={`border-2 border-dashed rounded-lg p-2 text-[11px] ${row ? "border-[#2F7D5A] bg-[#EAF5EF]" : "border-[#E5E5E0] bg-white"}`}>
-                  <div className="font-semibold">{tf}</div>
+                  <div className="font-semibold">{FIELD_LABEL[tf] ?? tf}</div>
                   <div className="font-mono text-[#525252] truncate">{row ? row.sourcePath : "drop a field here"}</div>
                 </div>
               );
@@ -235,21 +248,135 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
       <div className="space-y-2">
         <div className="text-[13px] font-semibold">Field mapping{sampleFields.length > 0 && targetFields.length > 0 ? ", by hand" : ""}</div>
         <p className="text-[12px] text-[#737373]">Where each of our fields comes from in this vendor's own payload. Pre-filled for a named preset; blank for Generic -- fill in your own response shape. The same rows the drag-and-drop above writes to -- use this for a transform (ms → seconds etc.) or a field outside the usual set.</p>
-        {rows.map((r, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <Input disabled={!canWrite} value={r.targetField} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, targetField: e.target.value } : x)))} placeholder="our field (volume, ahtSec, state...)" className="max-w-[200px]" />
-            <span className="text-[11px] text-[#737373]">←</span>
-            <Input disabled={!canWrite} value={r.sourcePath} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: e.target.value } : x)))} placeholder="their field (data.stats.offered)" className="max-w-[260px]" />
-            <Select disabled={!canWrite} value={r.transform ?? ""} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, transform: e.target.value || null } : x)))} className="!w-auto"><option value="">no conversion</option><option value="ms_to_s">ms → seconds</option><option value="minutes_to_s">minutes → seconds</option></Select>
-            {canWrite && <button className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((s) => s.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
+        {rows.map((r, i) => {
+          const required = targetFields.includes(r.targetField);
+          return (
+            <div key={i} className="flex items-center gap-2">
+              {required ? (
+                <div className="w-50 shrink-0 px-2.5 py-2 text-[13px] font-semibold" title={`Backend field: ${r.targetField} -- the name is fixed so ingest can't silently break`}>
+                  {FIELD_LABEL[r.targetField] ?? r.targetField}
+                </div>
+              ) : (
+                <Input disabled={!canWrite} value={r.targetField} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, targetField: e.target.value } : x)))} placeholder="our field (volume, ahtSec, state...)" className="max-w-[200px]" />
+              )}
+              <span className="text-[11px] text-[#737373]">←</span>
+              <Input disabled={!canWrite} value={r.sourcePath} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: e.target.value } : x)))} placeholder="their field (data.stats.offered)" className="max-w-[260px]" />
+              <Select disabled={!canWrite} value={r.transform ?? ""} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, transform: e.target.value || null } : x)))} className="!w-auto"><option value="">no conversion</option><option value="ms_to_s">ms → seconds</option><option value="minutes_to_s">minutes → seconds</option></Select>
+              {canWrite && (required ? (
+                <button title="Clear what it's mapped from (the slot itself stays, since this field is required)" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: "" } : x)))}><Trash2 className="w-4 h-4" /></button>
+              ) : (
+                <button className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((s) => s.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>
+              ))}
+            </div>
+          );
+        })}
+        {canWrite && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <Btn onClick={() => setRows((s) => [...s, { targetField: "", sourcePath: "", transform: null }])}><Plus className="w-3.5 h-3.5" />Add field</Btn>
+            <Btn disabled={testBusy || !sampleFields.length} title={sampleFields.length ? undefined : "Needs a real sample to test against -- nothing received yet"} onClick={testMaps}>{testBusy ? "Testing…" : "Test mapping"}</Btn>
+            <Btn variant="primary" disabled={busy} onClick={saveMaps}>Save field mapping</Btn>
           </div>
-        ))}
-        {canWrite && <div className="flex gap-2"><Btn onClick={() => setRows((s) => [...s, { targetField: "", sourcePath: "", transform: null }])}><Plus className="w-3.5 h-3.5" />Add field</Btn><Btn variant="primary" disabled={busy} onClick={saveMaps}>Save field mapping</Btn></div>}
+        )}
+        {testError && <Banner kind="err" onClose={() => setTestError("")}>{testError}</Banner>}
+        {testResult && (
+          <div className={`border rounded-lg p-3 space-y-2 text-[12px] ${testResult.ok ? "border-[#2F7D5A]/30 bg-[#EAF5EF]" : "border-[#E9D9B4] bg-[#FFF5DD]"}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="font-semibold">{testResult.ok ? "This mapping is ready -- nothing was saved or sent anywhere." : "This mapping has a problem -- nothing was saved or sent anywhere."}</div>
+              <button aria-label="Close" className="text-[#737373] hover:text-[#171717] text-[14px] leading-none shrink-0" onClick={() => setTestResult(null)}>&times;</button>
+            </div>
+            {testResult.issues.map((msg, i) => <div key={i} className="text-[#B7791F]">{msg}</div>)}
+            {testResult.notes.map((msg, i) => <div key={i} className="text-[#737373]">{msg}</div>)}
+            <div className="font-mono text-[11px] bg-white/60 rounded p-2 space-y-0.5">
+              {Object.entries(testResult.resolved).map(([k, v]) => <div key={k}>{k}: <span className="font-semibold">{v === null || v === undefined || v === "" ? "–" : String(v)}</span></div>)}
+            </div>
+          </div>
+        )}
       </div>
+
+      {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} />}
 
       {connector.category === "ACD" && preset?.writesTo !== "agent_state" && <EntityMatching connectorId={connector.id} entityType="queue" canWrite={canWrite} />}
       {(connector.category === "CRM" || connector.category === "HRMS" || preset?.writesTo === "agent_state") && <EntityMatching connectorId={connector.id} entityType="employee" canWrite={canWrite} />}
     </Card>
+  );
+};
+
+/** What a raw event type (e.g. EVT_AGENT_READY) means, for the messages that carry no state of their own --
+ * logins, logouts, heartbeats. A new event type starts PENDING and every message of that type is dropped
+ * until someone sets it here; this is the only place that can resolve a PENDING rule. */
+const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean }> = ({ connectorId, canWrite }) => {
+  const [tick, setTick] = useState(0);
+  const rules = useApi<EventRule[]>(`/integrations/${connectorId}/event-rules`, [connectorId, tick]);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [form, setForm] = useState<{ mode: "SKIP" | "STATE"; state: string; reason: string }>({ mode: "SKIP", state: "", reason: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const startEdit = (r: EventRule) => {
+    setEditing(r.eventType);
+    setForm({ mode: r.action === "STATE" ? "STATE" : "SKIP", state: r.state ?? "", reason: r.reason ?? "" });
+    setError("");
+  };
+  const save = async (eventType: string) => {
+    setBusy(true); setError("");
+    try {
+      await api(`/integrations/${connectorId}/event-rules/${encodeURIComponent(eventType)}`, {
+        method: "PUT", body: { action: form.mode, state: form.mode === "STATE" ? form.state.trim() : null, reason: form.mode === "STATE" ? (form.reason.trim() || null) : null },
+      });
+      setEditing(null); setTick((t) => t + 1);
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  if (!rules.data?.length) return null;
+  const pending = rules.data.filter((r) => r.action === "PENDING");
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[13px] font-semibold">Event types</div>
+      <p className="text-[12px] text-[#737373]">
+        What each raw event type means when the message itself carries no state of its own.
+        {pending.length > 0 ? ` ${pending.length} event type${pending.length === 1 ? " is" : "s are"} waiting for a rule -- every message of that type is being dropped until it's set.` : " All event types seen so far have a rule."}
+      </p>
+      {error && <Banner kind="err" onClose={() => setError("")}>{error}</Banner>}
+      <div className="space-y-1.5">
+        {rules.data.map((r) => (
+          <div key={r.eventType} className={`border rounded-lg p-2.5 text-[12px] ${r.action === "PENDING" ? "border-[#E9D9B4] bg-[#FFF5DD]" : "border-[#E5E5E0]"}`}>
+            {editing === r.eventType ? (
+              <div className="space-y-2">
+                <div className="font-mono font-semibold">{r.eventType}</div>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5"><input type="radio" checked={form.mode === "SKIP"} onChange={() => setForm((f) => ({ ...f, mode: "SKIP" }))} />Ignore this event type</label>
+                  <label className="flex items-center gap-1.5"><input type="radio" checked={form.mode === "STATE"} onChange={() => setForm((f) => ({ ...f, mode: "STATE" }))} />It means a state change</label>
+                </div>
+                {form.mode === "STATE" && (
+                  <div className="flex gap-2">
+                    <Input value={form.state} onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))} placeholder="State, e.g. READY" className="max-w-40" />
+                    <Input value={form.reason} onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} placeholder="Reason (optional)" className="max-w-40" />
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Btn variant="primary" disabled={busy || (form.mode === "STATE" && !form.state.trim())} onClick={() => save(r.eventType)}>Save</Btn>
+                  <Btn onClick={() => setEditing(null)}>Cancel</Btn>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <span className="font-mono font-semibold">{r.eventType}</span>
+                  <span className="text-[#737373]"> · seen {r.seenCount}x · last {when(r.lastSeenAt)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {r.action === "PENDING" ? <Pill tone="warn">Waiting for a rule</Pill>
+                    : r.action === "SKIP" ? <Pill>Ignored</Pill>
+                    : <Pill tone="good">{"→ "}{r.state}{r.reason ? ` / ${r.reason}` : ""}</Pill>}
+                  {canWrite && <button className="text-[11px] underline" onClick={() => startEdit(r)}>{r.action === "PENDING" ? "Set rule" : "Edit"}</button>}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 };
 
