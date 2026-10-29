@@ -7,7 +7,7 @@
  *      published without the normal submit / approve / publish steps.
  * The miss is always measured on the forecast with its own earlier correction removed, so corrections never compound.
  */
-import { raw, withTenant, type Tx } from '../../db.ts';
+import { currentScope, raw, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { audit } from '../../audit.ts';
 import { publish } from '../../infra.ts';
 import type { Principal } from '../../auth.ts';
@@ -60,7 +60,7 @@ export async function evaluate(tenantId: string, groupId: string): Promise<Evalu
   });
 }
 
-const systemPrincipal = (tenantId: string): Principal => ({ userId: null as unknown as string, tenantId, role: 'WFM_ADMIN', name: 'Learning engine', username: 'learning', jti: '' });
+const systemPrincipal = (tenantId: string): Principal => ({ userId: null as unknown as string, tenantId, workspaceId: currentScope()?.workspaceId ?? '', role: 'WFM_ADMIN', name: 'Learning engine', username: 'learning', jti: '' });
 
 /** A reforecast is a fresh model run, not an edit -- so it never copies volume/AHT. But a manual override at a given
  * (queue, day, slot) is an analyst's deliberate correction, not model output, and silently dropping it when the model
@@ -87,7 +87,7 @@ function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Look at recent misses for one group, update its learned corrections and, on drift, prepare a draft reforecast for a human to review. */
-export const learn = (tenantId: string, groupId: string, trigger: 'DATA' | 'MANUAL' | 'SCHEDULE', by?: Principal): Promise<LearnResult> => serial(groupId, () => learnNow(tenantId, groupId, trigger, by));
+export const learn = (tenantId: string, groupId: string, trigger: 'DATA' | 'MANUAL' | 'SCHEDULE', by?: Principal): Promise<LearnResult> => serial(`${tenantId}:${currentScope()?.workspaceId ?? 'default'}:${groupId}`, () => learnNow(tenantId, groupId, trigger, by));
 
 async function learnNow(tenantId: string, groupId: string, trigger: 'DATA' | 'MANUAL' | 'SCHEDULE', by?: Principal): Promise<LearnResult> {
   const ev = await evaluate(tenantId, groupId);
@@ -164,10 +164,14 @@ export function learnFromNewData(tenantId: string): void {
  * just via the ticker) so tests, and any future "run it now" admin action, can trigger the same real sweep. */
 export async function runScheduledSweep(): Promise<void> {
   for (const t of await raw<{ id: string }>('SELECT id FROM tenants')) {
-    try {
-      const groups = await withTenant(t.id, (tx) => tx.q<{ wfmGroupId: string }>(`SELECT DISTINCT wfm_group_id FROM forecast_versions WHERE tenant_id = :t AND status IN ('PUBLISHED', 'ARCHIVED')`));
-      for (const g of groups) await learn(t.id, g.wfmGroupId, 'SCHEDULE').catch((e) => console.error('[learning]', (e as Error).message));
-    } catch (e) { console.error('[learning]', (e as Error).message); }
+    for (const w of await raw<{ id: string }>(`SELECT id FROM workspaces WHERE tenant_id = $1 AND status = 'ACTIVE'`, [t.id])) {
+      try {
+        await withWorkspace(t.id, w.id, async () => {
+          const groups = await withTenant(t.id, (tx) => tx.q<{ wfmGroupId: string }>(`SELECT DISTINCT wfm_group_id FROM forecast_versions WHERE tenant_id = :t AND status IN ('PUBLISHED', 'ARCHIVED')`));
+          for (const g of groups) await learn(t.id, g.wfmGroupId, 'SCHEDULE').catch((e) => console.error('[learning]', (e as Error).message));
+        });
+      } catch (e) { console.error('[learning]', (e as Error).message); }
+    }
   }
 }
 

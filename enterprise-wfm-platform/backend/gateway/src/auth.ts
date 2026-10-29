@@ -8,12 +8,41 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { HttpError } from './http.ts';
 import { cached, key, redis } from './infra.ts';
-import { withTenant } from './db.ts';
+import { resolveDefaultWorkspaceId, scopeStore, withTenant, raw } from './db.ts';
+
+export const PERMISSION_TO_MODULE: Record<string, string> = {
+  'forecast:read': 'FORECASTING',
+  'forecast:create': 'FORECASTING',
+  'forecast:adjust': 'FORECASTING',
+  'forecast:submit': 'FORECASTING',
+  'forecast:approve': 'FORECASTING',
+  'forecast:publish': 'FORECASTING',
+  'forecast:delete': 'FORECASTING',
+  'schedule:read': 'SCHEDULING',
+  'schedule:generate': 'SCHEDULING',
+  'schedule:edit': 'SCHEDULING',
+  'schedule:approve': 'SCHEDULING',
+  'schedule:publish': 'SCHEDULING',
+  'intraday:read': 'INTRADAY',
+  'intraday:act': 'INTRADAY',
+  'self:use': 'EMPLOYEE_SELF_SERVICE',
+};
+
+export async function getTenantEnabledModules(tenantId: string): Promise<string[]> {
+  const rows = await raw<any>(
+    `SELECT DISTINCT lm.module_code
+     FROM wfm.license_modules lm
+     JOIN wfm.licenses l ON l.id = lm.license_id
+     WHERE l.tenant_id = $1 AND l.status IN ('ACTIVE', 'GRACE_PERIOD', 'PROVISIONING') AND lm.enabled = true`,
+    [tenantId]
+  ).catch(() => []);
+  return rows.map((r: any) => r.moduleCode || r.module_code).filter((m: any) => typeof m === 'string' && m.length > 0);
+}
 
 export const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string }
+export interface Principal { userId: string; tenantId: string; workspaceId: string; role: Role; name: string; username: string; jti: string }
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -27,6 +56,7 @@ const ALL = [
   'forecast:read', 'forecast:create', 'forecast:adjust', 'forecast:submit', 'forecast:approve', 'forecast:publish', 'forecast:delete',
   'workforce:read', 'workforce:write', 'schedule:read', 'schedule:generate', 'schedule:edit', 'schedule:approve', 'schedule:publish',
   'intraday:read', 'intraday:act', 'audit:read', 'users:read', 'users:write', 'self:use',
+  'organization:read', 'organization:write', 'workspace:read', 'workspace:create', 'workspace:write', 'workspace:members',
 ] as const;
 export type Permission = (typeof ALL)[number];
 export const ALL_PERMISSIONS: readonly string[] = ALL;
@@ -45,7 +75,7 @@ export const DEFAULT_PERMISSIONS: Record<Role, readonly string[]> = {
 };
 
 export const signToken = (p: Omit<Principal, 'jti'>): string =>
-  jwt.sign({ tid: p.tenantId, role: p.role, name: p.name, username: p.username }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
+  jwt.sign({ tid: p.tenantId, wid: p.workspaceId, role: p.role, name: p.name, username: p.username }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
 
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   try {
@@ -53,14 +83,18 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     if (!raw) throw new HttpError(401, 'UNAUTHENTICATED', 'Sign in required');
     const p = await principalFromToken(raw);
     req.principal = p;
-    next();
+    scopeStore.run({ tenantId: p.tenantId, orgId: p.tenantId, workspaceId: p.workspaceId }, next);
   } catch (e) { next(e instanceof HttpError ? e : new HttpError(401, 'UNAUTHENTICATED', 'Invalid or expired session')); }
 }
 
 export async function principalFromToken(token: string): Promise<Principal> {
   const d = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
+  if (d.aud === 'platform' || !d.tid || !d.role) {
+    throw new HttpError(401, 'UNAUTHENTICATED', 'Platform tokens cannot be used on tenant routes');
+  }
   if (await redis.get(`wfm:denied:${d.jti}`).catch(() => null)) throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
-  return { userId: String(d.sub), tenantId: d.tid, role: d.role, name: d.name, username: d.username, jti: String(d.jti) };
+  const workspaceId = typeof d.wid === 'string' && d.wid ? d.wid : await resolveDefaultWorkspaceId(d.tid);
+  return { userId: String(d.sub), tenantId: d.tid, workspaceId, role: d.role, name: d.name, username: d.username, jti: String(d.jti) };
 }
 
 export async function revokeToken(p: Principal): Promise<void> {
@@ -68,8 +102,24 @@ export async function revokeToken(p: Principal): Promise<void> {
 }
 
 export async function permissionsFor(tenantId: string, role: Role): Promise<Set<string>> {
-  const list = await cached<string[]>(key(tenantId, 'perms', role), 600, () =>
-    withTenant(tenantId, async (tx) => (await tx.q<{ permission: string }>('SELECT permission FROM role_permissions WHERE tenant_id = :t AND role = $1', [role])).map((r) => r.permission)));
+  const list = await cached<string[]>(key(tenantId, 'perms', role), 600, async () => {
+    const rawPerms = await withTenant(tenantId, async (tx) =>
+      (await tx.q<{ permission: string }>('SELECT permission FROM role_permissions WHERE tenant_id = :t AND role = $1', [role])).map((r) => r.permission)
+    );
+
+    const [hasLic] = await raw<any>('SELECT id FROM wfm.licenses WHERE tenant_id = $1', [tenantId]).catch(() => []);
+    if (!hasLic) {
+      return rawPerms;
+    }
+
+    const enabledModules = await getTenantEnabledModules(tenantId);
+    const enabledSet = new Set(enabledModules);
+
+    return rawPerms.filter((p) => {
+      const requiredModule = PERMISSION_TO_MODULE[p];
+      return !requiredModule || enabledSet.has(requiredModule);
+    });
+  });
   return new Set(list);
 }
 

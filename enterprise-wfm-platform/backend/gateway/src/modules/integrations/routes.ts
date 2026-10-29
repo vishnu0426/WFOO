@@ -12,7 +12,7 @@ import { Router } from 'express';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { raw, withTenant, type Tx } from '../../db.ts';
+import { raw, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { me, requires, type Principal } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { bad, conflict, notFound, parse } from '../../http.ts';
@@ -263,7 +263,7 @@ integrationsAdmin.put('/:id/entity-matches', requires('config:write'), async (re
 // Mounted public (before the JWT `authenticate` middleware) since an on-prem script or a webhook sender has no user session.
 
 async function connectorByKey(id: string, presented: string) {
-  const [c] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
+  const [c] = await raw<any>('SELECT * FROM wfm.integration_connector_lookup($1)', [id]);
   if (!c || !c.apiKeyHash) return null;
   return (await bcrypt.compare(presented, c.apiKeyHash)) ? c : null;
 }
@@ -284,7 +284,7 @@ integrationsPublic.post('/:id/backfill', async (req, res) => {
   const connector = await connectorByKey(id, key);
   if (!connector) throw notFound('Connector');
   const b = parse(RawRows.extend({ through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }), req.body);
-  const out = await withTenant(connector.tenantId, async (tx) => {
+  const out = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const entityMaps = await tx.q<any>('SELECT source_id, target_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2', [id, 'queue']);
     const queueBySource = new Map(entityMaps.filter((m) => m.targetId).map((m) => [m.sourceId, m.targetId as string]));
@@ -306,7 +306,7 @@ integrationsPublic.post('/:id/backfill', async (req, res) => {
     });
     if (csvRows.length === 1) throw bad(errors[0] ?? 'No rows could be mapped');
 
-    const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
+    const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, workspaceId: connector.workspaceId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
     const staged = await stageImport(principal, null, StageUpload.parse({ dataType: 'HISTORICAL_VOLUME', fileName: `${connector.name}-backfill-${b.through}.csv`, csv: csvRows.join('\n') }));
     await tx.exec('UPDATE integration_connectors SET backfill_status = $2, backfill_through = $3, last_received_at = now(), last_error = NULL WHERE tenant_id = :t AND id = $1', [id, csvRows.length > 1 ? 'IN_PROGRESS' : 'DONE', b.through]);
     return { staged, rowsMapped: csvRows.length - 1, mappingErrors: errors.slice(0, 50) };
@@ -324,7 +324,7 @@ integrationsPublic.post('/:id/live', async (req, res) => {
   if (!preset) throw bad('Unknown preset');
   const b = parse(RawRows, req.body);
 
-  const out = await withTenant(connector.tenantId, async (tx) => {
+  const out = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const mapped = b.rows.map((r) => mapFields(r, maps));
 
@@ -354,14 +354,14 @@ integrationsPublic.post('/:id/live', async (req, res) => {
     throw bad(`Live sync for '${preset.writesTo}' connectors is not wired yet; use the backfill/upsert path for HRMS.`);
   });
   // kept for the drag-and-drop field mapper regardless of whether this row mapped cleanly -- a real sample beats a guess
-  await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(b.rows[0])]));
+  await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(b.rows[0])]));
   res.json(out);
 });
 
 /** Cloud-to-cloud webhook receiver: no connector-hosted machine, HMAC-signed by the sender against the stored secret. */
 integrationsPublic.post('/:id/webhook', async (req, res) => {
   const id = parse(uuid, req.params.id);
-  const [connector] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
+  const [connector] = await raw<any>('SELECT * FROM wfm.integration_connector_lookup($1)', [id]);
   if (!connector || !connector.webhookSecret) throw notFound('Connector');
   const signature = String(req.headers['x-signature'] || '');
   const rawBody = JSON.stringify(req.body ?? {});
@@ -370,7 +370,7 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
   if (signature.length !== expected.length || sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) throw bad('Invalid signature');
 
   const preset = presetById(connector.preset);
-  const out = await withTenant(connector.tenantId, async (tx) => {
+  const out = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const m = mapFields(req.body, maps);
     if (preset?.writesTo === 'agent_state' && m.employeeNumber && m.state) {
@@ -381,6 +381,6 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
     }
     return { accepted: 0, errors: [{ index: 0, message: 'Payload did not map to a known destination' }] };
   });
-  await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(req.body ?? {})]));
+  await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(req.body ?? {})]));
   res.json(out);
 });

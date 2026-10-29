@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ColDef, ICellRendererParams } from 'ag-grid-community';
 import { Download, Plus, Upload } from 'lucide-react';
 import { downloadXlsx, xlsxToCsv } from '../../services/excel';
-import { api, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, RotationPattern, ShiftTemplate, Skill, Team, TYPE_LABEL } from '../../services/api';
+import { api, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, LicenseUsageReport, RotationPattern, ShiftTemplate, Skill, Team, TYPE_LABEL } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
@@ -41,6 +41,7 @@ type Preview = {
   dryRun: boolean; rows: number; diff: { new: number; updated: number; unchanged: number }; errors: { line: number; message: string }[]; errorCount: number;
   sample: { line: number; name: string; employeeNumber: string; action: string }[]; committed: boolean;
   headers: string[]; headerSample: string[]; columnMap: Record<string, number>; mapped: boolean;
+  capacity?: { max: number; current: number; remaining: number; required: number; exceeded: boolean; warning: string | null };
 };
 // matches the gateway's own HEAD aliases (workforceRoutes.ts) -- every field it can place from a column, in display order
 const MAP_TARGETS: { k: string; label: string; required?: boolean }[] = [
@@ -66,6 +67,10 @@ export const EmployeesPanel: React.FC = () => {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const canWrite = can('workforce:write');
+  const licenseReq = useApi<LicenseUsageReport>('/license', [tick]);
+  const empCapacity = licenseReq.data?.capacity?.employees;
+  const atEmployeeCapacity = !!empCapacity && empCapacity.remaining <= 0;
+  const [capacityModalOpen, setCapacityModalOpen] = useState(false);
   const logins = useApi<{ userId: string; employeeId: string; username: string; role: string; status: string }[]>(can('users:read') ? '/self-service/logins' : null, [tick]);
   const [cred, setCred] = useState<{ username: string; password: string } | null>(null);
   const createLogin = async (employeeId: string) => {
@@ -172,10 +177,41 @@ export const EmployeesPanel: React.FC = () => {
         title="Employees"
         sub="Everyone the scheduler can place. Limits here (weekly hours, rest, days in a row) are never broken by a generated schedule."
         actions={canWrite && <>
+          {empCapacity && (
+            <span
+              className={`px-2.5 py-1 rounded text-[12px] font-medium border flex items-center gap-1.5 ${
+                atEmployeeCapacity
+                  ? 'bg-[#FEF2F2] border-[#FCA5A5] text-[#991B1B]'
+                  : empCapacity.percentage >= 85
+                  ? 'bg-[#FFFBEB] border-[#FCD34D] text-[#92400E]'
+                  : 'bg-[#FAFAF8] border-[#E5E5E0] text-[#525252]'
+              }`}
+              title={`License allows ${empCapacity.max} active employees. ${empCapacity.remaining} seats remaining.`}
+            >
+              <span className="font-semibold">{empCapacity.current} / {empCapacity.max}</span> employees
+              {atEmployeeCapacity ? (
+                <span className="font-bold uppercase text-[10px] tracking-wide text-[#DC2626]">(Limit Reached)</span>
+              ) : (
+                <span className="text-[11px] text-[#737373]">({empCapacity.remaining} left)</span>
+              )}
+            </span>
+          )}
           <input ref={file} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) check(f); }} />
           <Btn onClick={() => downloadXlsx('employees-template.xlsx', 'Employees', EMPLOYEE_TEMPLATE, EMPLOYEE_NOTES).catch((e) => setError(e.message))}><Download className="w-3.5 h-3.5" />Excel template</Btn>
           <Btn onClick={() => file.current?.click()}><Upload className="w-3.5 h-3.5" />Import CSV</Btn>
-          <Btn variant="primary" onClick={() => { setError(''); setEdit({ id: null, form: blank(groupId || groups[0]?.id || '') }); }}><Plus className="w-3.5 h-3.5" />Add employee</Btn>
+          <Btn
+            variant={atEmployeeCapacity ? 'secondary' : 'primary'}
+            onClick={() => {
+              if (atEmployeeCapacity) {
+                setCapacityModalOpen(true);
+                return;
+              }
+              setError('');
+              setEdit({ id: null, form: blank(groupId || groups[0]?.id || '') });
+            }}
+          >
+            <Plus className="w-3.5 h-3.5" />Add employee
+          </Btn>
         </>}
       >
         {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
@@ -229,6 +265,11 @@ export const EmployeesPanel: React.FC = () => {
               </div>
             )}
 
+            {preview.capacity?.exceeded && (
+              <Banner kind="err">
+                <b>Capacity limit reached:</b> {preview.capacity.warning || `This file contains ${preview.capacity.required} new employees, but your license only has ${preview.capacity.remaining} available seats.`}
+              </Banner>
+            )}
             {preview.mapped && preview.errors.length > 0 && (
               <>
                 <Banner kind="warn">These {preview.errorCount} rows won't be imported. Everything else will be. Fix these in the file and import again afterwards to add them too.</Banner>
@@ -237,7 +278,7 @@ export const EmployeesPanel: React.FC = () => {
             )}
             <p className="text-[11px] text-[#737373]">Columns: employee_number, first_name, last_name (required); team, wfm_group, employment_type, weekly_hours, max_weekly_hours, days_per_week, status, hire_date, skills (e.g. Billing:4; Chat:3). Teams, groups and skills must already exist.</p>
             <div className="flex gap-2">
-              <Btn variant="primary" disabled={busy || !preview.mapped || preview.diff.new + preview.diff.updated === 0} onClick={commit}>
+              <Btn variant="primary" disabled={busy || !preview.mapped || !!preview.capacity?.exceeded || preview.diff.new + preview.diff.updated === 0} onClick={commit}>
                 Import {preview.diff.new + preview.diff.updated} people{preview.errorCount > 0 ? ` (${preview.errorCount} skipped)` : ''}
               </Btn>
               <Btn onClick={() => { setPreview(null); setCsv(''); setShowMapper(false); }}>Cancel</Btn>
@@ -383,6 +424,36 @@ export const EmployeesPanel: React.FC = () => {
             </PreviewSection>
           </div>
         </aside>
+      )}
+      {capacityModalOpen && empCapacity && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl border border-[#E5E5E0] w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center gap-3 text-[#DC2626]">
+              <span className="text-2xl">⚠️</span>
+              <h3 className="text-[16px] font-semibold text-[#171717]">Employee Capacity Reached</h3>
+            </div>
+            <p className="text-[13px] text-[#525252]">
+              Your subscription plan allows up to <b>{empCapacity.max}</b> active employees.
+              You currently have <b>{empCapacity.current} / {empCapacity.max}</b> seats allocated.
+            </p>
+            <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] rounded-md text-[12px] text-[#991B1B]">
+              New employee creation is currently locked until your license capacity is upgraded.
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Btn onClick={() => setCapacityModalOpen(false)}>Close</Btn>
+              <Btn
+                variant="primary"
+                onClick={() => {
+                  setCapacityModalOpen(false);
+                  history.pushState(null, '', '/administration/license');
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                }}
+              >
+                Go to License & Subscription
+              </Btn>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

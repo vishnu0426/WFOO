@@ -10,6 +10,8 @@ import { closeAll, connectNats, consume, engineReady, jetStreamEnabled, nc, redi
 import { authenticate } from './auth.ts';
 import { HttpError, errorHandler } from './http.ts';
 import { authed, publicAuth } from './modules/authRoutes.ts';
+import { platform as platformRoutes } from './modules/platform/routes.ts';
+import { organization as organizationRoutes, workspaces as workspaceRoutes } from './modules/workspaceRoutes.ts';
 import { config as configRoutes } from './modules/configRoutes.ts';
 import { policy as policyRoutes } from './modules/policyRoutes.ts';
 import { compliance as complianceRoutes } from './modules/compliance/routes.ts';
@@ -29,6 +31,7 @@ import { scheduling } from './modules/scheduleRoutes.ts';
 import { forecast } from './modules/forecast/routes.ts';
 import { startLearningTicker } from './modules/forecast/learning.ts';
 import { auditRoutes } from './modules/auditRoutes.ts';
+import { license as licenseRoutes } from './modules/licensing/routes.ts';
 import { attachWebSocket } from './ws.ts';
 
 await migrate();
@@ -57,10 +60,14 @@ app.get('/health', async (_req, res) => {
 });
 
 const api = Router();
+api.use('/platform', platformRoutes);          // platform / super admin routes (own authentication)
 api.use(publicAuth);                       // sign-in is the only unauthenticated route
 api.use('/integrations', integrationsPublic); // connector-key/webhook-signed ingest: a relay script or a vendor webhook, no user session
 api.use(authenticate);
 api.use(authed);                           // me, logout, users, RBAC matrix
+api.use('/license', licenseRoutes);        // licensing, subscription, and capacity governance
+api.use('/organization', organizationRoutes); // organisation profile
+api.use('/workspaces', workspaceRoutes);   // workspaces and their members
 api.use('/config', configRoutes);          // WFM groups, queues
 api.use('/config', sitesRoutes);            // sites, required skills per group, the pool they define
 api.use('/config', policyRoutes);          // activity definitions, scheduling policy

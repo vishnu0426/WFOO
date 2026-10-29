@@ -19,20 +19,71 @@ export async function ensureRolePermissions(tenantId: string): Promise<boolean> 
   });
 }
 
+/** Every organisation gets one default workspace, and every user a membership in it. */
+async function ensureDefaultWorkspace(tenantId: string): Promise<string> {
+  return withTenant(tenantId, async (tx) => {
+    await tx.exec('INSERT INTO organization_settings (tenant_id) VALUES (:t) ON CONFLICT (tenant_id) DO NOTHING');
+    await tx.exec(
+      `INSERT INTO workspaces (tenant_id, name, code, slug, timezone, currency, is_default, status, created_by)
+       SELECT :t, 'Default Workspace', 'DEFAULT', 'default', t.timezone, t.currency, true, 'ACTIVE', NULL
+       FROM tenants t WHERE t.id = :t AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.tenant_id = :t)`);
+    let w = await tx.one<{ id: string }>('SELECT id FROM workspaces WHERE tenant_id = :t AND is_default LIMIT 1');
+    if (!w) {
+      w = await tx.one<{ id: string }>('SELECT id FROM workspaces WHERE tenant_id = :t ORDER BY created_at LIMIT 1');
+      if (w) await tx.exec('UPDATE workspaces SET is_default = true, updated_at = now() WHERE tenant_id = :t AND id = $1', [w.id]);
+    }
+    return w!.id;
+  });
+}
+
 /** Creates the first administrator when the tenant has no users. Returns the password only when it was generated here. */
-async function ensureAdmin(tenantId: string): Promise<{ created: boolean; generated?: string }> {
+async function ensureAdmin(tenantId: string, workspaceId: string): Promise<{ created: boolean; generated?: string }> {
   const b = config.bootstrap;
   const password = b.adminPassword || randomBytes(9).toString('base64url');
   const created = await withTenant(tenantId, async (tx) => {
     const [{ n }] = await tx.q<{ n: number }>('SELECT count(*)::int AS n FROM users WHERE tenant_id = :t');
     if (n > 0) return false;
-    await tx.exec(`INSERT INTO users (tenant_id, username, display_name, password_hash, role) VALUES (:t, $1, $2, $3, 'WFM_ADMIN')`, [b.adminUser, 'Administrator', await bcrypt.hash(password, 12)]);
+    const user = await tx.one<{ id: string }>(
+      `INSERT INTO users (tenant_id, username, display_name, password_hash, role, default_workspace_id)
+       VALUES (:t, $1, $2, $3, 'WFM_ADMIN', $4) RETURNING id`,
+      [b.adminUser, 'Administrator', await bcrypt.hash(password, 12), workspaceId]);
+    await tx.exec(
+      `INSERT INTO workspace_members (tenant_id, workspace_id, user_id, role, is_default)
+       VALUES (:t, $1, $2, 'WFM_ADMIN', true) ON CONFLICT DO NOTHING`, [workspaceId, user!.id]);
     return true;
   });
   return { created, generated: created && !b.adminPassword ? password : undefined };
 }
 
+async function ensureMemberships(tenantId: string, workspaceId: string): Promise<void> {
+  await withTenant(tenantId, async (tx) => {
+    await tx.exec(
+      `INSERT INTO workspace_members (tenant_id, workspace_id, user_id, employee_id, role, status, is_default)
+       SELECT :t, $1, u.id, u.employee_id, u.role, 'ACTIVE', true
+       FROM users u
+       WHERE u.tenant_id = :t AND u.status = 'ACTIVE'
+         AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.tenant_id = :t AND m.user_id = u.id)
+       ON CONFLICT DO NOTHING`, [workspaceId]);
+    await tx.exec('UPDATE users SET default_workspace_id = $1 WHERE tenant_id = :t AND default_workspace_id IS NULL', [workspaceId]);
+  });
+}
+
+export async function ensurePlatformSuperAdmin(): Promise<void> {
+  const email = (config.platformAdmin.email || '').trim().toLowerCase();
+  const password = config.platformAdmin.password;
+  if (!email || !password) return;
+  const hash = await bcrypt.hash(password, 12);
+  await raw(
+    `INSERT INTO wfm.platform_admins (email, password_hash, status)
+     VALUES ($1, $2, 'ACTIVE')
+     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 'ACTIVE', updated_at = now()`,
+    [email, hash]
+  );
+  console.log(`[bootstrap] Super Admin account ensured for "${email}"`);
+}
+
 export async function bootstrapIfEmpty(): Promise<void> {
+  await ensurePlatformSuperAdmin();
   const b = config.bootstrap;
   let tenants = await raw<{ id: string }>('SELECT id FROM tenants');
   if (tenants.length === 0) {
@@ -40,7 +91,9 @@ export async function bootstrapIfEmpty(): Promise<void> {
   }
   for (const t of tenants) {
     if (await ensureRolePermissions(t.id)) console.log(`[bootstrap] default permission matrix created for tenant ${t.id}`);
-    const a = await ensureAdmin(t.id);
+    const workspaceId = await ensureDefaultWorkspace(t.id);
+    const a = await ensureAdmin(t.id, workspaceId);
+    await ensureMemberships(t.id, workspaceId);
     if (a.created) {
       console.log('');
       console.log('================ FIRST-RUN SETUP ================');

@@ -6,7 +6,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { raw, withTenant, type Tx } from '../../db.ts';
+import { raw, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { me, requires, type Principal } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { HttpError, bad, conflict, isoDay, notFound, parse } from '../../http.ts';
@@ -31,8 +31,8 @@ type Row = ShiftRow & { id: string; activities: any[]; source: string };
 
 export interface OfferPolicy { vtoOrdering: Ordering; overtimeOrdering: Ordering; reverseSeniority: boolean; waveSize: number; waveMinutes: number; offerMinutes: number }
 export async function loadOfferPolicy(tx: Tx): Promise<OfferPolicy> {
-  await tx.exec('INSERT INTO offer_policy (tenant_id) VALUES (:t) ON CONFLICT (tenant_id) DO NOTHING');
-  const r = (await tx.one<any>('SELECT * FROM offer_policy WHERE tenant_id = :t'))!;
+  await tx.exec('INSERT INTO offer_policy (tenant_id, workspace_id) VALUES (:t, :w) ON CONFLICT (tenant_id, workspace_id) DO NOTHING');
+  const r = (await tx.one<any>('SELECT * FROM offer_policy WHERE tenant_id = :t AND workspace_id = :w'))!;
   return { vtoOrdering: r.vtoOrdering, overtimeOrdering: r.overtimeOrdering, reverseSeniority: r.reverseSeniority, waveSize: r.waveSize, waveMinutes: r.waveMinutes, offerMinutes: r.offerMinutes };
 }
 const Ord = z.enum(ORDERINGS as [Ordering, ...Ordering[]]);
@@ -134,8 +134,8 @@ async function inviteNext(tx: Tx, o: any, count: number) {
 }
 
 /** Close what is over, and invite the next wave of an offer that has been waiting long enough or whose wave has all answered. */
-export async function advanceOffers(tenantId: string): Promise<void> {
-  await withTenant(tenantId, async (tx) => {
+export async function advanceOffers(tenantId: string, workspaceId?: string): Promise<void> {
+  const work = async (tx: Tx) => {
     const late = await tx.q<any>(`UPDATE offers SET status = 'EXPIRED', updated_at = now() WHERE tenant_id = :t AND status = 'OPEN' AND closes_at < now() RETURNING id`);
     if (late.length) await tx.exec(`UPDATE offer_invites SET status = 'EXPIRED' WHERE tenant_id = :t AND offer_id = ANY($1::uuid[]) AND status IN ('QUEUED', 'INVITED')`, [late.map((l) => l.id)]);
     const open = await tx.q<any>(
@@ -146,15 +146,21 @@ export async function advanceOffers(tenantId: string): Promise<void> {
       const waited = o.waveStartedAt ? (Date.now() - new Date(o.waveStartedAt).getTime()) / 60000 : Infinity;
       if (o.invited === 0 || waited >= o.waveMinutes) await inviteNext(tx, o, o.waveSize);
     }
-  });
+  };
+  if (workspaceId) await withWorkspace(tenantId, workspaceId, work);
+  else await withTenant(tenantId, work);
 }
 
 let ticker: ReturnType<typeof setInterval> | null = null;
-/** Once a minute, move offers along for every organisation (waves and closing times do not wait for anyone to open a screen). */
+/** Once a minute, move offers along for every active workspace (waves and closing times do not wait for anyone to open a screen). */
 export function startOfferTicker() {
   if (ticker) return;
   ticker = setInterval(async () => {
-    try { for (const t of await raw<{ id: string }>('SELECT id FROM tenants')) await advanceOffers(t.id); } catch (e) { console.error('[offers]', (e as Error).message); }
+    try {
+      for (const t of await raw<{ id: string }>('SELECT id FROM tenants')) {
+        for (const w of await raw<{ id: string }>(`SELECT id FROM workspaces WHERE tenant_id = $1 AND status = 'ACTIVE'`, [t.id])) await advanceOffers(t.id, w.id);
+      }
+    } catch (e) { console.error('[offers]', (e as Error).message); }
   }, 60_000);
   ticker.unref();
 }

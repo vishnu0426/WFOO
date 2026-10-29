@@ -30,6 +30,10 @@ export const config = {
     adminUser: process.env.BOOTSTRAP_ADMIN_USER || 'admin',
     adminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD || '',
   },
+  platformAdmin: {
+    email: process.env.PLATFORM_ADMIN_EMAIL || process.env.SUPERADMIN_EMAIL || '',
+    password: process.env.PLATFORM_ADMIN_PASSWORD || process.env.SUPERADMIN_PASSWORD || '',
+  },
 };
 
 if (config.jwtSecret.length < 16) throw new Error('JWT_SECRET must be at least 16 characters');

@@ -12,6 +12,7 @@ const NOISY = new Set(['ingest', 'state']);
 export function attachWebSocket(server: http.Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const byTenant = new Map<string, Set<WebSocket>>();
+  const workspaceOf = new WeakMap<WebSocket, string>();
 
   wss.on('connection', async (ws, req) => {
     try {
@@ -19,8 +20,9 @@ export function attachWebSocket(server: http.Server): void {
       const p = await principalFromToken(token);
       const set = byTenant.get(p.tenantId) ?? new Set();
       set.add(ws); byTenant.set(p.tenantId, set);
+      workspaceOf.set(ws, p.workspaceId);
       ws.on('close', () => set.delete(ws));
-      ws.send(JSON.stringify({ subject: 'hello', payload: { tenantId: p.tenantId } }));
+      ws.send(JSON.stringify({ subject: 'hello', payload: { tenantId: p.tenantId, workspaceId: p.workspaceId } }));
     } catch { ws.close(4401, 'unauthorized'); }
   });
 
@@ -28,7 +30,8 @@ export function attachWebSocket(server: http.Server): void {
   subscribe('wfm.>', (payload, tokens) => {
     const [, tenantId, domain, ...rest] = tokens;
     if (!tenantId || !domain || NOISY.has(domain)) return;
+    const wsId = payload && typeof payload === 'object' ? (payload as any).workspaceId : undefined;
     const msg = JSON.stringify({ subject: `${domain}.${rest.join('.')}`, payload });
-    byTenant.get(tenantId)?.forEach((c) => c.readyState === 1 && c.send(msg));
+    byTenant.get(tenantId)?.forEach((c) => c.readyState === 1 && (!wsId || wsId === workspaceOf.get(c)) && c.send(msg));
   });
 }

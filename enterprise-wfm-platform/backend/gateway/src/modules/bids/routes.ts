@@ -5,7 +5,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { raw, withTenant, type Tx } from '../../db.ts';
+import { raw, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { me, requires } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../../http.ts';
@@ -246,13 +246,21 @@ bidsAdmin.get('/', requires('schedule:read'), async (req, res) => {
 bidsAdmin.get('/:id', requires('schedule:read'), async (req, res) => { const p = me(req), id = parse(uuid, req.params.id); await closeDueBids(p.tenantId); res.json(await detail(p.tenantId, id)); });
 
 /** A round with a closing time closes itself when the time passes. */
-export async function closeDueBids(tenantId: string): Promise<void> {
-  await withTenant(tenantId, (tx) => tx.exec(`UPDATE bid_rounds SET status = 'CLOSED', updated_at = now() WHERE tenant_id = :t AND status = 'OPEN' AND closes_at IS NOT NULL AND closes_at < now()`));
+export async function closeDueBids(tenantId: string, workspaceId?: string): Promise<void> {
+  const work = (tx: Tx) => tx.exec(`UPDATE bid_rounds SET status = 'CLOSED', updated_at = now() WHERE tenant_id = :t AND status = 'OPEN' AND closes_at IS NOT NULL AND closes_at < now()`);
+  if (workspaceId) await withWorkspace(tenantId, workspaceId, work);
+  else await withTenant(tenantId, work);
 }
 let timer: ReturnType<typeof setInterval> | null = null;
 export function startBidTicker() {
   if (timer) return;
-  timer = setInterval(async () => { try { for (const t of await raw<{ id: string }>('SELECT id FROM tenants')) await closeDueBids(t.id); } catch (e) { console.error('[bids]', (e as Error).message); } }, 60_000);
+  timer = setInterval(async () => {
+    try {
+      for (const t of await raw<{ id: string }>('SELECT id FROM tenants')) {
+        for (const w of await raw<{ id: string }>(`SELECT id FROM workspaces WHERE tenant_id = $1 AND status = 'ACTIVE'`, [t.id])) await closeDueBids(t.id, w.id);
+      }
+    } catch (e) { console.error('[bids]', (e as Error).message); }
+  }, 60_000);
   timer.unref();
 }
 

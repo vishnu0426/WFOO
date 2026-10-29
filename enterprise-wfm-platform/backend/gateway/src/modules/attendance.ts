@@ -83,10 +83,10 @@ attendance.post('/import', requires('workforce:write'), async (req, res) => {
     const result = { dryRun: b.dryRun, rowsRead: rows.length, newPunches: fresh.length, alreadyImported: rows.length - fresh.length, errors: errors.slice(0, 100), errorCount: errors.length, committed: false };
     if (b.dryRun || !fresh.length) return result;
     await tx.exec(
-      `INSERT INTO attendance_punches (tenant_id, employee_id, day, clock_in, clock_out, source, created_by)
-       SELECT :t, x.e, x.d::date, x.ci::timestamptz, NULLIF(x.co, '')::timestamptz, 'IMPORT', $5
+      `INSERT INTO attendance_punches (tenant_id, workspace_id, employee_id, day, clock_in, clock_out, source, created_by)
+       SELECT :t, :w, x.e, x.d::date, x.ci::timestamptz, NULLIF(x.co, '')::timestamptz, 'IMPORT', $5
        FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS x(e, d, ci, co)
-       ON CONFLICT (tenant_id, employee_id, day, clock_in) DO NOTHING`,
+       ON CONFLICT (tenant_id, workspace_id, employee_id, day, clock_in) DO NOTHING`,
       [fresh.map((r) => r.employeeId), fresh.map((r) => r.day), fresh.map((r) => r.clockIn), fresh.map((r) => r.clockOut ?? ''), p.name]);
     await audit(tx, p, req, { action: 'IMPORT', entityType: 'ATTENDANCE', entityId: 'import', entityName: 'Time punches', after: { newPunches: fresh.length } });
     return { ...result, committed: true };

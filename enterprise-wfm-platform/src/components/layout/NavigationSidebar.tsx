@@ -27,6 +27,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { useForecast } from '../../services/forecastStore';
+import { Session } from '../../services/api';
 
 export type NavigationModule =
   | 'overview'
@@ -40,6 +41,7 @@ export type NavigationModule =
   | 'administration';
 
 interface NavigationSidebarProps {
+  session?: Session | null;
   activeModule: NavigationModule;
   activeSubSection?: string;
   onNavigate: (module: NavigationModule, subSection?: string) => void;
@@ -47,6 +49,7 @@ interface NavigationSidebarProps {
 }
 
 export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
+  session,
   activeModule,
   activeSubSection,
   onNavigate,
@@ -179,11 +182,43 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       label: 'Security & Access',
       icon: Layers,
       subItems: [
+        { id: 'workspaces', label: 'Workspaces & Orgs' },
         { id: 'users', label: 'Users Directory' },
         { id: 'roles', label: 'RBAC Matrix' },
+        { id: 'license', label: 'License & Subscription' },
       ],
     },
   ];
+
+  const enabledModules = session?.enabledModules;
+  const isModuleLicensed = (modCode: string) => {
+    if (!enabledModules || !Array.isArray(enabledModules)) return true;
+    const valid = enabledModules.filter((m): m is string => typeof m === 'string' && m.length > 0);
+    if (valid.length === 0) return true;
+    return valid.includes(modCode);
+  };
+
+  const isItemVisible = (item: any) => {
+    if (item.id === 'forecasting') return isModuleLicensed('FORECASTING');
+    if (item.id === 'scheduling') return isModuleLicensed('SCHEDULING');
+    if (item.id === 'intraday') return isModuleLicensed('INTRADAY');
+    if (item.id === 'data-management' || item.id === 'audit') return isModuleLicensed('REPORTING');
+    return true;
+  };
+
+  const isSubItemVisible = (parentId: string, subId: string) => {
+    if (parentId === 'workforce' && subId === 'time-off') return isModuleLicensed('TIME_OFF');
+    if (parentId === 'scheduling' && (subId === 'shift-bidding' || subId === 'shift-swaps')) return isModuleLicensed('SHIFT_BIDDING');
+    if (parentId === 'intraday' && subId === 'adherence') return isModuleLicensed('ADHERENCE');
+    return true;
+  };
+
+  const visibleNavItems = navItems
+    .filter(isItemVisible)
+    .map((item) => ({
+      ...item,
+      subItems: item.subItems ? item.subItems.filter((sub) => isSubItemVisible(item.id, sub.id)) : undefined,
+    }));
 
   return (
     <aside className="w-60 border-r border-[#E5E5E0] bg-[#FAFAF8] flex flex-col justify-between select-none h-[calc(100vh-3.5rem)] sticky top-14">
@@ -193,7 +228,7 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
           WFM Core Modules
         </div>
 
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive = activeModule === item.id;
           const isExpanded = !!expandedSections[item.id];
           const hasSubItems = item.subItems && item.subItems.length > 0;
