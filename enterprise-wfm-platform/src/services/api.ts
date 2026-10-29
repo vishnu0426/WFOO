@@ -7,9 +7,138 @@ const TOKEN_KEY = 'wfm_token';
 const SESSION_KEY = 'wfm_session';
 const BASE = '/api/v1';
 
-export type SessionUser = { id: string; userName: string; username: string; email: string | null; role: string; tenantId: string; tenantName: string; employeeId: string | null };
+export type SessionUser = { id: string; userName: string; username: string; email: string | null; role: string; tenantId: string; tenantName: string; orgId?: string; orgName?: string; workspaceId?: string; workspaceName?: string; employeeId: string | null };
 export type Tenant = { id: string; name: string; code: string; timezone: string; currency: string; fourEyes: boolean };
-export type Session = { user: SessionUser; tenant: Tenant; permissions: string[]; /** signed in with a temporary password: only choosing a new one is allowed */ mustChangePassword?: boolean };
+export type Workspace = {
+  id: string;
+  name: string;
+  code: string;
+  slug: string;
+  description: string;
+  timezone: string;
+  currency: string;
+  status: 'ACTIVE' | 'ARCHIVED';
+  isDefault: boolean;
+  role?: string;
+  employeeId?: string | null;
+  memberCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type WorkspaceMember = {
+  userId: string;
+  userName: string;
+  username: string;
+  email: string | null;
+  role: string;
+  status: 'ACTIVE' | 'DISABLED';
+  isDefault: boolean;
+  employeeId: string | null;
+  createdAt: string;
+};
+
+export type LicenseCapacityMetric = {
+  current: number;
+  max: number;
+  remaining: number;
+  percentage: number;
+};
+
+export type LicenseRecord = {
+  id: string;
+  licenseKey: string;
+  tenantId: string;
+  planTier: string;
+  edition: string;
+  status: 'DRAFT' | 'ISSUED' | 'PROVISIONING' | 'ACTIVE' | 'GRACE_PERIOD' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED';
+  startDate: string;
+  endDate: string;
+  renewalDate: string | null;
+  gracePeriodDays: number;
+  maxEmployees: number;
+  maxUsers: number;
+  maxSupervisors: number;
+  maxSites: number;
+  maxWorkspaces: number;
+  maxApiCallsPm: number;
+  maxStorageGb: number;
+  contractId: string | null;
+  issuedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LicenseModule = {
+  moduleCode: string;
+  enabled: boolean;
+  tier: string;
+};
+
+export type LicenseUsageReport = {
+  license: LicenseRecord;
+  modules: LicenseModule[];
+  capacity: {
+    employees: LicenseCapacityMetric;
+    users: LicenseCapacityMetric;
+    supervisors: LicenseCapacityMetric;
+    workspaces: LicenseCapacityMetric;
+  };
+  lifecycle: {
+    status: string;
+    daysRemaining: number;
+    inGracePeriod: boolean;
+    daysInGrace: number;
+    isRestricted: boolean;
+    isReadOnly: boolean;
+    message?: string;
+  };
+};
+
+export type LicenseCapacityRequest = {
+  id: string;
+  tenantId: string;
+  requestedByUserId: string;
+  resourceType: 'EMPLOYEES' | 'USERS' | 'SITES' | 'MODULES';
+  currentCapacity: number;
+  requestedCapacity: number;
+  additionalNeeded: number;
+  justification: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  reviewedByAdmin: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  requesterName?: string;
+  requesterEmail?: string;
+  tenantName?: string;
+  tenantCode?: string;
+};
+export type OrganizationProfile = {
+  id: string;
+  orgId: string;
+  code: string;
+  name: string;
+  legalName: string;
+  displayName: string;
+  timezone: string;
+  currency: string;
+  fourEyes: boolean;
+  contactName: string;
+  contactEmail: string | null;
+  locale: string;
+  settings: Record<string, any>;
+  createdAt: string;
+};
+export type Session = {
+  /** signed in with a temporary password: only choosing a new one is allowed */
+  mustChangePassword?: boolean;
+  user: SessionUser;
+  tenant: Tenant;
+  org?: Tenant;
+  workspace?: Workspace;
+  workspaces?: Workspace[];
+  permissions: string[];
+  enabledModules?: string[];
+};
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredSession = (): Session | null => {
@@ -63,6 +192,78 @@ export async function download(path: string, fileName: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(await r.blob()); a.download = fileName; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------------------------------------------------------------- workspace & organization API
+
+export async function switchWorkspace(workspaceId: string): Promise<Session> {
+  const r = await api<{ token: string } & Session>('/auth/switch-workspace', {
+    method: 'POST',
+    body: { workspaceId },
+  });
+  const { token, ...newSession } = r;
+  storeSession(token, newSession);
+  return newSession;
+}
+
+export async function refreshSession(): Promise<Session> {
+  const s = await api<Session>('/auth/me');
+  storeSession(localStorage.getItem(TOKEN_KEY), s);
+  return s;
+}
+
+export async function fetchWorkspaces(): Promise<Workspace[]> {
+  return api<Workspace[]>('/workspaces');
+}
+
+export async function createWorkspace(data: {
+  name: string;
+  code: string;
+  slug?: string;
+  description?: string;
+  timezone?: string;
+  currency?: string;
+}): Promise<Workspace> {
+  return api<Workspace>('/workspaces', { method: 'POST', body: data });
+}
+
+export async function updateWorkspace(id: string, data: Partial<Workspace>): Promise<Workspace> {
+  return api<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: data });
+}
+
+export async function archiveWorkspace(id: string): Promise<Workspace> {
+  return api<Workspace>(`/workspaces/${id}/archive`, { method: 'POST' });
+}
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
+  return api<WorkspaceMember[]>(`/workspaces/${workspaceId}/members`);
+}
+
+export async function addWorkspaceMember(
+  workspaceId: string,
+  data: { userId: string; role: string; employeeId?: string | null }
+): Promise<WorkspaceMember> {
+  return api<WorkspaceMember>(`/workspaces/${workspaceId}/members`, { method: 'POST', body: data });
+}
+
+export async function updateWorkspaceMember(
+  workspaceId: string,
+  userId: string,
+  data: { role?: string; status?: string; employeeId?: string | null }
+): Promise<WorkspaceMember> {
+  return api<WorkspaceMember>(`/workspaces/${workspaceId}/members/${userId}`, { method: 'PATCH', body: data });
+}
+
+export async function removeWorkspaceMember(workspaceId: string, userId: string): Promise<void> {
+  return api<void>(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' });
+}
+
+export async function fetchOrganization(): Promise<OrganizationProfile> {
+  return api<OrganizationProfile>('/organization');
+}
+
+export async function updateOrganization(data: Partial<OrganizationProfile>): Promise<OrganizationProfile> {
+  return api<OrganizationProfile>('/organization', { method: 'PATCH', body: data });
 }
 
 // ---------------------------------------------------------------- types

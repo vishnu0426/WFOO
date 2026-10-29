@@ -10,6 +10,7 @@ import {
 import grpc from '@grpc/grpc-js';
 import protoLoader from '@grpc/proto-loader';
 import { config } from './config.ts';
+import { currentScope } from './db.ts';
 
 // ---------------------------------------------------------------- Redis
 
@@ -62,7 +63,9 @@ export const subject = (tenantId: string, ...parts: string[]) => `wfm.${tenantId
 
 export function publish(tenantId: string, parts: string[], payload: unknown): void {
   const s = subject(tenantId, ...parts);
-  const data = sc.encode(JSON.stringify(payload));
+  const workspaceId = currentScope()?.workspaceId;
+  const body = workspaceId && payload && typeof payload === 'object' && !Array.isArray(payload) ? { ...payload, workspaceId } : payload;
+  const data = sc.encode(JSON.stringify(body));
   try {
     if (js) js.publish(s, data).catch((e) => console.error('[nats] publish', s, e.message));
     else nc.publish(s, data);

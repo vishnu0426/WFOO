@@ -7,7 +7,7 @@
  * called from index.ts) and kept in sync with connector create/status-change/delete from routes.ts.
  */
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
-import { raw, withTenant } from '../../db.ts';
+import { raw, withScope, withTenant } from '../../db.ts';
 import { publish } from '../../infra.ts';
 import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
@@ -144,20 +144,21 @@ export async function startSubscription(connector: any): Promise<void> {
 
   const sub = nc.subscribe(subject);
   live.set(connector.id, { nc, sub });
-  await markConnected(connector.id, connector.tenantId);
-  (async () => { for await (const m of sub) await handleOne(connector, preset, m.subject, m.data); })()
-    .catch((e) => mark(connector.id, connector.tenantId, false, e.message));
+  const scoped = <T>(fn: () => Promise<T>) => withScope(connector.tenantId, connector.workspaceId, fn);
+  await scoped(() => markConnected(connector.id, connector.tenantId));
+  (async () => { for await (const m of sub) await scoped(() => handleOne(connector, preset, m.subject, m.data)); })()
+    .catch((e) => scoped(() => mark(connector.id, connector.tenantId, false, e.message)));
   // background: reflects genuine drops/reconnects in last_error without disturbing connected_at (that stays the
   // last time the subscription was known good) or last_received_at (unaffected by connection noise).
   (async () => {
     for await (const s of nc.status()) {
-      if (s.type === 'disconnect') await mark(connector.id, connector.tenantId, false, 'Disconnected from NATS, reconnecting…');
-      else if (s.type === 'reconnect') await markConnected(connector.id, connector.tenantId);
+      if (s.type === 'disconnect') await scoped(() => mark(connector.id, connector.tenantId, false, 'Disconnected from NATS, reconnecting…'));
+      else if (s.type === 'reconnect') await scoped(() => markConnected(connector.id, connector.tenantId));
       else if (s.type === 'error') {
         // this is how a permissions violation surfaces -- the connection itself stays up (connected_at doesn't lie),
         // but the server silently refuses the subscription, which otherwise looks identical to "just no traffic yet"
         const ctx = s.permissionContext;
-        await mark(connector.id, connector.tenantId, false, ctx ? `NATS denied ${ctx.operation} on '${ctx.subject}' for this user -- ask whoever manages the cluster to grant it` : `NATS error: ${s.data}`);
+        await scoped(() => mark(connector.id, connector.tenantId, false, ctx ? `NATS denied ${ctx.operation} on '${ctx.subject}' for this user -- ask whoever manages the cluster to grant it` : `NATS error: ${s.data}`));
       }
     }
   })().catch(() => {});

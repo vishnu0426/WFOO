@@ -8,6 +8,7 @@ import { withTenant, type Tx } from '../db.ts';
 import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
+import { assertCapacity } from './licensing/service.ts';
 import { dropCache } from '../infra.ts';
 import { parseCsv } from './csv.ts';
 import { reconcileForEmployee } from './rotations.ts';
@@ -133,6 +134,7 @@ workforce.post('/employees', requires('workforce:write'), async (req, res) => {
   const p = me(req), b = parse(EmpCreate, req.body);
   checkEmployee({ weeklyContractHours: b.weeklyContractHours ?? 40, maxWeeklyHours: b.maxWeeklyHours ?? 40, primaryGroupId: b.primaryGroupId ?? null, eligibleGroupIds: b.eligibleGroupIds ?? [] });
   const out = await withTenant(p.tenantId, async (tx) => {
+    await assertCapacity(tx, p.tenantId, 'EMPLOYEES', 1);
     const id = await writeEmployee(tx, null, b);
     const [e] = await loadEmployees(tx, { id });
     await audit(tx, p, req, { action: 'CREATE', entityType: 'EMPLOYEE', entityId: id, entityName: e.name, after: e });
@@ -146,6 +148,9 @@ workforce.put('/employees/:id', requires('workforce:write'), async (req, res) =>
   const out = await withTenant(p.tenantId, async (tx) => {
     const [before] = await loadEmployees(tx, { id });
     if (!before) throw notFound('Employee');
+    if (before.status === 'TERMINATED' && b.status && b.status !== 'TERMINATED') {
+      await assertCapacity(tx, p.tenantId, 'EMPLOYEES', 1);
+    }
     checkEmployee({ weeklyContractHours: b.weeklyContractHours ?? before.weeklyContractHours, maxWeeklyHours: b.maxWeeklyHours ?? before.maxWeeklyHours, primaryGroupId: null, eligibleGroupIds: [] });
     await writeEmployee(tx, id, b);
     const [after] = await loadEmployees(tx, { id });
@@ -312,9 +317,40 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
       plan.push({ input: parsed.data, skillList, action: !cur ? 'NEW' : changed ? 'UPDATE' : 'UNCHANGED', line, name: `${input.firstName} ${input.lastName}` });
     });
     const diff = { new: plan.filter((x) => x.action === 'NEW').length, updated: plan.filter((x) => x.action === 'UPDATE').length, unchanged: plan.filter((x) => x.action === 'UNCHANGED').length };
-    const result = { dryRun: b.dryRun, rows: matrix.length - 1, diff, errors: errors.slice(0, 100), errorCount: errors.length, sample: plan.slice(0, 30).map((x) => ({ line: x.line, name: x.name, employeeNumber: x.input.employeeNumber, action: x.action })), committed: false, headers, headerSample, columnMap, mapped: true };
+    const [lic] = await tx.q<any>('SELECT max_employees FROM wfm.licenses WHERE tenant_id = :t ORDER BY created_at DESC LIMIT 1');
+    const maxEmp = lic?.maxEmployees ?? 500;
+    const [{ count: activeCount }] = await tx.q<{ count: number }>("SELECT count(*)::int AS count FROM wfm.employees WHERE tenant_id = :t AND status != 'TERMINATED'");
+    const remainingCapacity = Math.max(0, maxEmp - activeCount);
+    const capacityWarning = diff.new > remainingCapacity
+      ? `License capacity exceeded: you have ${remainingCapacity} available seat${remainingCapacity === 1 ? '' : 's'} (${activeCount}/${maxEmp} active), but this import adds ${diff.new} new employees.`
+      : null;
+
+    const result = {
+      dryRun: b.dryRun,
+      rows: matrix.length - 1,
+      diff,
+      errors: errors.slice(0, 100),
+      errorCount: errors.length,
+      sample: plan.slice(0, 30).map((x) => ({ line: x.line, name: x.name, employeeNumber: x.input.employeeNumber, action: x.action })),
+      committed: false,
+      headers,
+      headerSample,
+      columnMap,
+      mapped: true,
+      capacity: {
+        max: maxEmp,
+        current: activeCount,
+        remaining: remainingCapacity,
+        required: diff.new,
+        exceeded: diff.new > remainingCapacity,
+        warning: capacityWarning,
+      },
+    };
     if (b.dryRun) return { ...result, stopOnError: b.stopOnError };
     if (b.stopOnError && errors.length) throw bad(`Nothing was imported: ${errors.length} row${errors.length === 1 ? ' has' : 's have'} a problem and you chose to stop on any error. First: line ${errors[0].line}, ${errors[0].message}`, errors.slice(0, 20));
+    if (diff.new > 0) {
+      await assertCapacity(tx, p.tenantId, 'EMPLOYEES', diff.new);
+    }
     // rows with a problem were never added to `plan`, so they're simply left out here -- a good row isn't held back
     // by someone else's file having a bad one. Their line numbers are still in `errors` so they can be fixed and re-imported.
     for (const x of plan) {

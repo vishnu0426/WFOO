@@ -10,7 +10,7 @@ export type ModuleId = (typeof MODULES)[number];
 /** The section a module opens on: the first item under it in the sidebar. */
 export const DEFAULT_SUB: Record<ModuleId, string> = {
   overview: '', workforce: 'employees', forecasting: 'forecast-dashboard', scheduling: 'schedule-timeline', intraday: 'live-coverage',
-  configuration: 'wfm-groups', 'data-management': 'staged-imports', audit: '', administration: 'users',
+  configuration: 'wfm-groups', 'data-management': 'staged-imports', audit: '', administration: 'workspaces',
 };
 
 export const HOME = { module: 'forecasting' as ModuleId, sub: DEFAULT_SUB.forecasting };

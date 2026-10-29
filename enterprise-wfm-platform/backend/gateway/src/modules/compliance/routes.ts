@@ -18,7 +18,7 @@ const uuid = z.string().uuid();
 async function ensureBuiltIns(tx: Tx) {
   for (const b of BUILT_INS) {
     await tx.exec(
-      `INSERT INTO compliance_packs (tenant_id, code, name, region, description, rules, built_in) VALUES (:t, $1, $2, $3, $4, $5, true) ON CONFLICT (tenant_id, code) DO NOTHING`,
+      `INSERT INTO compliance_packs (tenant_id, workspace_id, code, name, region, description, rules, built_in) VALUES (:t, :w, $1, $2, $3, $4, $5, true) ON CONFLICT (tenant_id, workspace_id, code) DO NOTHING`,
       [b.code, b.name, b.region, b.description, JSON.stringify(b.rules)]);
   }
 }
@@ -120,8 +120,8 @@ compliance.put('/assignments', requires('config:write'), async (req, res) => {
     const pack = await tx.one<any>('SELECT name FROM compliance_packs WHERE tenant_id = :t AND id = $1', [b.packId]);
     if (!pack) throw notFound('Compliance pack');
     await tx.exec(
-      `INSERT INTO compliance_assignments (tenant_id, scope_type, scope_id, scope_key, pack_id) VALUES (:t, $1, $2, $3, $4)
-       ON CONFLICT (tenant_id, scope_type, scope_key) DO UPDATE SET pack_id = EXCLUDED.pack_id, updated_at = now()`, [b.scopeType, b.scopeType === 'TENANT' ? null : b.scopeId, key, b.packId]);
+      `INSERT INTO compliance_assignments (tenant_id, workspace_id, scope_type, scope_id, scope_key, pack_id) VALUES (:t, :w, $1, $2, $3, $4)
+       ON CONFLICT (tenant_id, workspace_id, scope_type, scope_key) DO UPDATE SET pack_id = EXCLUDED.pack_id, updated_at = now()`, [b.scopeType, b.scopeType === 'TENANT' ? null : b.scopeId, key, b.packId]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'COMPLIANCE_ASSIGNMENT', entityId: key, entityName: b.scopeType, diffSummary: `${b.scopeType.toLowerCase()} now follows "${pack.name}"` });
   });
   await dropCache(p.tenantId, 'sched:*');

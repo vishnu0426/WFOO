@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import { config } from './config.ts';
 
@@ -31,40 +32,63 @@ export const camelize = <T = Row>(row: Row): T => {
 let rlsRole = false;
 export const isRlsEnforced = () => rlsRole;
 
-/** `:t` as a whole token, so casts such as ::text or ::timestamp are never mistaken for it. */
+/** `:t` and `:w` as whole tokens, so casts such as ::text or ::timestamp are never mistaken for them. */
 const TENANT_PLACEHOLDER = /(?<!:):t\b/;
 const TENANT_PLACEHOLDER_ALL = /(?<!:):t\b/g;
+const WORKSPACE_PLACEHOLDER = /(?<!:):w\b/;
+const WORKSPACE_PLACEHOLDER_ALL = /(?<!:):w\b/g;
+
+export interface Scope { tenantId: string; orgId: string; workspaceId: string }
+export const scopeStore = new AsyncLocalStorage<Scope>();
+export const currentScope = (): Scope | undefined => scopeStore.getStore();
+/** Run async work under a tenant/workspace scope without opening a transaction. */
+export const withScope = <T>(tenantId: string, workspaceId: string, fn: () => T): T =>
+  scopeStore.run({ tenantId, orgId: tenantId, workspaceId }, fn);
 
 export class Tx {
-  constructor(readonly client: pg.PoolClient, readonly tenantId: string) {}
+  constructor(readonly client: pg.PoolClient, readonly tenantId: string, readonly workspaceId: string) {}
 
-  /** `:t` in the SQL is replaced by the tenant id parameter. */
-  async q<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
+  private bind(text: string, params: unknown[]): { sql: string; params: unknown[] } {
     let sql = text;
     const p = [...params];
     if (TENANT_PLACEHOLDER.test(sql)) { p.push(this.tenantId); sql = sql.replace(TENANT_PLACEHOLDER_ALL, `$${p.length}`); }
-    const res = await this.client.query(sql, p);
+    if (WORKSPACE_PLACEHOLDER.test(sql)) { p.push(this.workspaceId); sql = sql.replace(WORKSPACE_PLACEHOLDER_ALL, `$${p.length}`); }
+    return { sql, params: p };
+  }
+
+  /** `:t` is the tenant/organisation id and `:w` the active workspace id. */
+  async q<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
+    const b = this.bind(text, params);
+    const res = await this.client.query(b.sql, b.params);
     return res.rows.map((r) => camelize<T>(r));
   }
   async one<T = Row>(text: string, params: unknown[] = []): Promise<T | undefined> {
     return (await this.q<T>(text, params))[0];
   }
   async exec(text: string, params: unknown[] = []): Promise<number> {
-    let sql = text;
-    const p = [...params];
-    if (TENANT_PLACEHOLDER.test(sql)) { p.push(this.tenantId); sql = sql.replace(TENANT_PLACEHOLDER_ALL, `$${p.length}`); }
-    return (await this.client.query(sql, p)).rowCount ?? 0;
+    const b = this.bind(text, params);
+    return (await this.client.query(b.sql, b.params)).rowCount ?? 0;
   }
 }
 
-/** Run `fn` inside one transaction scoped to a tenant. Commits on success, rolls back on any error. */
-export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+async function defaultWorkspaceId(client: pg.PoolClient, tenantId: string): Promise<string> {
+  const r = await client.query('SELECT id FROM wfm.workspaces WHERE tenant_id = $1 AND is_default LIMIT 1', [tenantId]);
+  return r.rows[0]?.id ?? '';
+}
+
+async function runScoped<T>(tenantId: string, workspaceId: string | undefined, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const active = scopeStore.getStore();
+  const explicit = workspaceId ?? (active?.tenantId === tenantId ? active.workspaceId : undefined);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    if (rlsRole) await client.query('SET LOCAL ROLE wfm_app');
     await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
-    const out = await fn(new Tx(client, tenantId));
+    // Resolve the default workspace before switching to the non-bypass role: the lookup only needs app.tenant_id.
+    const ws = explicit || await defaultWorkspaceId(client, tenantId);
+    await client.query(`SELECT set_config('app.workspace_id', $1, true)`, [ws]);
+    if (rlsRole) await client.query('SET LOCAL ROLE wfm_app');
+    const scope = { tenantId, orgId: tenantId, workspaceId: ws };
+    const out = await scopeStore.run(scope, () => fn(new Tx(client, tenantId, ws)));
     await client.query('COMMIT');
     return out;
   } catch (e) {
@@ -73,6 +97,21 @@ export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>
   } finally {
     client.release();
   }
+}
+
+/** Run `fn` inside one transaction scoped to a tenant, using the active workspace when called inside a request. */
+export async function withTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return runScoped(tenantId, undefined, fn);
+}
+
+/** Run `fn` inside one transaction scoped to an explicit tenant + workspace. */
+export async function withWorkspace<T>(tenantId: string, workspaceId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return runScoped(tenantId, workspaceId, fn);
+}
+
+/** Resolve a tenant's default workspace (used for old tokens and system jobs). */
+export async function resolveDefaultWorkspaceId(tenantId: string): Promise<string> {
+  return runScoped(tenantId, undefined, async (tx) => tx.workspaceId);
 }
 
 /** Tenant-less query (tenants table, migrations, health). Never use for tenant data. */
@@ -123,12 +162,24 @@ async function applyRowLevelSecurity(): Promise<void> {
   await pool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA wfm TO wfm_app');
   await pool.query('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA wfm TO wfm_app');
   const tables = (await pool.query(
-    `SELECT table_name FROM information_schema.columns WHERE table_schema = 'wfm' AND column_name = 'tenant_id'`)).rows.map((r) => r.table_name as string);
+    `SELECT c.table_name,
+            bool_or(c.column_name = 'workspace_id') AS workspace_scoped
+     FROM information_schema.columns c
+     WHERE c.table_schema = 'wfm' AND c.column_name IN ('tenant_id', 'workspace_id')
+     GROUP BY c.table_name
+     HAVING bool_or(c.column_name = 'tenant_id')
+     ORDER BY c.table_name`)).rows as { table_name: string; workspace_scoped: boolean }[];
+  // Membership is intentionally tenant-wide so a user can discover and switch between all their workspaces.
+  const TENANT_ONLY = new Set(['users', 'role_permissions', 'workspaces', 'workspace_members', 'organization_settings', 'licenses', 'license_modules', 'license_capacity_requests']);
   for (const t of tables) {
-    await pool.query(`ALTER TABLE wfm."${t}" ENABLE ROW LEVEL SECURITY`);
-    await pool.query(`ALTER TABLE wfm."${t}" FORCE ROW LEVEL SECURITY`);
-    await pool.query(`DROP POLICY IF EXISTS tenant_isolation ON wfm."${t}"`);
-    await pool.query(`CREATE POLICY tenant_isolation ON wfm."${t}" USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)`);
+    const tenant = `tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`;
+    const workspace = t.workspace_scoped && !TENANT_ONLY.has(t.table_name)
+      ? ` AND workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid`
+      : '';
+    await pool.query(`ALTER TABLE wfm."${t.table_name}" ENABLE ROW LEVEL SECURITY`);
+    await pool.query(`ALTER TABLE wfm."${t.table_name}" FORCE ROW LEVEL SECURITY`);
+    await pool.query(`DROP POLICY IF EXISTS tenant_isolation ON wfm."${t.table_name}"`);
+    await pool.query(`CREATE POLICY tenant_isolation ON wfm."${t.table_name}" USING (${tenant}${workspace}) WITH CHECK (${tenant}${workspace})`);
   }
   rlsRole = true;
   console.log(`[db] row-level security enforced on ${tables.length} tables (role wfm_app)`);
