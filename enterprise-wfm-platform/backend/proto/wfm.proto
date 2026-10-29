@@ -151,6 +151,15 @@ message SchedEmployee {
   int32 max_consecutive = 4;     // most days worked in a row
   int32 rest_slots = 5;          // minimum gap between the end of one shift and the start of the next
   int32 max_days_week = 6;
+  int32 consist_mode = 7;        // same start and end every day for this person: 0 follow the request default, 1 off, 2 prefer, 3 require
+  repeated int32 skill_ids = 8;  // skills this person can serve, used when the request carries per-skill requirements
+  // What the person already worked just before day 0, taken from the previous published schedule. All zero when there is none.
+  int32 prior_run = 9;           // days worked in a row, ending the day before day 0
+  bool prior_has_end = 10;       // true when prior_end_slot means something
+  int32 prior_end_slot = 11;     // end of the last earlier shift, in slots counted from the start of day 0 (positive: still on shift after midnight)
+  int32 prior_week_slots = 12;   // paid slots already worked earlier in day 0's calendar week
+  int32 prior_week_days = 13;    // shifts already worked earlier in that week
+  int32 prior_lead_days = 14;    // calendar days of that week that fall before day 0 and were looked at (0: no history for this person)
 }
 
 // A shift this person could work: employee x day x template x start time, already filtered for availability and time off.
@@ -177,6 +186,19 @@ message ScheduleRequest {
   int32 w_pref = 10;                         // reward per preferred shift (negative for disliked)
   int32 w_fair = 11;                         // penalty on the spread of weekend shifts between people
   int32 workers = 12;
+  int32 consistency_mode = 13;              // 0 off, 1 prefer, 2 require: each person keeps one start time and one end time across the period
+  int32 start_tol_slots = 14;               // how far a day's start may differ from the person's usual start
+  int32 end_tol_slots = 15;                 // same for the end
+  int32 w_consist = 16;                     // penalty per shift off the person's usual times (prefer mode)
+  repeated SkillRequirement skill_requirements = 17;   // two or more: coverage is judged per skill instead of as one headcount
+  bool wrap = 18;                           // assume the period repeats: a last-day shift that runs past midnight covers the first hours of day 0
+  int32 week_start = 19;                    // weekday a pay week begins on, Monday = 0 (the default) ... Sunday = 6; weekly hour and day limits follow it
+}
+
+// People needed per slot for one skill (days * 96 values).
+message SkillRequirement {
+  int32 id = 1;
+  repeated int32 required = 2;
 }
 
 message Assignment {

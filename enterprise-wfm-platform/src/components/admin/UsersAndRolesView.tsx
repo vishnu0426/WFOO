@@ -113,7 +113,7 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
                 <Field label="Full name"><Input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} placeholder="Jane Doe" /></Field>
                 <Field label="Email"><Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="optional" /></Field>
                 <Field label="Role"><Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>)}</Select></Field>
-                <Field label="Temporary password" hint="8+ characters"><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+                <Field label="Temporary password" hint="8+ characters. They must choose their own at first sign-in."><Input type="text" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
                 <div className="md:col-span-5 flex gap-2"><Btn variant="primary" onClick={createUser} disabled={busy || !form.username || !form.displayName || form.password.length < 8}>Create</Btn><Btn onClick={() => setShowNew(false)}>Cancel</Btn></div>
               </div>
             )}
@@ -139,7 +139,7 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                               <Field label="Role"><Select value={edit.role} disabled={isSelf} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>)}</Select></Field>
                               <Field label="Status"><Select value={edit.status} disabled={isSelf} onChange={(e) => setEdit({ ...edit, status: e.target.value as WUser['status'] })}><option value="ACTIVE">Active</option><option value="DISABLED">Disabled</option></Select></Field>
-                              <Field label="Reset password" hint="leave blank to keep it"><Input type="text" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
+                              <Field label="Reset password" hint="leave blank to keep it. A new one is temporary: they choose their own at next sign-in (not if it is yours)."><Input type="text" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
                               <Btn variant="primary" onClick={saveEdit} disabled={busy || (!!edit.password && edit.password.length < 8)}>Save</Btn>
                             </div>
                           </td></tr>

@@ -120,6 +120,7 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
       subItems: [
         { id: 'schedule-timeline', label: 'Schedule Timeline' },
         { id: 'generate-schedule', label: 'Generate Schedule' },
+        { id: 'schedule-quality', label: 'Schedule Quality' },
         { id: 'shift-templates', label: 'Shift Templates' },
         { id: 'all-schedules', label: 'All Schedules' },
         { id: 'multi-site', label: 'Multi-Site View' },

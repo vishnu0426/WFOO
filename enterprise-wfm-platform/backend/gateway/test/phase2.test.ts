@@ -72,7 +72,7 @@ describe('workforce and scheduling', () => {
     assert.equal((await call(admin, 'POST', '/scheduling/templates', { name: 'bad', workDays: [1], earliestStart: '10:00', latestStart: '09:00', durationHours: 8 })).status, 400, 'latest before earliest');
   });
 
-  it('imports employees: a dry run changes nothing, errors block the commit', async () => {
+  it('imports employees: a dry run changes nothing, a bad row is skipped and reported', async () => {
     const lines = ['employee_number,first_name,last_name,team,wfm_group,employment_type,weekly_hours,days_per_week,skills'];
     for (let i = 1; i <= 32; i++) lines.push(`E${RUN}-${i},Agent${i},Test${i},${TEAM},${GROUP},${i % 5 === 0 ? 'PART_TIME' : 'FULL_TIME'},${i % 5 === 0 ? 24 : 40},${i % 5 === 0 ? 4 : 5},Billing ${RUN}:${1 + (i % 5)}`);
     const csv = lines.join('\n');
@@ -80,9 +80,12 @@ describe('workforce and scheduling', () => {
     assert.equal(dry.status, 200, dry.text); assert.equal(dry.json.diff.new, 32); assert.equal(dry.json.errorCount, 0);
     assert.equal((await call(admin, 'GET', `/workforce/employees?groupId=${ctx.group.id}`)).json.length, 0, 'dry run must not write');
     const bad = await call(admin, 'POST', '/workforce/employees/import', { csv: csv + `\nX${RUN},No,Team,Nowhere,${GROUP},FULL_TIME,40,5,`, dryRun: false });
-    assert.equal(bad.status, 400); assert.match(bad.text, /Unknown team/);
+    // a row with a problem is reported and left out; it does not hold back the good rows
+    assert.equal(bad.status, 200, bad.text); assert.equal(bad.json.committed, true);
+    assert.equal(bad.json.errorCount, 1); assert.match(bad.json.errors[0].message, /Unknown team/); assert.equal(bad.json.errors[0].line, 34);
+    assert.equal(bad.json.diff.new, 32, 'only the good rows are counted');
     const ok = await call(admin, 'POST', '/workforce/employees/import', { csv, dryRun: false });
-    assert.equal(ok.status, 200, ok.text); assert.equal(ok.json.committed, true);
+    assert.equal(ok.status, 200, ok.text); assert.equal(ok.json.committed, true); assert.equal(ok.json.diff.new, 0, 'already imported by the first commit');
     const again = await call(admin, 'POST', '/workforce/employees/import', { csv, dryRun: true });
     assert.equal(again.json.diff.unchanged, 32, 're-import of the same file changes nothing');
     const list = await call(admin, 'GET', `/workforce/employees?groupId=${ctx.group.id}`);
@@ -170,10 +173,15 @@ describe('workforce and scheduling', () => {
     assert.equal((await call(admin, 'GET', `/scheduling/versions/${ctx.v1.id}/validate`)).json.ok, true);
   });
 
-  it('publishes, locks the schedule, and lets a second version replace it', async () => {
+  it('publishes, allows reasoned edits, and lets a second version replace it', async () => {
     const pub = await call(admin, 'POST', `/scheduling/versions/${ctx.v1.id}/publish`);
     assert.equal(pub.status, 200, pub.text); assert.equal(pub.json.status, 'PUBLISHED');
-    assert.equal((await call(admin, 'POST', `/scheduling/versions/${ctx.v1.id}/shifts`, { employeeId: ctx.emps[3].id, day: ctx.monday, templateId: ctx.tpl[1].id, startTime: '09:00', reason: 'late change' })).status, 409, 'published is locked');
+    // a published schedule can still be corrected, but only with a stated reason, and it has to be republished (which re-checks the rules)
+    const edit = { employeeId: ctx.emps[3].id, day: ctx.monday, templateId: ctx.tpl[1].id, startTime: '09:00' };
+    assert.equal((await call(admin, 'POST', `/scheduling/versions/${ctx.v1.id}/shifts`, edit)).status, 400, 'an edit to a published schedule needs a reason');
+    const late = await call(admin, 'POST', `/scheduling/versions/${ctx.v1.id}/shifts`, { ...edit, reason: 'late change' });
+    assert.equal(late.status, 201, late.text);
+    assert.equal((await call(admin, 'DELETE', `/scheduling/versions/${ctx.v1.id}/shifts/${late.json.id}?reason=${encodeURIComponent('undo the late change')}`)).status, 200);
     assert.equal((await call(admin, 'DELETE', `/scheduling/versions/${ctx.v1.id}`)).status, 409, 'cannot delete published');
 
     const v2 = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: ctx.from, weeks: 1, timeLimitSec: 45, weights: { understaffing: 90, overstaffing: 80, contractHours: 20, preferences: 0, fairness: 0 } });

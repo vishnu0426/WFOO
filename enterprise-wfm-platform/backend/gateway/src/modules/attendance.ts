@@ -7,17 +7,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
+import { payWeekFor } from './payWeek.ts';
 import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { bad, isoDay, notFound, parse } from '../http.ts';
 import { parseCsv, parseDay, parseMinute } from './csv.ts';
 import { dowOf } from './scheduleRoutes.ts';
+import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
 import { addDays } from './forecast/service.ts';
 
 export const attendance = Router();
 const uuid = z.string().uuid();
 const r1 = (v: number) => Math.round(v * 10) / 10;
-const mondayOf = (day: string) => addDays(day, -dowOf(day));
+const mondayOf = (day: string, weekStart = 0) => addDays(day, -((dowOf(day) - weekStart + 7) % 7));   // first day of the pay week `day` is in
 const hoursOf = (inAt: string | Date, outAt: string | Date) => (new Date(outAt).getTime() - new Date(inAt).getTime()) / 3_600_000;
 
 // ---------------------------------------------------------------- CSV import
@@ -138,19 +140,20 @@ attendance.delete('/punches/:id', requires('workforce:write'), async (req, res) 
 // ---------------------------------------------------------------- summary and payroll export
 
 async function summarize(tx: Tx, groupId: string | null, from: string, to: string) {
+  const payStart = (await payWeekFor(tx, groupId)).start;   // overtime is counted per pay week: the group's, else the company's
   const emps = await tx.q<any>(
     `SELECT id, employee_number, first_name || ' ' || last_name AS name, weekly_contract_hours FROM employees
      WHERE tenant_id = :t AND ($1::uuid IS NULL OR primary_group_id = $1 OR $1 = ANY(eligible_group_ids))`, [groupId]);
   const empIds = emps.map((e) => e.id);
-  if (!empIds.length) return { days: [], weeks: [] };
+  if (!empIds.length) return { days: [], weeks: [], payStart };
   const punches = await tx.q<any>(
     `SELECT employee_id, day::text AS day, clock_in::text AS clock_in, clock_out::text AS clock_out FROM attendance_punches
      WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) AND day >= $2 AND day <= $3 ORDER BY employee_id, day, clock_in`, [empIds, from, to]);
   const shifts = await tx.q<any>(
-    `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, t.meal_slots FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
+    `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, ${TPL_JOIN_COLS} FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
      LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = ANY($1::uuid[]) AND s.day >= $2 AND s.day <= $3`, [empIds, from, to]);
   const empById = new Map(emps.map((e) => [e.id, e]));
-  const schedByKey = new Map(shifts.map((s) => [`${s.employeeId}|${s.day}`, r1(((s.lengthSlots - (s.mealSlots ?? 0)) / 4))]));
+  const schedByKey = new Map(shifts.map((s) => [`${s.employeeId}|${s.day}`, r1(((s.lengthSlots - joinedUnpaidMeal(s, s.lengthSlots)) / 4))]));
   const punchByKey = new Map<string, any[]>();
   for (const pu of punches) { const k = `${pu.employeeId}|${pu.day}`; punchByKey.set(k, [...(punchByKey.get(k) ?? []), pu]); }
 
@@ -168,12 +171,12 @@ async function summarize(tx: Tx, groupId: string | null, from: string, to: strin
 
   const weekMap = new Map<string, { employeeId: string; weekStart: string; actualHours: number; scheduledHours: number }>();
   for (const d of days) {
-    const wk = mondayOf(d.day), key = `${d.employeeId}|${wk}`;
+    const wk = mondayOf(d.day, payStart), key = `${d.employeeId}|${wk}`;
     const w = weekMap.get(key) ?? { employeeId: d.employeeId, weekStart: wk, actualHours: 0, scheduledHours: 0 };
     w.actualHours += d.actualHours; w.scheduledHours += d.scheduledHours; weekMap.set(key, w);
   }
   const weeks = [...weekMap.values()].map((w) => { const e = empById.get(w.employeeId); const contract = e?.weeklyContractHours ?? 0; return { ...w, employeeNumber: e?.employeeNumber ?? '', name: e?.name ?? '', actualHours: r1(w.actualHours), scheduledHours: r1(w.scheduledHours), overtimeHours: r1(Math.max(0, w.actualHours - contract)) }; });
-  return { days, weeks };
+  return { days, weeks, payStart };
 }
 
 attendance.get('/summary', requires('workforce:read'), async (req, res) => {
@@ -183,11 +186,11 @@ attendance.get('/summary', requires('workforce:read'), async (req, res) => {
 
 attendance.get('/payroll-export.csv', requires('workforce:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ groupId: uuid.optional(), from: z.string().regex(isoDay), to: z.string().regex(isoDay) }), req.query);
-  const { days, weeks } = await withTenant(p.tenantId, (tx) => summarize(tx, q.groupId ?? null, q.from, q.to));
+  const { days, weeks, payStart } = await withTenant(p.tenantId, (tx) => summarize(tx, q.groupId ?? null, q.from, q.to));
   const otByWeek = new Map(weeks.map((w) => [`${w.employeeId}|${w.weekStart}`, w]));
   const rows = ['employee_number,name,day,scheduled_hours,actual_hours,regular_hours,overtime_hours,status'];
   for (const d of days) {
-    const w = otByWeek.get(`${d.employeeId}|${mondayOf(d.day)}`);
+    const w = otByWeek.get(`${d.employeeId}|${mondayOf(d.day, payStart)}`);
     // weekly overtime (actual hours over the person's weekly contract) apportioned across the week's days by each day's share of actual hours
     const ot = w && w.actualHours > 0 ? r1((d.actualHours / w.actualHours) * w.overtimeHours) : 0;
     const reg = r1(d.actualHours - ot);

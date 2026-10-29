@@ -94,6 +94,7 @@ The login box asks for three things:
 - **Tenant:** the code from `BOOTSTRAP_TENANT_CODE` (default `ORG`).
 - **User:** `admin` (or `BOOTSTRAP_ADMIN_USER`).
 - **Password:** printed once in the gateway window on the very first start (look for `FIRST-RUN SETUP`), or the value of `BOOTSTRAP_ADMIN_PASSWORD`.
+- **First sign-in:** this is a temporary password. After signing in you are asked to choose your own (at least 8 characters, mixing letters with numbers or symbols; not your username or a common word). Until you do, the gateway refuses everything else. The same applies to any account created with, or reset to, a password by an administrator, and to employees given an app login. People who already existed are not asked. Set `FORCE_PASSWORD_CHANGE=false` in `backend/.env` only for automated tests or a throwaway demo.
 
 The app starts empty: no queues, history, forecasts or people are pre-loaded.
 

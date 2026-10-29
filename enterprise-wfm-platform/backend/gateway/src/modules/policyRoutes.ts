@@ -108,10 +108,27 @@ const W = z.number().int().min(0).max(100);
 const Weights = z.object({ understaffing: W, overstaffing: W, contractHours: W, preferences: W, fairness: W });
 const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 const DEFAULT_TIMELINE_COLORS = { shift: '#7B6CA6', manual: '#6B7F99', violation: '#C9605F' };
+/** Company defaults the Generate screen starts from, and the publish checks. */
+export const DEFAULT_SCHEDULING = {
+  consistentTimes: { mode: 'OFF' as 'OFF' | 'PREFER' | 'REQUIRE', startToleranceMin: 0, endToleranceMin: 0 },
+  targetCoverage: 90,            // % of the requirement a schedule should cover
+  enforcePublishChecks: false,   // when true, publishing below target coverage or on a stale forecast needs an acknowledged reason
+  breakSlackMin: 60,             // how far a meal or break may move from its default place to improve coverage
+  payWeekStart: 0,               // weekday a pay week begins on, Monday 0 ... Sunday 6. A WFM group can override it
+  partTimeToleranceHours: 1 as number | null,   // part-time, contract and temporary staff may be scheduled at most this many hours past their contract (null: only their own weekly maximum applies)
+};
+const Tol = z.number().int().min(0).max(240);
+const SchedDefaults = z.object({
+  consistentTimes: z.object({ mode: z.enum(['OFF', 'PREFER', 'REQUIRE']), startToleranceMin: Tol, endToleranceMin: Tol }),
+  targetCoverage: z.number().int().min(50).max(100), enforcePublishChecks: z.boolean(), breakSlackMin: z.number().int().min(0).max(240),
+  payWeekStart: z.number().int().min(0).max(6).optional(),   // omitted by older clients: the saved value stays
+  partTimeToleranceHours: z.number().min(0).max(24).nullable().optional(),
+});
 const PolBody = z.object({
   minRestHours: z.number().min(0).max(24).nullable(), maxWeeklyHours: z.number().min(1).max(100).nullable(),
   maxConsecutiveDays: z.number().int().min(1).max(14).nullable(), maxDaysPerWeek: z.number().int().min(1).max(7).nullable(), adherenceGraceSeconds: z.number().int().min(0).max(3600), weights: Weights,
   timelineColors: z.object({ shift: Hex, manual: Hex, violation: Hex }),
+  scheduling: SchedDefaults.optional(),     // omitted by older clients: the saved defaults stay as they are
 });
 const polDto = (r: any) => ({
   minRestHours: r?.minRestHours == null ? null : Number(r.minRestHours), maxWeeklyHours: r?.maxWeeklyHours == null ? null : Number(r.maxWeeklyHours),
@@ -119,6 +136,7 @@ const polDto = (r: any) => ({
   adherenceGraceSeconds: (r?.adherenceGraceSeconds ?? 300) as number,
   timelineColors: { ...DEFAULT_TIMELINE_COLORS, ...(r?.timelineColors ?? {}) } as typeof DEFAULT_TIMELINE_COLORS,
   weights: { ...DEFAULT_WEIGHTS, ...(r?.weights ?? {}) } as typeof DEFAULT_WEIGHTS,
+  scheduling: { ...DEFAULT_SCHEDULING, ...(r?.defaults ?? {}), consistentTimes: { ...DEFAULT_SCHEDULING.consistentTimes, ...(r?.defaults?.consistentTimes ?? {}) } } as typeof DEFAULT_SCHEDULING,
   updatedBy: (r?.updatedBy ?? null) as string | null, updatedAt: (r?.updatedAt ?? null) as string | null,
 });
 export type Policy = ReturnType<typeof polDto>;
@@ -135,11 +153,12 @@ policy.put('/scheduling-policy', requires('config:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await loadPolicy(tx);
     const r = await tx.one<any>(
-      `INSERT INTO scheduling_policy (tenant_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors)
-       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (tenant_id) DO UPDATE SET min_rest_hours = $1, max_weekly_hours = $2, max_consecutive_days = $3, max_days_per_week = $4, weights = $5, updated_by = $6, adherence_grace_seconds = $7, timeline_colors = $8, updated_at = now()
+      `INSERT INTO scheduling_policy (tenant_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors, defaults)
+       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb))
+       ON CONFLICT (tenant_id) DO UPDATE SET min_rest_hours = $1, max_weekly_hours = $2, max_consecutive_days = $3, max_days_per_week = $4, weights = $5, updated_by = $6, adherence_grace_seconds = $7, timeline_colors = $8,
+         defaults = coalesce($9::jsonb, scheduling_policy.defaults), updated_at = now()
        RETURNING *`,
-      [b.minRestHours, b.maxWeeklyHours, b.maxConsecutiveDays, b.maxDaysPerWeek, JSON.stringify(b.weights), p.name, b.adherenceGraceSeconds, JSON.stringify(b.timelineColors)]);
+      [b.minRestHours, b.maxWeeklyHours, b.maxConsecutiveDays, b.maxDaysPerWeek, JSON.stringify(b.weights), p.name, b.adherenceGraceSeconds, JSON.stringify(b.timelineColors), b.scheduling ? JSON.stringify({ ...before.scheduling, ...b.scheduling }) : null]);
     const after = polDto(r);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SCHEDULING_POLICY', entityId: p.tenantId, entityName: 'Scheduling policy', before, after });
     return after;

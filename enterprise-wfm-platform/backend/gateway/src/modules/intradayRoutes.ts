@@ -103,7 +103,7 @@ intraday.post('/events', requires('intraday:act'), async (req, res) => {
 type Status = 'IN' | 'OUT' | 'UNSCHEDULED' | 'IGNORED' | 'UNKNOWN' | 'NOT_STARTED' | 'SHIFT_ENDED';
 interface Resolved { kind: 'ACTIVITY' | 'OFF' | 'UNMAPPED' | 'NONE'; category?: string; name: string; ignore?: boolean; countsAsWork?: boolean }
 
-const localClock = (tz: string, at = new Date()) => {
+export const localClock = (tz: string, at = new Date()) => {
   const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at);
   return +p.find((x) => x.type === 'hour')!.value * 60 + +p.find((x) => x.type === 'minute')!.value;
 };

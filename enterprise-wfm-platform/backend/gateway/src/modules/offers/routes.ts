@@ -12,7 +12,8 @@ import { audit } from '../../audit.ts';
 import { HttpError, bad, conflict, isoDay, notFound, parse } from '../../http.ts';
 import { dropCache, publish } from '../../infra.ts';
 import { notify, usersOf } from '../../notify.ts';
-import { computeStats, liveStats, refreshStats, revision, validateShifts, type ShiftRow } from '../scheduleRoutes.ts';
+import { computeStats, liveStats, refreshStats, requirementForManual, revision, shiftsOf, validateShifts, type ShiftRow } from '../scheduleRoutes.ts';
+import { paidSlots } from '../templateRules.ts';
 import { liveReforecast } from '../intradayRoutes.ts';
 import { whoAmI } from '../selfService.ts';
 import { hhmm } from '../workforceRoutes.ts';
@@ -56,12 +57,45 @@ offerPolicyRoutes.put('/', requires('config:write'), async (req, res) => {
 const slotOf = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t); return m ? Math.min(SPD, Math.floor((+m[1] * 60 + +m[2]) / 15)) : NaN; };
 const kindWord = (k: string) => (k === 'VTO' ? 'time off' : 'overtime');
 
-async function liveForDay(tenantId: string, groupId: string, day: string) {
-  const v = await withTenant(tenantId, (tx) => tx.one<any>(
+/**
+ * The roster in force on a day. Usually one published schedule. A rotation and the schedule that fills its gaps are published side by side
+ * and are the real roster together, so their shifts are joined and measured against the full staffing target: an offer must see everyone's
+ * shifts (someone on a rotation shift is not "free" just because the fill schedule has nothing for them).
+ */
+async function liveForDay(tenantId: string, groupId: string, day: string, cache?: Map<string, Promise<{ v: any; live: Live }>>) {
+  const vs = await withTenant(tenantId, (tx) => tx.q<any>(
     `SELECT v.*, v.period_start::text AS period_start, v.period_end::text AS period_end, f.name AS forecast_name FROM schedule_versions v LEFT JOIN forecast_versions f ON f.id = v.forecast_version_id
-     WHERE v.tenant_id = :t AND v.wfm_group_id = $1 AND v.status = 'PUBLISHED' AND v.period_start <= $2::date AND v.period_end >= $2::date ORDER BY v.seq DESC LIMIT 1`, [groupId, day]));
-  if (!v) throw bad(`There is no published schedule for this group on ${day}. Publish one first: offers change the published schedule.`);
-  return { v, live: await liveStats(tenantId, v) };
+     WHERE v.tenant_id = :t AND v.wfm_group_id = $1 AND v.status = 'PUBLISHED' AND v.period_start <= $2::date AND v.period_end >= $2::date ORDER BY v.seq DESC`, [groupId, day]));
+  if (!vs.length) throw bad(`There is no published schedule for this group on ${day}. Publish one first: offers change the published schedule.`);
+  const key = vs.map((x) => x.id).join('|');
+  const hit = cache?.get(key);
+  if (hit) return hit;
+  const work = (async () => {
+    const v = vs[0];
+    let live = await liveStats(tenantId, v);
+    // a rotation roster has no forecast of its own: with none to measure against, use the group's coverage windows
+    if (v.kind === 'ROTATION' && v.coverageSource !== 'MANUAL' && !live.gross.some((x) => x > 0)) {
+      const man = await requirementForManual(tenantId, v.wfmGroupId, live.days).catch(() => null);
+      if (man) live = { ...live, gross: man.required, required: man.required, stats: computeStats(live.ctx, live.days, man.required, live.shifts, null, { uncoveredDays: man.uncovered }) };
+    }
+    if (vs.length === 1) return { v, live };
+    const inPeriod = new Set(live.days);
+    const others = await withTenant(tenantId, async (tx) => { const out: Awaited<ReturnType<typeof shiftsOf>> = []; for (const o of vs.slice(1)) out.push(...await shiftsOf(tx, o.id)); return out; });
+    const shifts = [...live.shifts, ...others.filter((s) => inPeriod.has(s.day))];
+    return { v, live: { ...live, shifts, required: live.gross, stats: computeStats(live.ctx, live.days, live.gross, shifts, null), violations: validateShifts(live.ctx, shifts) } as Live };
+  })();
+  cache?.set(key, work);
+  return work;
+}
+
+/** People scheduled minus people needed for each quarter hour of one day, counting shifts that run in from the night before and out past midnight. */
+function gapForDay(live: Live, day: string): number[] {
+  const i = live.days.indexOf(day), total = live.days.length * SPD, cover = new Array(total).fill(0);
+  for (const s of live.shifts as Row[]) {
+    const di = live.days.indexOf(s.day);
+    if (di >= 0) for (let g = di * SPD + s.startSlot; g < Math.min(total, di * SPD + s.startSlot + s.lengthSlots); g++) cover[g]++;
+  }
+  return Array.from({ length: SPD }, (_, sl) => cover[i * SPD + sl] - live.required[i * SPD + sl]);
 }
 
 interface Assessment { ok: boolean; why: string; change: Change | null; shift: Row | null; blockers: string[]; warnings: string[] }
@@ -89,13 +123,14 @@ function assess(live: Live, kind: 'VTO' | 'OVERTIME', employeeId: string, day: s
   return { ok: blockers.length === 0, why: blockers[0] ?? '', change, shift: mine, blockers, warnings };
 }
 
-const mondayOf = (d: string) => { const [y, m, dd] = d.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, dd)); t.setUTCDate(t.getUTCDate() - ((t.getUTCDay() + 6) % 7)); return t.toISOString().slice(0, 10); };
+// first day of the pay week `d` is in (Monday unless the schedule was built with another pay week)
+const mondayOf = (d: string, weekStart = 0) => { const [y, m, dd] = d.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, dd)); t.setUTCDate(t.getUTCDate() - (((t.getUTCDay() + 6) % 7 - weekStart + 7) % 7)); return t.toISOString().slice(0, 10); };
 
 async function candidatesFor(tx: Tx, live: Live, kind: 'VTO' | 'OVERTIME', day: string, ws: number, we: number, ordering: Ordering, reverse: boolean, seed: string) {
-  const meal = new Map(live.ctx.templates.map((t: any) => [t.id, t.mealSlots as number]));
-  const monday = mondayOf(day);
+  const tplById = new Map(live.ctx.templates.map((t: any) => [t.id, t]));
+  const monday = mondayOf(day, live.ctx.weekStart);
   const hours = new Map<string, number>();
-  for (const s of live.shifts as Row[]) if (mondayOf(s.day) === monday) hours.set(s.employeeId, (hours.get(s.employeeId) ?? 0) + (s.lengthSlots - (meal.get(s.templateId!) ?? 0)) / 4);
+  for (const s of live.shifts as Row[]) if (mondayOf(s.day, live.ctx.weekStart) === monday) hours.set(s.employeeId, (hours.get(s.employeeId) ?? 0) + paidSlots(tplById.get(s.templateId!) as any, s.lengthSlots) / 4);
   const last = new Map((await tx.q<any>(
     `SELECT i.employee_id, max(i.responded_at) AS at FROM offer_invites i JOIN offers o ON o.id = i.offer_id WHERE i.tenant_id = :t AND i.status = 'ACCEPTED' AND o.kind = $1 GROUP BY i.employee_id`, [kind])).map((r) => [r.employeeId, r.at ? new Date(r.at).toISOString() : null]));
   const ok: { c: Candidate; a: Assessment }[] = [];
@@ -203,9 +238,8 @@ offersAdmin.get('/suggestions', requires('schedule:read'), async (req, res) => {
   const i = live.days.indexOf(q.day);
   // for today, act on the live reforecast (what is actually arriving) rather than the stale plain forecast
   const reforecast = await liveReforecast(p.tenantId, q.groupId, q.day);
-  const gap = new Array(SPD).fill(0);
-  for (let s = 0; s < SPD; s++) gap[s] = -(reforecast?.required.get(s) ?? live.required[i * SPD + s]);
-  for (const s of live.shifts as Row[]) if (s.day === q.day) for (let g = s.startSlot; g < Math.min(SPD, s.startSlot + s.lengthSlots); g++) gap[g]++;
+  const gap = gapForDay(live, q.day);
+  if (reforecast) for (let s = 0; s < SPD; s++) gap[s] += live.required[i * SPD + s] - (reforecast.required.get(s) ?? live.required[i * SPD + s]);
   const win = (r: { start: number; end: number; spots: number }) => ({ startTime: hhmm(r.start), endTime: r.end >= SPD ? '24:00' : hhmm(r.end), spots: r.spots });
   const basis = reforecast ? ' than what is actually coming in today' : ' than the forecast needs';
   res.json({
@@ -213,6 +247,30 @@ offersAdmin.get('/suggestions', requires('schedule:read'), async (req, res) => {
     vto: runs(gap, 1, 1, 2).map((r) => ({ kind: 'VTO', ...win(r), reason: `${r.spots} more ${r.spots === 1 ? 'person' : 'people'} scheduled${basis}` })),
     overtime: runs(gap, 1, -1, 2).map((r) => ({ kind: 'OVERTIME', ...win(r), reason: `${r.spots} fewer ${r.spots === 1 ? 'person' : 'people'}${basis}` })),
   });
+});
+
+/**
+ * Gaps left across the next days, whatever the roster is made of: the published schedule(s) against the full staffing target. This is where a rotation
+ * plus the schedule that fills its gaps ends up -- what is still short can be offered as overtime, and anyone eligible (crew members on a day off
+ * included) is asked, through the same rules as any other offer. Windows that have already begun are left out.
+ */
+offersAdmin.get('/shortages', requires('schedule:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid, from: z.string().regex(isoDay).optional(), days: z.coerce.number().int().min(1).max(14).default(7) }), req.query);
+  const cache = new Map<string, Promise<{ v: any; live: Live }>>();
+  const from = q.from ?? new Date().toISOString().slice(0, 10);
+  const unpublished: string[] = [], gaps: { day: string; startTime: string; endTime: string; spots: number; shortHours: number }[] = [];
+  for (let k = 0; k < q.days; k++) {
+    const day = new Date(Date.parse(`${from}T00:00:00Z`) + k * 86_400_000).toISOString().slice(0, 10);
+    let got: { v: any; live: Live };
+    try { got = await liveForDay(p.tenantId, q.groupId, day, cache); } catch (e) { if (e instanceof HttpError && e.status === 400) { unpublished.push(day); continue; } throw e; }
+    const gap = gapForDay(got.live, day);
+    for (const r of runs(gap, 1, -1, 2)) {
+      if (hoursUntil(got.live.ctx.tz, day, r.start) <= 0) continue;
+      let short = 0; for (let g = r.start; g < r.end; g++) short += Math.max(0, -gap[g]);
+      gaps.push({ day, startTime: hhmm(r.start), endTime: r.end >= SPD ? '24:00' : hhmm(r.end), spots: r.spots, shortHours: Math.round(short) / 4 });
+    }
+  }
+  res.json({ from, days: q.days, unpublishedDays: unpublished, gaps, totalShortHours: Math.round(gaps.reduce((a, g) => a + g.shortHours, 0) * 10) / 10 });
 });
 
 offersAdmin.get('/:id', requires('schedule:read'), async (req, res) => {

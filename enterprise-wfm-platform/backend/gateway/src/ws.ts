@@ -17,6 +17,7 @@ export function attachWebSocket(server: http.Server): void {
     try {
       const token = new URL(req.url ?? '', 'http://x').searchParams.get('token') ?? '';
       const p = await principalFromToken(token);
+      if (p.mustChangePassword) throw new Error('password change required');
       const set = byTenant.get(p.tenantId) ?? new Set();
       set.add(ws); byTenant.set(p.tenantId, set);
       ws.on('close', () => set.delete(ws));

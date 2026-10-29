@@ -3,24 +3,28 @@
  * CSV import always starts as a dry run that shows what would be added or changed before anything is saved.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ColDef, ICellRendererParams } from 'ag-grid-community';
+import { ColDef, GridApi, ICellRendererParams } from 'ag-grid-community';
 import { Download, Plus, Upload } from 'lucide-react';
 import { downloadXlsx, xlsxToCsv } from '../../services/excel';
-import { api, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, RotationPattern, ShiftTemplate, Skill, Team, TYPE_LABEL } from '../../services/api';
+import { api, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, RotationPattern, ShiftConsistency, ShiftTemplate, Skill, slotHHMM, Team, TYPE_LABEL } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
+import { BulkEdit } from './BulkEdit';
 
 type Form = {
   employeeNumber: string; firstName: string; lastName: string; email: string; extension: string; teamId: string; primaryGroupId: string; eligibleGroupIds: string[]; status: EmployeeStatus; employmentType: EmploymentType;
   weeklyContractHours: number; maxWeeklyHours: number; workDaysPerWeek: number; minRestHours: number; maxConsecutiveDays: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; skills: Record<string, number>;
-  preferredTemplateId: string;
+  preferredTemplateId: string; shiftConsistency: ShiftConsistency; fixedStart: string;
 };
-const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '' });
+const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '', shiftConsistency: 'DEFAULT', fixedStart: '' });
 const fromEmployee = (e: Employee): Form => ({ employeeNumber: e.employeeNumber, firstName: e.firstName, lastName: e.lastName, email: e.email ?? '', extension: e.extension ?? '', teamId: e.teamId ?? '', primaryGroupId: e.primaryGroupId ?? '', eligibleGroupIds: e.eligibleGroupIds, status: e.status, employmentType: e.employmentType,
   weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours, maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
-  skills: Object.fromEntries(e.skills.map((s) => [s.skillId, s.proficiency])), preferredTemplateId: e.preferredTemplateId ?? '' });
+  skills: Object.fromEntries(e.skills.map((s) => [s.skillId, s.proficiency])), preferredTemplateId: e.preferredTemplateId ?? '', shiftConsistency: e.shiftConsistency ?? 'DEFAULT', fixedStart: e.fixedStartSlot == null ? '' : slotHHMM(e.fixedStartSlot) });
+/** "08:30" to the 15-minute slot of the day the scheduler uses; null when empty. */
+const slotOfTime = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim()); return m ? Math.min(95, Math.floor((+m[1] * 60 + +m[2]) / 15)) : null; };
+const CONSISTENCY_LABEL: Record<ShiftConsistency, string> = { DEFAULT: 'Follow the company setting', REQUIRE: 'Same start and end every day (required)', PREFER: 'Same start and end every day (preferred)', OFF: 'May vary day to day' };
 
 const EMPLOYEE_TEMPLATE = [
   ['employee_number', 'first_name', 'last_name', 'email', 'extension', 'team', 'wfm_group', 'employment_type', 'weekly_hours', 'max_weekly_hours', 'days_per_week', 'status', 'hire_date', 'skills'],
@@ -63,8 +67,14 @@ export const EmployeesPanel: React.FC = () => {
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
   const [edit, setEdit] = useState<{ id: string | null; form: Form } | null>(null);
   const [selected, setSelected] = useState<Employee | null>(null);
+  // several people ticked in the grid, to edit together
+  const [picked, setPicked] = useState<Employee[]>([]);
+  const [bulk, setBulk] = useState(false);
+  const gridApi = useRef<GridApi<Employee> | null>(null);
+  const clearPicked = () => { gridApi.current?.deselectAll(); setPicked([]); setBulk(false); };
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [stopOnError, setStopOnError] = useState(false);
   const canWrite = can('workforce:write');
   const logins = useApi<{ userId: string; employeeId: string; username: string; role: string; status: string }[]>(can('users:read') ? '/self-service/logins' : null, [tick]);
   const [cred, setCred] = useState<{ username: string; password: string } | null>(null);
@@ -118,6 +128,7 @@ export const EmployeesPanel: React.FC = () => {
     { headerName: 'Type', field: 'employmentType', valueFormatter: (p) => TYPE_LABEL[p.value as EmploymentType], width: 110 },
     { headerName: 'Contract', field: 'weeklyContractHours', type: 'rightAligned', width: 100, valueFormatter: (p) => `${p.value}h` },
     { headerName: 'Skills', valueGetter: (p) => p.data!.skills.map((s) => `${s.name} ${s.proficiency}`).join(', '), minWidth: 160, flex: 1 },
+    { headerName: 'Shift times', width: 150, valueGetter: (p) => { const e = p.data!; return [e.fixedStartSlot != null ? `starts ${slotHHMM(e.fixedStartSlot)}` : '', e.shiftConsistency === 'REQUIRE' ? 'steady' : e.shiftConsistency === 'PREFER' ? 'steady if possible' : e.shiftConsistency === 'OFF' ? 'varies' : ''].filter(Boolean).join(', ') || 'company setting'; }, cellStyle: { color: '#525252' } },
     { headerName: 'Status', field: 'status', valueFormatter: (p) => EMP_STATUS_LABEL[p.value as EmployeeStatus], width: 120, cellStyle: (p) => (p.value === 'ACTIVE' ? { color: '#2F7D5A', fontWeight: 600 } : { color: '#737373' }) },
   ], []);
 
@@ -130,7 +141,7 @@ export const EmployeesPanel: React.FC = () => {
         employeeNumber: f.employeeNumber.trim(), firstName: f.firstName.trim(), lastName: f.lastName.trim(), email: f.email.trim() || null, extension: f.extension.trim() || null, teamId: f.teamId || null, primaryGroupId: f.primaryGroupId || null,
         eligibleGroupIds: [...new Set([...f.eligibleGroupIds, ...(f.primaryGroupId ? [f.primaryGroupId] : [])])], status: f.status, employmentType: f.employmentType, weeklyContractHours: f.weeklyContractHours,
         maxWeeklyHours: f.maxWeeklyHours, workDaysPerWeek: f.workDaysPerWeek, minRestHours: f.minRestHours, maxConsecutiveDays: f.maxConsecutiveDays, allowWeekend: f.allowWeekend, allowOvernight: f.allowOvernight, nightShiftConsent: f.nightShiftConsent,
-        preferredTemplateId: f.preferredTemplateId || null,
+        preferredTemplateId: f.preferredTemplateId || null, shiftConsistency: f.shiftConsistency, fixedStartSlot: slotOfTime(f.fixedStart),
       };
       const saved = edit.id ? await api<Employee>(`/workforce/employees/${edit.id}`, { method: 'PUT', body }) : await api<Employee>('/workforce/employees', { method: 'POST', body });
       await api(`/workforce/employees/${saved.id}/skills`, { method: 'PUT', body: { skills: Object.entries(f.skills).map(([skillId, proficiency]) => ({ skillId, proficiency })) } });
@@ -158,8 +169,8 @@ export const EmployeesPanel: React.FC = () => {
   const commit = async () => {
     setBusy(true); setError('');
     try {
-      const r = await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: false, columnMap: Object.fromEntries(Object.entries(colMap).filter(([, v]) => v >= 0)) } });
-      setNotice({ kind: 'ok', text: `Imported: ${r.diff.new} added, ${r.diff.updated} changed.` }); setPreview(null); setCsv(''); setTick((t) => t + 1);
+      const r = await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: false, stopOnError, columnMap: Object.fromEntries(Object.entries(colMap).filter(([, v]) => v >= 0)) } });
+      setNotice({ kind: 'ok', text: `Imported: ${r.diff.new} added, ${r.diff.updated} changed${r.errorCount ? `, ${r.errorCount} skipped because of problems` : ''}.` }); setPreview(null); setCsv(''); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
@@ -231,14 +242,15 @@ export const EmployeesPanel: React.FC = () => {
 
             {preview.mapped && preview.errors.length > 0 && (
               <>
-                <Banner kind="warn">These {preview.errorCount} rows won't be imported. Everything else will be. Fix these in the file and import again afterwards to add them too.</Banner>
+                <Banner kind="warn">{stopOnError ? `${preview.errorCount} rows have a problem, so nothing will be imported until they are fixed.` : `These ${preview.errorCount} rows won't be imported. Everything else will be. Fix these in the file and import again afterwards to add them too.`}</Banner>
                 <Table head={['Line', 'Problem']}>{preview.errors.slice(0, 15).map((e, i) => <tr key={i}><td className="p-2.5 font-mono text-[#737373]">{e.line}</td><td className="p-2.5">{e.message}</td></tr>)}</Table>
               </>
             )}
             <p className="text-[11px] text-[#737373]">Columns: employee_number, first_name, last_name (required); team, wfm_group, employment_type, weekly_hours, max_weekly_hours, days_per_week, status, hire_date, skills (e.g. Billing:4; Chat:3). Teams, groups and skills must already exist.</p>
+            <label className="flex items-center gap-2 text-[12px] text-[#525252]"><input type="checkbox" checked={stopOnError} onChange={(e) => setStopOnError(e.target.checked)} />Stop if any row has a problem (import nothing until the file is clean)</label>
             <div className="flex gap-2">
-              <Btn variant="primary" disabled={busy || !preview.mapped || preview.diff.new + preview.diff.updated === 0} onClick={commit}>
-                Import {preview.diff.new + preview.diff.updated} people{preview.errorCount > 0 ? ` (${preview.errorCount} skipped)` : ''}
+              <Btn variant="primary" disabled={busy || !preview.mapped || preview.diff.new + preview.diff.updated === 0 || (stopOnError && preview.errorCount > 0)} onClick={commit}>
+                Import {preview.diff.new + preview.diff.updated} people{preview.errorCount > 0 && !stopOnError ? ` (${preview.errorCount} skipped)` : ''}
               </Btn>
               <Btn onClick={() => { setPreview(null); setCsv(''); setShowMapper(false); }}>Cancel</Btn>
             </div>
@@ -256,7 +268,7 @@ export const EmployeesPanel: React.FC = () => {
                   {l ? <span className="text-[#525252]">Signs in as <b>{l.username}</b> ({l.status.toLowerCase()}) &mdash; works for the mobile app and the employee web portal</span> : <span className="text-[#737373]">None yet. They cannot use the mobile app or the employee web portal until you create one.</span>}
                   {!l && <Btn onClick={() => createLogin(edit.id!)}>Create app login</Btn>}
                   {l && <Btn onClick={() => resetPassword(l.userId)}>Reset password</Btn>}
-                  {cred && <span className="text-[#2F7D5A]">{cred.username === l?.username ? 'New password' : 'Created'}. Username <b>{cred.username}</b>, temporary password <b className="font-mono">{cred.password}</b>. Shown once; ask them to change it. Works for both the mobile app and the employee web portal.</span>}
+                  {cred && <span className="text-[#2F7D5A]">{cred.username === l?.username ? 'New password' : 'Created'}. Username <b>{cred.username}</b>, temporary password <b className="font-mono">{cred.password}</b>. Shown once. They are asked to choose their own the first time they sign in. Works for both the mobile app and the employee web portal.</span>}
                 </div>
               );
             })()}
@@ -280,6 +292,8 @@ export const EmployeesPanel: React.FC = () => {
               <Field label="Overnight shifts"><Select value={edit.form.allowOvernight ? 'y' : 'n'} onChange={(e) => set('allowOvernight', e.target.value === 'y')}><option value="n">No</option><option value="y">Allowed</option></Select></Field>
               <Field label="Night work consent" hint="Some labour laws allow night hours only with the person's consent"><Select value={edit.form.nightShiftConsent ? 'y' : 'n'} onChange={(e) => set('nightShiftConsent', e.target.value === 'y')}><option value="n">Not given</option><option value="y">Consented</option></Select></Field>
               <Field label="Preferred shift template" hint="Pre-fills the template when adding this person's shift by hand. Does not constrain the generator."><Select value={edit.form.preferredTemplateId} onChange={(e) => set('preferredTemplateId', e.target.value)}><option value="">None</option>{tpls.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
+              <Field label="Same start and end time" hint="Logs in at one usual time for the whole schedule. Overrides the company setting for this person."><Select value={edit.form.shiftConsistency} onChange={(e) => set('shiftConsistency', e.target.value as ShiftConsistency)}>{(Object.keys(CONSISTENCY_LABEL) as ShiftConsistency[]).map((k) => <option key={k} value={k}>{CONSISTENCY_LABEL[k]}</option>)}</Select></Field>
+              <Field label="Assigned start time" hint="Optional. Always starts at this time (within the company tolerance); leave empty to let the scheduler choose."><Input type="time" step={900} value={edit.form.fixedStart} onChange={(e) => set('fixedStart', e.target.value)} /></Field>
             </div>
             <div>
               <div className="text-[12px] font-semibold mb-1.5">Can also be scheduled for</div>
@@ -317,11 +331,25 @@ export const EmployeesPanel: React.FC = () => {
           <Select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="!w-auto" aria-label="WFM group"><option value="">All groups</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto" aria-label="Status"><option value="">Any status</option>{Object.entries(EMP_STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select>
           <Pill>{emps.data?.length ?? 0} people</Pill>
+          {picked.length > 0 && (
+            <div className="flex items-center gap-2 ml-auto text-[13px]">
+              <span className="font-semibold">{picked.length} selected</span>
+              {canWrite && <Btn variant="primary" onClick={() => { setError(''); setSelected(null); setBulk(true); }}>Edit selected</Btn>}
+              <Btn onClick={clearPicked}>Clear selection</Btn>
+            </div>
+          )}
         </div>
+        {bulk && picked.length > 0 && (
+          <BulkEdit people={picked} groups={groups} teams={teams.data ?? []} skills={skills.data ?? []} templates={(tpls.data ?? []).filter((t) => t.status === 'ACTIVE')}
+            onCancel={() => setBulk(false)} onDone={(text) => { setNotice({ kind: 'ok', text }); clearPicked(); setTick((t) => t + 1); }} />
+        )}
         {emps.data?.length === 0 && !q && !groupId && !status
           ? <Empty title="No employees yet">{canWrite ? 'Add people one by one, or import a CSV.' : 'Ask an administrator to add people.'} Create WFM groups and teams first so each person can be assigned.</Empty>
           : <Grid<Employee> rowData={emps.data ?? []} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true, suppressHeaderMenuButton: true }} loading={emps.loading} height={460}
-              onRowClicked={(e) => { if (e.data) setSelected(e.data); }} rowStyle={{ cursor: 'pointer' }} />}
+              rowSelection={canWrite ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, enableClickSelection: false } : undefined}
+              getRowId={(p) => p.data.id} onGridReady={(e) => { gridApi.current = e.api; }}
+              onSelectionChanged={(e) => setPicked(e.api.getSelectedRows())}
+              onRowClicked={(e) => { if (e.data && !(e.event?.target as HTMLElement | null)?.closest?.('.ag-selection-checkbox, .ag-header-select-all')) setSelected(e.data); }} rowStyle={{ cursor: 'pointer' }} />}
       </Card>
 
       {selected && (
@@ -356,6 +384,7 @@ export const EmployeesPanel: React.FC = () => {
             <PreviewSection title="Contract">
               <PreviewRow label="Hours" value={`${selected.weeklyContractHours}h / week (max ${selected.maxWeeklyHours}h)`} />
               <PreviewRow label="Days per week" value={String(selected.workDaysPerWeek)} />
+              <PreviewRow label="Start and end times" value={`${CONSISTENCY_LABEL[selected.shiftConsistency ?? 'DEFAULT']}${selected.fixedStartSlot != null ? `, starts ${slotHHMM(selected.fixedStartSlot)}` : ''}`} />
             </PreviewSection>
 
             <PreviewSection title="Skills">

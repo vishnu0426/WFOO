@@ -10,6 +10,8 @@ import {
   runStaffing, scenarioResult, shortLabel, todayIn, versionDto, versionRecords, versionRows, type Daily, type Group, type Overrides, type QRow, type Rec,
 } from './service.ts';
 import { LEARNING, evaluate, learn } from './learning.ts';
+import { normalise, parseCsv, type DateFormat } from '../csv.ts';
+import { planRows, summarisePlan, withPlainVolumeHeader } from './planningImport.ts';
 
 export const forecast = Router();
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -94,6 +96,66 @@ forecast.post('/versions', requires('forecast:create'), async (req, res) => {
   const v = await createVersion(p, req, b);
   publish(p.tenantId, ['forecast', 'created'], { id: v.id, name: v.name, by: p.name });
   res.status(201).json({ ...versionDto(v), summary: v.summary });
+});
+
+// ---------------------------------------------------------------- a planning forecast from a file
+
+/**
+ * A forecast for the days ahead supplied as a file (queue, date, interval, forecast volume, handle time), for the planner who already has the
+ * numbers. `dryRun` reads and checks the file and says what is in it without saving anything. Saving creates a draft version of type Imported
+ * that goes through submit, approve and publish like any other, so the schedule generator then uses it.
+ */
+const PlanBody = z.object({
+  groupId: uuid, csv: z.string().min(1), fileName: z.string().trim().max(200).optional(), name: z.string().trim().max(100).optional(),
+  intervalMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)]).optional(), dateFormat: z.enum(['iso', 'mdy', 'dmy']).default('iso'),
+  dryRun: z.boolean().default(false), allowGaps: z.boolean().default(false), allowPast: z.boolean().default(false),
+});
+forecast.post('/versions/import', requires('forecast:create'), async (req, res) => {
+  const p = me(req), b = parse(PlanBody, req.body);
+  if (Buffer.byteLength(b.csv) > 10 * 1024 * 1024) throw new HttpError(413, 'TOO_LARGE', 'File exceeds 10MB; split it into several files');
+  const matrix = parseCsv(b.csv);
+  if (matrix.length < 2) throw bad('The file has a header but no data rows');
+  const { matrix: m, renamedFrom } = withPlainVolumeHeader(matrix);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const group = await loadGroup(tx, b.groupId);
+    if (!group.queues.length) throw bad('This WFM group has no queues. Add queues under Configuration first.');
+    const queues = group.queues.map((q) => ({ id: q.id, name: q.name, code: q.name, ahtDefault: q.ahtDefault }));
+    const read = normalise(m, { intervalMin: b.intervalMinutes, dateFormat: b.dateFormat as DateFormat, queues });
+    const names = new Map(group.queues.map((q) => [q.id, q.name]));
+    const summary = summarisePlan(read.records, names, todayIn(group.timezone));
+    const problems: string[] = [];
+    if (read.errors.length) problems.push(`${read.errors.length} row${read.errors.length === 1 ? '' : 's'} could not be read: ${read.errors.slice(0, 5).map((e) => `line ${e.line}: ${e.message}`).join('; ')}${read.errors.length > 5 ? '…' : ''}`);
+    if (!read.records.length && !read.errors.length) problems.push('The file has no usable rows');
+    if (summary.pastDays.length && !b.allowPast) problems.push(`${summary.pastDays.length} day${summary.pastDays.length === 1 ? ' is' : 's are'} in the past (${summary.pastDays[0]}${summary.pastDays.length > 1 ? ` to ${summary.pastDays.at(-1)}` : ''}). A planning forecast is for days ahead; history belongs under Data Management`);
+    if (summary.gaps.length && !b.allowGaps) problems.push(`${summary.gaps.length} queue-day${summary.gaps.length === 1 ? '' : 's'} do not have all 96 quarter-hours (for example ${summary.gaps[0].queue} on ${summary.gaps[0].day} has ${summary.gaps[0].have}); missing intervals would count as no calls`);
+    const report = { rowsRead: read.rowsRead, rowsOk: read.rowsOk, volumeColumn: renamedFrom ?? read.columns.find((c) => c.field === 'volume')?.source ?? null, ...summary, errors: read.errors.slice(0, 50) };
+    if (b.dryRun || problems.length) return { saved: false as const, problems, report };
+
+    await tx.exec('SELECT pg_advisory_xact_lock(hashtext($1))', [`fv:${group.id}:SHORT`]);
+    const seq = (await tx.one<{ n: number }>("SELECT coalesce(max(seq), 0) + 1 AS n FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT'", [group.id]))!.n;
+    const name = b.name?.trim() || `Imported v${seq} · ${summary.days} day${summary.days === 1 ? '' : 's'} from ${summary.from}`;
+    const series = summary.queues.map((q) => ({ queueId: q.id, name: q.name, model: 'Imported', scores: [], backtest: [], cleanedDays: 0, sigmaRel: 0, notes: [`Imported from ${b.fileName ?? 'a planning file'}: ${summary.totalVolume.toLocaleString('en-US')} contacts over ${summary.days} days. No model was run and there is no likely range.`] }));
+    const v = await tx.one<any>(
+      `INSERT INTO forecast_versions (tenant_id, wfm_group_id, seq, name, kind, type, from_day, to_day, slots_per_day, model_req, summary, created_by)
+       VALUES (:t, $1, $2, $3, 'SHORT', 'IMPORTED', $4, $5, 96, 'imported', $6, $7) RETURNING *`,
+      [group.id, seq, name, summary.from, summary.to, JSON.stringify({ series, imported: { fileName: b.fileName ?? null, rows: read.rowsOk, totalVolume: summary.totalVolume, volumeColumn: report.volumeColumn } }), p.name]);
+    const rows = planRows(read.records);
+    for (let i = 0; i < rows.length; i += 8000) {
+      const c = rows.slice(i, i + 8000);
+      await tx.exec(
+        `INSERT INTO forecast_intervals (tenant_id, version_id, queue_id, day, slot, volume, aht_sec, p10, p90)
+         SELECT :t, $1::uuid, x.q, x.d, x.s, x.v, x.a, x.v, x.v FROM unnest($2::uuid[], $3::date[], $4::smallint[], $5::real[], $6::real[]) AS x(q, d, s, v, a)`,
+        [v!.id, c.map((r) => r.queueId), c.map((r) => r.day), c.map((r) => r.slot), c.map((r) => r.volume), c.map((r) => r.aht)]);
+    }
+    await audit(tx, p, req, { action: 'CREATE', entityType: 'FORECAST_VERSION', entityId: v!.id, entityName: name, after: { type: 'IMPORTED', days: summary.days, volume: summary.totalVolume, fileName: b.fileName ?? null } });
+    return { saved: true as const, problems, report, version: v };
+  });
+  if (!out.saved) {
+    if (b.dryRun) return void res.json({ ok: out.problems.length === 0, problems: out.problems, ...out.report });
+    throw bad(out.problems.join(' | '));
+  }
+  publish(p.tenantId, ['forecast', 'created'], { id: out.version.id, name: out.version.name, by: p.name });
+  res.status(201).json({ ...versionDto(out.version), summary: out.version.summary, report: out.report });
 });
 
 forecast.get('/versions/:id', requires('forecast:read'), async (req, res) => {
@@ -210,7 +272,7 @@ forecast.get('/versions/:id/data', requires('forecast:read'), async (req, res) =
 
 const STAB: Record<string, string> = { HIGH: 'Steady', MEDIUM: 'Some swings', VARIABLE: 'Swings a lot' };
 const MODEL_NAME: Record<string, string> = {
-  snaive: 'Seasonal naive (same as last week)', wavg: 'Weighted weekly average', ets: 'Holt-Winters (ETS)', gbm: 'Gradient boosting (multi-feature)', combo: 'Ensemble (ETS + weekly average + boosting)', croston: 'Croston (sparse queues)',
+  snaive: 'Seasonal naive (same as last week)', wavg: 'Weighted weekly average', ets: 'Holt-Winters (ETS)', gbm: 'Gradient boosting (multi-feature)', combo: 'Ensemble (ETS + weekly average + boosting)', croston: 'Croston (sparse queues)', sarima: 'Seasonal ARIMA (weekly cycle, 12+ weeks of history)', arima: 'ARIMA with weekday effects (12+ weeks of history)',
 };
 forecast.get('/versions/:id/leaderboard', requires('forecast:read'), async (req, res) => {
   const p = me(req), id = String(req.params.id), queueId = req.query.queueId ? parse(uuid, req.query.queueId) : null;

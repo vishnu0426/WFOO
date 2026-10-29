@@ -176,7 +176,82 @@ def m_croston(y, h, **_):
     return np.full(h, (1 - a / 2) * z / p)
 
 
-MODELS = {"snaive": m_snaive, "wavg": m_wavg, "ets": m_ets, "gbm": m_gbm, "croston": m_croston}
+SARIMA_WEEKS = 28            # how much recent history the ARIMA family fits to: enough for the weekly pattern, quick to fit
+SARIMA_ORDERS = [((1, 0, 1), (1, 1, 0, 7)), ((0, 1, 1), (0, 1, 1, 7)), ((1, 1, 1), (0, 1, 1, 7))]
+
+
+def _arima_input(y):
+    """The recent window as a daily series, on a log scale when every day is positive (volume swings are proportional, not additive)."""
+    yy = y.iloc[-min(len(y), SARIMA_WEEKS * 7):].asfreq("D")
+    yy = yy.interpolate(limit_direction="both")
+    log = bool((yy > 0).all())
+    return (np.log(yy) if log else yy), log
+
+
+def _fit_sarimax(z, order, seasonal, exog=None, trend=None, stable=False):
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    return SARIMAX(z, exog=exog, order=order, seasonal_order=seasonal, trend=trend,
+                   enforce_stationarity=stable, enforce_invertibility=stable).fit(disp=False, maxiter=60)
+
+
+def _sane(f, y):
+    """A fit that has run away (infinite, or far outside anything seen in the last eight weeks) is not a forecast: the caller falls back."""
+    if not np.isfinite(f).all():
+        return False
+    recent = y.iloc[-56:]
+    return bool(f.min() >= 0.4 * recent.min() and f.max() <= 1.6 * recent.max())
+
+
+def sarima_order(y):
+    """Which seasonal ARIMA shape suits this series, decided once on the full history (AIC) so every backtest fold fits one model, not three."""
+    if len(y) < 84:
+        return None
+    z, _ = _arima_input(y)
+    best = None
+    for order, seasonal in SARIMA_ORDERS:
+        try:
+            r = _fit_sarimax(z, order, seasonal)
+            if np.isfinite(r.aic) and (best is None or r.aic < best[0]):
+                best = (r.aic, (order, seasonal))
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+def m_sarima(y, h, order=None, **_):
+    """Seasonal ARIMA with a weekly cycle. Falls back to Holt-Winters when the series is too short or the fit fails."""
+    if len(y) < 84 or (y.iloc[-SARIMA_WEEKS * 7:] == 0).mean() > 0.2:
+        return m_ets(y, h)
+    order = order or sarima_order(y)
+    if order is None:
+        return m_ets(y, h)
+    try:
+        z, log = _arima_input(y)
+        f = np.asarray(_fit_sarimax(z, order[0], order[1]).forecast(h), dtype=float)
+        f = np.exp(np.clip(f, -50, 50)) if log else f
+        return np.clip(f, 0, None) if _sane(f, y) else m_ets(y, h)
+    except Exception:
+        return m_ets(y, h)
+
+
+def m_arima(y, h, **_):
+    """ARIMA errors plus a fixed effect for each weekday (regression with ARIMA errors): the non-seasonal member of the family,
+    which keeps the weekly shape without differencing it away."""
+    if len(y) < 84 or (y.iloc[-SARIMA_WEEKS * 7:] == 0).mean() > 0.2:
+        return m_ets(y, h)
+    try:
+        z, log = _arima_input(y)
+        dummies = lambda ix: np.column_stack([(ix.dayofweek.values == d).astype(float) for d in range(7)])   # one level per weekday, so no separate constant
+        fut = pd.date_range(z.index[-1] + pd.Timedelta(days=1), periods=h, freq="D")
+        r = _fit_sarimax(z, (1, 0, 1), (0, 0, 0, 0), exog=dummies(z.index), trend=None, stable=True)
+        f = np.asarray(r.forecast(h, exog=dummies(fut)), dtype=float)
+        f = np.exp(np.clip(f, -50, 50)) if log else f
+        return np.clip(f, 0, None) if _sane(f, y) else m_ets(y, h)
+    except Exception:
+        return m_ets(y, h)
+
+
+MODELS = {"snaive": m_snaive, "wavg": m_wavg, "ets": m_ets, "gbm": m_gbm, "croston": m_croston, "sarima": m_sarima, "arima": m_arima}
 
 
 def ets_mode(y):
@@ -207,17 +282,23 @@ def run_model(name, y, h, holidays, cache):
             cache[key] = np.mean(parts, axis=0)
         elif name == "ets":
             cache[key] = MODELS["ets"](y, h, mode=cache.setdefault("mode", ets_mode(y)))
+        elif name == "sarima":
+            if "sarima_order" not in cache:
+                cache["sarima_order"] = sarima_order(y)         # chosen on the history as first seen (the full series), then reused by every fold
+            cache[key] = MODELS["sarima"](y, h, order=cache["sarima_order"])
         else:
             cache[key] = MODELS[name](y, h, holidays=holidays)
     return cache[key]
 LABELS = {"snaive": "Seasonal naive", "wavg": "Weighted seasonal avg", "ets": "Holt-Winters (ETS)",
-          "gbm": "Gradient boosting", "combo": "Ensemble", "croston": "Croston-SBA"}
+          "gbm": "Gradient boosting", "combo": "Ensemble", "croston": "Croston-SBA", "sarima": "Seasonal ARIMA (SARIMA)", "arima": "ARIMA with weekday effects"}
 
 
 def candidates(y: pd.Series):
     names = ["snaive", "wavg", "ets"]
     if len(y) >= 120:
         names.append("gbm")
+    if len(y) >= 84 and (y == 0).mean() <= 0.2 and y.mean() >= 3:      # 12+ weeks of a queue that is not sparse
+        names += ["sarima", "arima"]
     names.append("combo")
     if (y == 0).mean() > 0.2 or y.mean() < 3:
         names.append("croston")

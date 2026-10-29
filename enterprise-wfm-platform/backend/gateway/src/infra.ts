@@ -107,6 +107,7 @@ const call = <Q, R>(method: string) => (req: Q, timeoutMs = 120_000): Promise<R>
   new Promise((resolve, reject) => {
     client[method](req, { deadline: Date.now() + timeoutMs }, (e: grpc.ServiceError | null, r: R) => {
       if (!e) return resolve(r);
+      if (e.code === grpc.status.RESOURCE_EXHAUSTED) return reject(Object.assign(new Error(e.details || 'The problem is too large for the solver.'), { status: 400, code: 'TOO_LARGE' }));
       if (e.code === grpc.status.UNAVAILABLE) return reject(Object.assign(new Error('The forecasting engine is not reachable. Start the Python engine (backend/engine).'), { status: 503, code: 'ENGINE_UNAVAILABLE' }));
       reject(e);
     });

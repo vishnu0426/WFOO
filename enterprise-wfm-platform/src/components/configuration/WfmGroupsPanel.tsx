@@ -4,13 +4,13 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
-import { api, CHANNEL_LABEL, Channel, CoverageWindow, DOW, Employee, GroupDto, MODEL_LABEL, Queue, ShrinkageCategory, Team } from '../../services/api';
+import { api, CHANNEL_LABEL, Channel, CoverageWindow, DOW, Employee, GroupDto, MODEL_LABEL, Queue, ShrinkageCategory, Skill, Team } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
 
-type Form = { name: string; description: string; timezone: string; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number; shrinkagePercent: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number };
-const DEFAULTS: Form = { name: '', description: '', timezone: 'UTC', serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40 };
+type Form = { name: string; description: string; timezone: string; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number; shrinkagePercent: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; payWeekStart: number | null };
+const DEFAULTS: Form = { name: '', description: '', timezone: 'UTC', serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40, payWeekStart: null };
 
 export const WfmGroupsPanel: React.FC = () => {
   const { can, reloadGroups, setNotice } = useForecast();
@@ -61,6 +61,12 @@ export const WfmGroupsPanel: React.FC = () => {
             <Field label="Customer patience (seconds)" hint="Used by Erlang A"><Input type="number" min={10} max={3600} value={editing.form.patienceSec} onChange={num('patienceSec')} /></Field>
             <Field label="Default forecast model"><Select value={editing.form.model} onChange={(e) => setEditing({ ...editing, form: { ...editing.form, model: e.target.value } })}>{Object.entries(MODEL_LABEL).map(([id, l]) => <option key={id} value={id}>{l}</option>)}</Select></Field>
             <Field label="Full-time hours per week"><Input type="number" min={10} max={60} value={editing.form.fteHoursWeek} onChange={num('fteHoursWeek')} /></Field>
+            <Field label="Pay week starts on" hint="Weekly hours and overtime are counted from this day">
+              <Select value={editing.form.payWeekStart ?? ''} onChange={(e) => setEditing({ ...editing, form: { ...editing.form, payWeekStart: e.target.value === '' ? null : Number(e.target.value) } })}>
+                <option value="">Company setting</option>
+                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((n, i) => <option key={n} value={i}>{n}</option>)}
+              </Select>
+            </Field>
             <Field label="Voice and chat share agents?" hint="Blend the two into one pool">
               <Select value={editing.form.blended ? 'yes' : 'no'} onChange={(e) => setEditing({ ...editing, form: { ...editing.form, blended: e.target.value === 'yes' } })}><option value="no">No, separate</option><option value="yes">Yes, blended</option></Select>
             </Field>
@@ -316,13 +322,15 @@ const GroupEmployees: React.FC<{ group: GroupDto; teams: Team[]; canWrite: boole
 };
 
 const QueueList: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: boolean; onChange: () => Promise<void> }> = ({ group, queues, canWrite, onChange }) => {
-  const [f, setF] = useState<{ name: string; channel: Channel; ahtDefault: number; concurrency: number; turnaroundHours: number } | null>(null);
+  const [f, setF] = useState<{ name: string; channel: Channel; ahtDefault: number; concurrency: number; turnaroundHours: number; skillId: string } | null>(null);
   const [error, setError] = useState('');
+  const skills = useApi<Skill[]>('/workforce/skills');
+  const setSkill = async (q: Queue, skillId: string) => { setError(''); try { await api(`/config/queues/${q.id}`, { method: 'PUT', body: { skillId: skillId || null } }); await onChange(); } catch (e: any) { setError(e.message); } };
   const add = async () => {
     if (!f) return;
     setError('');
     try {
-      await api('/config/queues', { method: 'POST', body: { name: f.name, channel: f.channel, ahtDefault: f.ahtDefault, wfmGroupId: group.id, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' ? { turnaroundHours: f.turnaroundHours } : {}) } });
+      await api('/config/queues', { method: 'POST', body: { name: f.name, channel: f.channel, ahtDefault: f.ahtDefault, wfmGroupId: group.id, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' ? { turnaroundHours: f.turnaroundHours } : {}), ...(f.skillId ? { skillId: f.skillId } : {}) } });
       setF(null); await onChange();
     } catch (e: any) { setError(e.message); }
   };
@@ -335,11 +343,14 @@ const QueueList: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: boolean;
     <div className="border-t border-[#E5E5E0] pt-3 space-y-2">
       <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Queues</div>
       {queues.length === 0 ? <p className="text-[12px] text-[#737373]">No queues yet.</p> : (
-        <Table head={['Queue', 'Channel', 'Handle time', '']} right={[2]}>
+        <Table head={['Queue', 'Channel', 'Skill needed', 'Handle time', '']} right={[3]}>
           {queues.map((q) => (
             <tr key={q.id}>
               <td className="p-2.5 font-medium">{q.name}</td>
               <td className="p-2.5">{CHANNEL_LABEL[q.channel]}{q.channel === 'CHAT' ? ` · ${q.concurrency} at once` : q.channel === 'BACKOFFICE' ? ` · ${turnaroundLabel(q.turnaroundHours)}` : ''}</td>
+              <td className="p-2.5">{canWrite
+                ? <Select value={q.skillId ?? ''} onChange={(e) => setSkill(q, e.target.value)} aria-label={`Skill needed for ${q.name}`} className="!w-auto"><option value="">Any skill</option>{(skills.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
+                : <span className="text-[#525252]">{(skills.data ?? []).find((s) => s.id === q.skillId)?.name ?? 'Any skill'}</span>}</td>
               <td className="p-2.5 text-right font-mono">{q.ahtDefault}s</td>
               <td className="p-2.5 text-right">{canWrite && <button aria-label={`Delete ${q.name}`} className="text-[#737373] hover:text-[#C84A4A]" onClick={() => remove(q)}><Trash2 className="w-4 h-4" /></button>}</td>
             </tr>
@@ -351,12 +362,13 @@ const QueueList: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: boolean;
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
           <div className="col-span-2"><Field label="Queue name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field></div>
           <Field label="Channel"><Select value={f.channel} onChange={(e) => setF({ ...f, channel: e.target.value as Channel })}>{(['VOICE', 'CHAT', 'EMAIL', 'BACKOFFICE'] as Channel[]).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}</Select></Field>
+          <Field label="Skill needed" hint="Queues needing different skills are staffed skill by skill"><Select value={f.skillId} onChange={(e) => setF({ ...f, skillId: e.target.value })}><option value="">Any skill</option>{(skills.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
           <Field label="Handle time (s)"><Input type="number" min={1} value={f.ahtDefault} onChange={(e) => setF({ ...f, ahtDefault: Number(e.target.value) })} /></Field>
           {f.channel === 'BACKOFFICE' && <Field label="Turnaround (hours)" hint="0 or 24 = same day"><Input type="number" min={0} max={720} value={f.turnaroundHours} onChange={(e) => setF({ ...f, turnaroundHours: Number(e.target.value) })} /></Field>}
           {f.channel === 'CHAT' && <Field label="Chats at once"><Input type="number" min={1} max={10} value={f.concurrency} onChange={(e) => setF({ ...f, concurrency: Number(e.target.value) })} /></Field>}
           <div className="flex gap-2 col-span-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={add}>Add queue</Btn><Btn onClick={() => setF(null)}>Cancel</Btn></div>
         </div>
-      ) : <Btn onClick={() => setF({ name: '', channel: 'VOICE', ahtDefault: 300, concurrency: 2, turnaroundHours: 24 })}><Plus className="w-3.5 h-3.5" />Add queue</Btn>)}
+      ) : <Btn onClick={() => setF({ name: '', channel: 'VOICE', ahtDefault: 300, concurrency: 2, turnaroundHours: 24, skillId: '' })}><Plus className="w-3.5 h-3.5" />Add queue</Btn>)}
     </div>
   );
 };

@@ -26,7 +26,7 @@ async function ensureAdmin(tenantId: string): Promise<{ created: boolean; genera
   const created = await withTenant(tenantId, async (tx) => {
     const [{ n }] = await tx.q<{ n: number }>('SELECT count(*)::int AS n FROM users WHERE tenant_id = :t');
     if (n > 0) return false;
-    await tx.exec(`INSERT INTO users (tenant_id, username, display_name, password_hash, role) VALUES (:t, $1, $2, $3, 'WFM_ADMIN')`, [b.adminUser, 'Administrator', await bcrypt.hash(password, 12)]);
+    await tx.exec(`INSERT INTO users (tenant_id, username, display_name, password_hash, role, must_change_password) VALUES (:t, $1, $2, $3, 'WFM_ADMIN', $4::boolean)`, [b.adminUser, 'Administrator', await bcrypt.hash(password, 12), config.forcePasswordChange]);
     return true;
   });
   return { created, generated: created && !b.adminPassword ? password : undefined };
@@ -47,7 +47,8 @@ export async function bootstrapIfEmpty(): Promise<void> {
       console.log(` Tenant  : ${b.tenantName} (${b.tenantCode}, ${b.timezone})`);
       console.log(` Admin   : ${b.adminUser}`);
       console.log(` Password: ${a.generated ?? '(from BOOTSTRAP_ADMIN_PASSWORD)'}`);
-      if (a.generated) console.log(' This password is shown once. Sign in and change it, or set BOOTSTRAP_ADMIN_PASSWORD before the first start.');
+      if (a.generated) console.log(' This password is shown once. Set BOOTSTRAP_ADMIN_PASSWORD before the first start if you want to choose it.');
+      if (config.forcePasswordChange) console.log(' You will be asked to choose your own password the first time you sign in.');
       console.log('=================================================');
       console.log('');
     }

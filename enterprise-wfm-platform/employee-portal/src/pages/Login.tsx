@@ -15,9 +15,9 @@ export const Login: React.FC<{ onLogin: (s: Session) => void }> = ({ onLogin }) 
     e.preventDefault();
     setBusy(true); setError('');
     try {
-      const r = await api<{ token: string; user: Session['user']; tenant: Session['tenant']; permissions: string[] }>('/auth/login', { method: 'POST', body: { tenant: tenant.trim() || undefined, username: username.trim(), password } });
+      const r = await api<{ token: string; user: Session['user']; tenant: Session['tenant']; permissions: string[]; mustChangePassword?: boolean }>('/auth/login', { method: 'POST', body: { tenant: tenant.trim() || undefined, username: username.trim(), password } });
       if (!r.permissions.includes('self:use')) throw new ApiError('This account cannot use the employee portal. Ask your administrator to set one up for you.', 403);
-      const session: Session = { user: r.user, tenant: r.tenant, permissions: r.permissions };
+      const session: Session = { user: r.user, tenant: r.tenant, permissions: r.permissions, mustChangePassword: !!r.mustChangePassword };
       storeSession(r.token, session);
       onLogin(session);
     } catch (e: any) { setError(e instanceof ApiError ? e.message : 'Sign-in failed'); } finally { setBusy(false); }

@@ -7,7 +7,9 @@
     .\scripts\dev.ps1              # admin web app + employee portal
     .\scripts\dev.ps1 -Mobile      # also opens the Expo dev server for the mobile app
 
-  Idempotent: safe to re-run. Windows it already opened are left alone; it only starts what is missing.
+  Every run starts everything fresh: whatever is already listening on the engine, gateway, admin app and portal ports is stopped first, so a
+  code change (the Python engine does not reload by itself) always takes effect. Infrastructure (PostgreSQL, Redis, NATS) is only started
+  when it is not already running, and is never stopped.
 #>
 param(
   [switch]$Mobile
@@ -21,6 +23,34 @@ $mobileDir = Join-Path $root 'mobile'
 
 function Test-Port($portNum) {
   try { (New-Object Net.Sockets.TcpClient).Connect('localhost', $portNum); $true } catch { $false }
+}
+
+# True when Redis actually answers PING. A port that merely accepts connections is not enough: a hung Redis still does, and then everything that waits on it hangs.
+function Test-Redis {
+  try {
+    $c = New-Object Net.Sockets.TcpClient
+    $c.ReceiveTimeout = 2000
+    $c.Connect('localhost', 6379)
+    $st = $c.GetStream()
+    $ping = [Text.Encoding]::ASCII.GetBytes("*1`r`n`$4`r`nPING`r`n")
+    $st.Write($ping, 0, $ping.Length)
+    $buf = New-Object byte[] 16
+    $n = $st.Read($buf, 0, 16)
+    $c.Close()
+    return ([Text.Encoding]::ASCII.GetString($buf, 0, $n) -like '+PONG*')
+  } catch { return $false }
+}
+
+# Stops whatever is listening on a port, so the part can be started again with the current code. Only the process that owns the port is stopped.
+function Stop-Port($portNum, $label) {
+  $owners = Get-NetTCPConnection -LocalPort $portNum -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+  foreach ($procId in $owners) {
+    if ($procId -le 4) { continue }
+    Write-Host "  Stopping the old $label (port $portNum, process $procId)..." -ForegroundColor Yellow
+    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+  }
+  for ($i = 0; $i -lt 20 -and (Test-Port $portNum); $i++) { Start-Sleep -Milliseconds 500 }
+  if (Test-Port $portNum) { Write-Host "  Port $portNum ($label) is still in use. Close it yourself, then run this script again." -ForegroundColor Red; exit 1 }
 }
 
 # 0. configuration: one .env for the whole backend (gateway and engine both read it); the database URL is yours to supply, nothing is guessed
@@ -49,12 +79,18 @@ if (Test-Port 5432) {
   }
 }
 
-if (Test-Port 6379) {
+if ((Test-Port 6379) -and (Test-Redis)) {
   Write-Host '  Redis (6379): reachable' -ForegroundColor Green
 } elseif (Get-Command redis-server -ErrorAction SilentlyContinue) {
+  if (Test-Port 6379) {
+    Write-Host '  Redis (6379): accepts connections but does not answer PING (hung). Restarting it; its saved data (dump.rdb) is kept.' -ForegroundColor Yellow
+    Stop-Port 6379 'Redis'
+  }
   Write-Host '  Redis (6379): starting redis-server...' -ForegroundColor Yellow
-  Start-Process powershell -ArgumentList '-NoExit', '-Command', 'redis-server'
-  Start-Sleep -Seconds 2
+  # started from the repository root, so its saved data (dump.rdb) is always read from and written to the same place
+  Start-Process powershell -WorkingDirectory $root -ArgumentList '-NoExit', '-Command', 'redis-server'
+  for ($i = 0; $i -lt 20 -and -not (Test-Redis); $i++) { Start-Sleep -Milliseconds 500 }
+  if (-not (Test-Redis)) { Write-Host '  Redis (6379): started but does not answer. Check its window, then re-run this script.' -ForegroundColor Red; exit 1 }
 } else {
   Write-Host '  Redis (6379): NOT reachable and redis-server is not on PATH. Start it yourself, then re-run this script.' -ForegroundColor Red
   exit 1
@@ -90,7 +126,13 @@ foreach ($dir in @($gateway, $root, $portal)) {
 }
 if ($Mobile -and -not (Test-Path (Join-Path $mobileDir 'node_modules'))) { Push-Location $mobileDir; npm install; Pop-Location }
 
-# 4. app: engine, gateway, admin front-end, employee portal, each in its own window
+# 4. app: stop anything left over from an earlier run, then start engine, gateway, admin front-end, employee portal, each in its own window
+Write-Host 'Stopping anything already running...' -ForegroundColor Cyan
+Stop-Port 50051 'engine'
+Stop-Port 4000 'gateway'
+Stop-Port 3000 'admin app'
+Stop-Port 3001 'employee portal'
+if ($Mobile) { Stop-Port 8081 'Expo dev server' }
 Start-Process powershell -WorkingDirectory $engine -ArgumentList '-NoExit', '-Command', "& '$py' server.py"
 Start-Process powershell -WorkingDirectory $gateway -ArgumentList '-NoExit', '-Command', 'npm run dev'
 Start-Process powershell -WorkingDirectory $root -ArgumentList '-NoExit', '-Command', 'npm run dev'

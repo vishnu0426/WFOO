@@ -21,6 +21,8 @@ export const config = {
   corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((s) => s.trim()),
   jwtSecret: need('JWT_SECRET'),
   jwtTtl: process.env.JWT_TTL || '12h',
+  /** People given a temporary password must replace it before using anything else. Set FORCE_PASSWORD_CHANGE=false only for automated tests and throwaway demos. */
+  forcePasswordChange: process.env.FORCE_PASSWORD_CHANGE !== 'false',
   protoPath: path.resolve(here, '../../proto/wfm.proto'),
   migrationsDir: path.resolve(here, '../../db/migrations'),
   bootstrap: {

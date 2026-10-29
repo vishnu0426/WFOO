@@ -22,8 +22,9 @@ const GroupBody = z.object({
   serviceLevelGoal: z.number().gt(0).lt(100).optional(), serviceLevelThresholdSec: z.number().int().positive().max(600).optional(),
   targetOccupancy: z.number().gt(30).lte(100).optional(), shrinkagePercent: z.number().min(0).max(90).optional(),
   method: z.enum(['erlang_c', 'erlang_a']).optional(), patienceSec: z.number().int().min(10).max(3600).optional(),
-  blended: z.boolean().optional(), model: z.enum(['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston']).optional(),
+  blended: z.boolean().optional(), model: z.enum(['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima']).optional(),
   fteHoursWeek: z.number().min(10).max(60).optional(),
+  payWeekStart: z.number().int().min(0).max(6).nullable().optional(),   // null = use the company default
 });
 const QueueBody = z.object({
   name: z.string().min(1).max(80), code: z.string().min(1).max(30).optional(), channel: z.enum(CH),
@@ -31,18 +32,19 @@ const QueueBody = z.object({
   concurrency: z.number().min(1).max(10).optional(), openSlot: z.number().int().min(0).max(96).optional(), closeSlot: z.number().int().min(0).max(96).optional(),
   slaTargetSeconds: z.number().int().positive().optional(), slaTargetPercent: z.number().int().min(1).max(99).optional(),
   turnaroundHours: z.number().int().min(0).max(720).optional(),
+  skillId: z.string().uuid().nullable().optional(),    // the skill this queue's contacts need; queues of one group with different skills are staffed skill by skill
 });
 
 export const groupDto = (g: any, queues: any[]) => ({
   id: g.id, tenantId: g.tenantId, name: g.name, code: g.code, description: g.description, timezone: g.timezone, status: g.status, siteId: g.siteId ?? null,
   queueIds: queues.map((q) => q.id), queueNames: queues.map((q) => q.name), channels: [...new Set(queues.map((q) => q.channel))], agentCount: 0,
   serviceLevelGoal: Math.round(g.serviceLevel * 100), serviceLevelThresholdSec: g.answerSec, targetOccupancy: Math.round(g.occupancyCap * 100),
-  shrinkagePercent: Math.round(g.shrinkage * 100), method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek,
+  shrinkagePercent: Math.round(g.shrinkage * 100), method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: (g.payWeekStart ?? null) as number | null,
   createdAt: g.createdAt, updatedAt: g.updatedAt,
 });
 export const queueDto = (q: any) => ({
   id: q.id, name: q.name, code: q.code, channel: q.channel, wfmGroupId: q.wfmGroupId, slaTargetSeconds: q.slaTargetSeconds, slaTargetPercent: q.slaTargetPercent,
-  ahtDefault: q.ahtDefault, concurrency: q.concurrency, openSlot: q.openSlot, closeSlot: q.closeSlot, turnaroundHours: q.turnaroundHours ?? null,
+  ahtDefault: q.ahtDefault, concurrency: q.concurrency, openSlot: q.openSlot, closeSlot: q.closeSlot, turnaroundHours: q.turnaroundHours ?? null, skillId: q.skillId ?? null,
 });
 
 export async function loadGroups(tx: Tx, id?: string) {
@@ -65,11 +67,11 @@ config.post('/groups', requires('config:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const tz = (await tx.one<{ timezone: string }>('SELECT timezone FROM tenants WHERE id = :t'))?.timezone ?? 'UTC';
     const g = await tx.one<any>(
-      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week)
-       VALUES (:t, $1, $2, $3, $4, coalesce($5, 80)/100.0, coalesce($6, 20), coalesce($7, 30)/100.0, coalesce($8, 85)/100.0, coalesce($9, 'erlang_c'), coalesce($10, 120), coalesce($11, false), coalesce($12, 'auto'), coalesce($13, 40))
+      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start)
+       VALUES (:t, $1, $2, $3, $4, coalesce($5, 80)/100.0, coalesce($6, 20), coalesce($7, 30)/100.0, coalesce($8, 85)/100.0, coalesce($9, 'erlang_c'), coalesce($10, 120), coalesce($11, false), coalesce($12, 'auto'), coalesce($13, 40), $14)
        RETURNING id`,
       [b.name, b.code ?? code(b.name), b.description ?? '', b.timezone ?? tz, b.serviceLevelGoal ?? null, b.serviceLevelThresholdSec ?? null, b.shrinkagePercent ?? null,
-        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null]);
+        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null, b.payWeekStart ?? null]);
     const [dto] = await loadGroups(tx, g!.id);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'WFM_GROUP', entityId: g!.id, entityName: b.name, after: dto });
     return dto;
@@ -86,10 +88,10 @@ config.put('/groups/:id', requires('config:write'), async (req, res) => {
       `UPDATE wfm_groups SET name = coalesce($2, name), description = coalesce($3, description), timezone = coalesce($4, timezone), status = coalesce($5, status),
          service_level = coalesce($6::numeric / 100, service_level), answer_sec = coalesce($7, answer_sec), shrinkage = coalesce($8::numeric / 100, shrinkage),
          occupancy_cap = coalesce($9::numeric / 100, occupancy_cap), method = coalesce($10, method), patience_sec = coalesce($11, patience_sec),
-         blended = coalesce($12, blended), model = coalesce($13, model), fte_hours_week = coalesce($14, fte_hours_week), updated_at = now()
+         blended = coalesce($12, blended), model = coalesce($13, model), fte_hours_week = coalesce($14, fte_hours_week), pay_week_start = CASE WHEN $15::boolean THEN $16::smallint ELSE pay_week_start END, updated_at = now()
        WHERE tenant_id = :t AND id = $1`,
       [id, b.name ?? null, b.description ?? null, b.timezone ?? null, b.status ?? null, b.serviceLevelGoal ?? null, b.serviceLevelThresholdSec ?? null, b.shrinkagePercent ?? null,
-        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null]);
+        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null, 'payWeekStart' in b, b.payWeekStart ?? null]);
     const [after] = await loadGroups(tx, id);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'WFM_GROUP', entityId: id, entityName: after.name, before, after });
     return after;
@@ -206,10 +208,10 @@ config.post('/queues', requires('config:write'), async (req, res) => {
   if (b.openSlot !== undefined && b.closeSlot !== undefined && b.closeSlot <= b.openSlot) throw bad('closeSlot must be after openSlot');
   const out = await withTenant(p.tenantId, async (tx) => {
     const q = await tx.one<any>(
-      `INSERT INTO queues (tenant_id, wfm_group_id, name, code, channel, aht_default, concurrency, open_slot, close_slot, sla_target_seconds, sla_target_percent, turnaround_hours)
-       VALUES (:t, $1::uuid, $2, $3, $4, coalesce($5::int, 300), coalesce($6::numeric, $7::numeric), coalesce($8::int, 0), coalesce($9::int, 96), coalesce($10::int, 20), coalesce($11::int, 80), $12::int) RETURNING *`,
+      `INSERT INTO queues (tenant_id, wfm_group_id, name, code, channel, aht_default, concurrency, open_slot, close_slot, sla_target_seconds, sla_target_percent, turnaround_hours, skill_id)
+       VALUES (:t, $1::uuid, $2, $3, $4, coalesce($5::int, 300), coalesce($6::numeric, $7::numeric), coalesce($8::int, 0), coalesce($9::int, 96), coalesce($10::int, 20), coalesce($11::int, 80), $12::int, $13::uuid) RETURNING *`,
       [b.wfmGroupId ?? null, b.name, b.code ?? code(b.name), b.channel, b.ahtDefault ?? null, b.concurrency ?? null, b.channel === 'CHAT' ? 2 : 1,
-        b.openSlot ?? null, b.closeSlot ?? null, b.slaTargetSeconds ?? null, b.slaTargetPercent ?? null, b.turnaroundHours ?? null]);
+        b.openSlot ?? null, b.closeSlot ?? null, b.slaTargetSeconds ?? null, b.slaTargetPercent ?? null, b.turnaroundHours ?? null, b.skillId ?? null]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'QUEUE', entityId: q!.id, entityName: b.name, after: queueDto(q) });
     return queueDto(q);
   });
@@ -224,10 +226,10 @@ config.put('/queues/:id', requires('config:write'), async (req, res) => {
     const q = await tx.one<any>(
       `UPDATE queues SET name = coalesce($2, name), channel = coalesce($3, channel), wfm_group_id = CASE WHEN $4::boolean THEN $5::uuid ELSE wfm_group_id END,
          aht_default = coalesce($6, aht_default), concurrency = coalesce($7, concurrency), open_slot = coalesce($8, open_slot), close_slot = coalesce($9, close_slot),
-         sla_target_seconds = coalesce($10, sla_target_seconds), sla_target_percent = coalesce($11, sla_target_percent), turnaround_hours = coalesce($12::int, turnaround_hours)
+         sla_target_seconds = coalesce($10, sla_target_seconds), sla_target_percent = coalesce($11, sla_target_percent), turnaround_hours = coalesce($12::int, turnaround_hours), skill_id = CASE WHEN $13::boolean THEN $14::uuid ELSE skill_id END
        WHERE tenant_id = :t AND id = $1 RETURNING *`,
       [id, b.name ?? null, b.channel ?? null, b.wfmGroupId !== undefined, b.wfmGroupId ?? null, b.ahtDefault ?? null, b.concurrency ?? null, b.openSlot ?? null, b.closeSlot ?? null,
-        b.slaTargetSeconds ?? null, b.slaTargetPercent ?? null, b.turnaroundHours ?? null]);
+        b.slaTargetSeconds ?? null, b.slaTargetPercent ?? null, b.turnaroundHours ?? null, b.skillId !== undefined, b.skillId ?? null]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'QUEUE', entityId: id, entityName: q!.name, before: queueDto(before), after: queueDto(q) });
     return queueDto(q);
   });

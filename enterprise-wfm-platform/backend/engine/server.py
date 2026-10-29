@@ -43,7 +43,9 @@ class Engine(wfm_pb2_grpc.EngineServicer):
         return forecasting.intraday(request)
 
     def Schedule(self, request, context):
-        return scheduling.solve(request)
+        if len(request.options) > scheduling.MAX_OPTIONS:      # a request this big would exhaust memory and take the whole engine down
+            context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, f"{len(request.options):,} candidate shifts is more than the solver can take ({scheduling.MAX_OPTIONS:,}).")
+        return scheduling.solve_period(request)
 
 
 def main():

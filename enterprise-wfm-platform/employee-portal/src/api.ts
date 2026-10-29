@@ -9,7 +9,7 @@ const BASE = '/api/v1';
 
 export type SessionUser = { id: string; userName: string; username: string; email: string | null; role: string; tenantId: string; tenantName: string; employeeId: string | null };
 export type Tenant = { id: string; name: string; code: string; timezone: string; currency: string };
-export type Session = { user: SessionUser; tenant: Tenant; permissions: string[] };
+export type Session = { user: SessionUser; tenant: Tenant; permissions: string[]; /** signed in with a temporary password: only choosing a new one is allowed */ mustChangePassword?: boolean };
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredSession = (): Session | null => {
@@ -28,6 +28,10 @@ async function fail(res: Response): Promise<never> {
   const data: any = await res.json().catch(() => ({}));
   const e = data?.error;
   const message = typeof e === 'string' ? e : e?.message || data?.message || res.statusText || 'Request failed';
+  if (e?.code === 'PASSWORD_CHANGE_REQUIRED') {            // a saved session from before the temporary-password rule: go to the password screen
+    const s = getStoredSession();
+    if (s && !s.mustChangePassword) { localStorage.setItem(SESSION_KEY, JSON.stringify({ ...s, mustChangePassword: true })); location.reload(); }
+  }
   throw new ApiError(message, res.status, e?.code);
 }
 

@@ -8,11 +8,11 @@ import { Download, Plus } from 'lucide-react';
 import { addDays, api, dayName, dayYear, DOW, dowOfDay, dec, Employee, isNew, ScheduleShift, ScheduleVersion, SCHED_STATUS_LABEL, ShiftTemplate, slotHHMM, when, Violation } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
-import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Grid } from '../forecasting/Grid';
 import { downloadXlsx } from '../../services/excel';
 import { DayTimeline, type Act } from './DayTimeline';
 import { EmployeeDrawer } from './EmployeeDrawer';
+import { CoverageView } from './CoverageView';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Kpi, KpiRow, Pill, Seg, Select } from '../forecasting/ui';
 
 type Coverage = { daily: { day: string; requiredHours: number; scheduledHours: number; coveragePercent: number; shifts: number; projected: boolean }[]; slots: { time: string; required: number; scheduled: number; delta: number }[]; uncoveredDays?: string[]; projectedDays?: string[]; projected?: boolean };
@@ -26,6 +26,8 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   const [busy, setBusy] = useState(false);
   const [add, setAdd] = useState<{ employeeId: string; templateId: string; startTime: string; reason: string } | null>(null);
   const [error, setError] = useState('');
+  // publishing with open checks (coverage under target, a forecast that has changed) needs a reason, collected inline
+  const [ack, setAck] = useState<{ path: 'publish' | 'republish'; message: string; reason: string } | null>(null);
   const [nameQuery, setNameQuery] = useState('');
   const [skillFilter, setSkillFilter] = useState<string[]>([]);
   const [pending, setPending] = useState<
@@ -39,7 +41,6 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   const [focus, setFocus] = useState(false);
   const [problem, setProblem] = useState<'ALL' | 'UNDERSTAFFED' | 'VIOLATIONS'>('ALL');
   const [openEmp, setOpenEmp] = useState<string | null>(null);
-  const [covOpen, setCovOpen] = useState(() => { try { return localStorage.getItem('sched-cov-open') === '1'; } catch { return false; } });
 
   const key = version ? `${version.id}-${version.rev}-${version.status}` : '';
   const full = useApi<ScheduleVersion>(version ? `/scheduling/versions/${version.id}` : null, [key]);
@@ -145,8 +146,14 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
     setBusy(true); setError('');
     try { await fn(); if (ok) setNotice({ kind: 'ok', text: ok }); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
-  const publish = () => act(async () => { await api(`/scheduling/versions/${version.id}/publish`, { method: 'POST' }); await reload(version.id); }, `${version.name} is published. Any older published schedule for these dates is archived.`);
-  const republish = () => act(async () => { await api(`/scheduling/versions/${version.id}/republish`, { method: 'POST' }); await reload(version.id); }, `${version.name} is republished with your edits.`);
+  const send = (path: 'publish' | 'republish', reason?: string) => act(async () => {
+    try { await api(`/scheduling/versions/${version.id}/${path}`, { method: 'POST', body: reason ? { acknowledgeReason: reason } : {} }); }
+    catch (e: any) { if (e?.code === 'CHECKS_NOT_ACKNOWLEDGED') { setAck({ path, message: e.message, reason: reason ?? '' }); return; } throw e; }
+    setAck(null); await reload(version.id);
+    setNotice({ kind: 'ok', text: path === 'publish' ? `${version.name} is published. Any older published schedule for these dates is archived.` : `${version.name} is republished with your edits.` });
+  });
+  const publish = () => send('publish');
+  const republish = () => send('republish');
   const del = () => { if (!confirm(`Delete “${version.name}”?`)) return; act(async () => { await api(`/scheduling/versions/${version.id}`, { method: 'DELETE' }); await reload(); }, 'Schedule deleted.'); };
   // reasons for a move/swap/remove are collected inline below (pending/pendingReason), not with window.prompt(): a
   // native dialog is easy to trigger Chrome's "prevent this page from creating additional dialogs" with, after
@@ -186,11 +193,6 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   };
 
 
-  const coverageRows = (cov15.data?.slots ?? []).map((s) => ({
-    time: s.time, needed: s.required, base: Math.min(s.scheduled, s.required), short: Math.max(0, s.required - s.scheduled), over: Math.max(0, s.scheduled - s.required),
-    scheduled: s.scheduled,
-  }));
-  const toggleCov = () => setCovOpen((o) => { const n = !o; try { localStorage.setItem('sched-cov-open', n ? '1' : '0'); } catch { /* private mode */ } return n; });
 
   return (
     <div className="space-y-4">
@@ -216,6 +218,17 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
         </div>
         {!draft && <p className="mt-1 text-[11px] text-[#737373]">{version.status === 'PUBLISHED' ? (version.hasChanges ? 'Unpublished edits are live for adherence. Republish to re-check the rules and re-stamp it.' : 'Published. No changes since it was last published.') : 'Archived: a newer schedule was published.'}</p>}
       </div>
+      {version.stale && version.stale.length > 0 && <Banner kind="warn"><span className="font-semibold">This schedule may be out of date.</span> {version.stale.join(' ')} <button className="underline" onClick={() => go('schedule-quality')}>See schedule quality</button></Banner>}
+      {ack && (
+        <Banner kind="warn">
+          <div className="font-semibold">{ack.message.replace(' Give a reason to publish anyway.', '')}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <Input className="!w-80" value={ack.reason} onChange={(e) => setAck({ ...ack, reason: e.target.value })} placeholder="Why are you publishing it anyway? This is kept with the schedule." />
+            <Btn variant="success" disabled={busy || ack.reason.trim().length < 3} onClick={() => send(ack.path, ack.reason.trim())}>{ack.path === 'publish' ? 'Publish anyway' : 'Republish anyway'}</Btn>
+            <Btn onClick={() => setAck(null)}>Cancel</Btn>
+          </div>
+        </Banner>
+      )}
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
 
 
@@ -346,40 +359,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
         <Grid<any> rowData={filteredRoster} columnDefs={cols} defaultColDef={{ resizable: true }} loading={shifts.loading} height={Math.min(560, 90 + filteredRoster.length * 42)} />
       </Card>
 
-      <section className="rounded-lg border border-[#E5E5E0] bg-white">
-        <button onClick={toggleCov} className="w-full flex items-center justify-between px-4 py-3 text-left">
-          <div>
-            <div className="text-[14px] font-semibold text-[#171717]">Coverage against the forecast</div>
-            <div className="text-[12px] text-[#737373]">{dayName(day)} · quarter-hour view. Needed is the dark line; green is covered, red is short, amber is over.</div>
-          </div>
-          <span className="text-[12px] text-[#525252]">{covOpen ? 'Hide' : 'Show'}</span>
-        </button>
-        {covOpen && (
-          <div className="px-4 pb-4">
-            <div className="flex items-center gap-4 pb-2 text-[11px] text-[#525252]">
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-[#DDF0E4]" />Covered</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-[#F8D4D4]" />Short</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-[#F5E7C8]" />Over</span>
-              <span className="flex items-center gap-1.5"><span className="w-4 h-0.5 bg-[#171717]" />Needed</span>
-            </div>
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={coverageRows} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-                  <CartesianGrid vertical={false} stroke="#EFEFEA" />
-                  <XAxis dataKey="time" tickLine={false} axisLine={false} fontSize={11} minTickGap={24} />
-                  <YAxis tickLine={false} axisLine={false} fontSize={11} width={36} />
-                  <Tooltip formatter={(v: any, n: any) => [v, n]} labelFormatter={(l) => `${l}`} />
-                  <Area type="stepAfter" dataKey="base" name="Covered" stackId="cov" stroke="none" fill="#DDF0E4" isAnimationActive={false} />
-                  <Area type="stepAfter" dataKey="short" name="Short" stackId="cov" stroke="#C84A4A" strokeWidth={0} fill="#F8D4D4" isAnimationActive={false} />
-                  <Area type="stepAfter" dataKey="over" name="Over" stackId="cov" stroke="none" fill="#F5E7C8" isAnimationActive={false} />
-                  <Line type="stepAfter" dataKey="needed" name="Needed" stroke="#171717" strokeWidth={2} dot={false} isAnimationActive={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-            {cov.data?.projected && <p className="mt-2 text-[11px] text-[#B7791F] bg-[#F5EBD9] border border-[#E9D9B4] rounded px-2.5 py-1.5">This day is beyond the short-term forecast's reach. Its requirement is projected from the long-term forecast, so it is lower confidence.</p>}
-          </div>
-        )}
-      </section>
+      {version && <CoverageView version={version} versions={versions} day={day} days={days} setDay={jumpTo} refreshKey={key} />}
       {openEmp && <EmployeeDrawer employee={emps.data?.find((e) => e.id === openEmp) ?? null} currentVersionId={version.id} periodStart={version.periodStart} periodEnd={version.periodEnd} day={day} onClose={() => setOpenEmp(null)} />}
     </div>
   );

@@ -13,6 +13,7 @@ import { GeneratePanel } from './GeneratePanel';
 import { TemplatesPanel } from './TemplatesPanel';
 import { TimelinePanel } from './TimelinePanel';
 import { ReplayPanel } from './ReplayPanel';
+import { QualityPanel } from './QualityPanel';
 import { SwapsPanel } from './SwapsPanel';
 import { OffersPanel } from './OffersPanel';
 import { BidsPanel } from './BidsPanel';
@@ -23,6 +24,7 @@ import { SchedulesSection } from './SchedulesSection';
 const TITLES: Record<string, { title: string; sub: string }> = {
   'schedule-timeline': { title: 'Schedule Timeline', sub: 'Who works when, and how well it covers the forecast.' },
   'generate-schedule': { title: 'Generate Schedule', sub: 'Build a draft roster from the published forecast.' },
+  'schedule-quality': { title: 'Schedule Quality', sub: 'How good a schedule is, where it falls short and why, and what happened when it was generated.' },
   'shift-templates': { title: 'Shift Templates', sub: 'The shift shapes the generator can use.' },
   'schedule-compare': { title: 'Compare Versions', sub: 'See what changed between two schedules.' },
   'multi-site': { title: 'Multi-Site View', sub: 'Every published schedule side by side, by site and group, on one clock.' },
@@ -71,11 +73,12 @@ export const SchedulingHub: React.FC<{ activeSubSection?: string; onNavigateSubS
         : activeSubSection === 'vto-overtime' ? <OffersPanel />
         : activeSubSection === 'shift-bidding' ? <BidsPanel />
         : activeSubSection === 'multi-site' ? <RollupPanel />
-        : activeSubSection === 'all-schedules' ? <SchedulesSection open={openSchedule} />
+        : activeSubSection === 'all-schedules' ? <SchedulesSection open={openSchedule} onChanged={() => reload()} />
         : groups.length === 0 ? <Empty title="No WFM group yet">Create a WFM group in Configuration, add people and shift templates, then generate a schedule.</Empty>
         : activeSubSection === 'rotations' ? <RotationsPanel go={onNavigateSubSection} />
         : activeSubSection === 'generate-schedule' ? <GeneratePanel versions={versions} go={onNavigateSubSection} onCreated={(v) => reload(v.id)} />
         : activeSubSection === 'schedule-compare' ? <ComparePanel versions={versions} />
+        : activeSubSection === 'schedule-quality' ? <QualityPanel versions={versions} version={version} select={setId} reload={reload} go={onNavigateSubSection} />
         : activeSubSection === 'schedule-replay' ? <ReplayPanel versions={versions} version={version} select={setId} go={onNavigateSubSection} />
         : <TimelinePanel versions={versions} version={version} select={setId} reload={reload} go={onNavigateSubSection} />}
     </div>

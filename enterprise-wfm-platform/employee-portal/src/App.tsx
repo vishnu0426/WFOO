@@ -8,6 +8,7 @@ import { CalendarDays, Home as HomeIcon, Inbox as InboxIcon, ListChecks, User } 
 import { api, getStoredSession, Session, storeSession } from './api';
 import { RequestPrefill } from './types';
 import { Login } from './pages/Login';
+import { ChangePassword } from './pages/ChangePassword';
 import { Home } from './pages/Home';
 import { Schedule } from './pages/Schedule';
 import { Requests } from './pages/Requests';
@@ -32,6 +33,7 @@ export default function App() {
   };
 
   if (!session) return <Login onLogin={setSession} />;
+  if (session.mustChangePassword) return <ChangePassword session={session} onChanged={setSession} onSignOut={signOut} />;
 
   return (
     <div className="min-h-screen bg-[#FAFAF8] flex">

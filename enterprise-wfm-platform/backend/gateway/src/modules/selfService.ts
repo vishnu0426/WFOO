@@ -9,11 +9,15 @@ import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
 import { me, requires, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
+import { changeOwnPassword } from './authRoutes.ts';
+import { config } from '../config.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { dropCache } from '../infra.ts';
 import { notify, usersOf } from '../notify.ts';
 import { addDays, loadGroup, todayIn } from './forecast/service.ts';
 import { hhmm } from './workforceRoutes.ts';
+import { reconcileForEmployee } from './rotations.ts';
+import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
 
 export const selfService = Router();   // mounted at /me
 export const selfAdmin = Router();     // mounted at /self-service (policy and logins, for managers)
@@ -70,7 +74,7 @@ selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND employee_id = $1', [b.employeeId])) throw conflict('This employee already has a login');
     const username = b.username ?? String(e.employeeNumber).toLowerCase().replace(/[^a-z0-9._-]+/g, '');
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND lower(username) = lower($1)', [username])) throw conflict(`The username "${username}" is taken. Choose another.`);
-    const u = await tx.one<any>('INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id) VALUES (:t, $1, $2, $3, $4, $5, $6) RETURNING id', [username, `${e.firstName} ${e.lastName}`, e.email, b.role, await bcrypt.hash(password, 12), b.employeeId]);
+    const u = await tx.one<any>('INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id', [username, `${e.firstName} ${e.lastName}`, e.email, b.role, await bcrypt.hash(password, 12), b.employeeId, config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u!.id, entityName: username, after: { username, role: b.role, employeeId: b.employeeId } });
     return { userId: u!.id, username };
   });
@@ -85,7 +89,7 @@ selfAdmin.put('/logins/:userId/reset-password', requires('users:write'), async (
   const out = await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>('SELECT id, username FROM users WHERE tenant_id = :t AND id = $1 AND employee_id IS NOT NULL', [userId]);
     if (!u) throw notFound('Login');
-    await tx.exec(`UPDATE users SET password_hash = $2, status = 'ACTIVE' WHERE tenant_id = :t AND id = $1`, [userId, await bcrypt.hash(password, 12)]);
+    await tx.exec(`UPDATE users SET password_hash = $2, status = 'ACTIVE', must_change_password = $3::boolean WHERE tenant_id = :t AND id = $1`, [userId, await bcrypt.hash(password, 12), config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: userId, entityName: u.username, diffSummary: 'Password reset' });
     return { userId: u.id, username: u.username };
   });
@@ -106,7 +110,7 @@ export async function whoAmI(tx: Tx, p: Principal): Promise<Me> {
 }
 
 const days = (from: string, to: string) => { const o: string[] = []; for (let d = from; d <= to && o.length < 400; d = addDays(d, 1)) o.push(d); return o; };
-const shiftDto = (s: any) => ({ id: s.id, day: s.day, startTime: hhmm(s.startSlot), endTime: hhmm(s.startSlot + s.lengthSlots), overnight: s.startSlot + s.lengthSlots > 96, startSlot: s.startSlot, lengthSlots: s.lengthSlots, paidHours: (s.lengthSlots - (s.mealSlots ?? 0)) / 4,
+const shiftDto = (s: any) => ({ id: s.id, day: s.day, startTime: hhmm(s.startSlot), endTime: hhmm(s.startSlot + s.lengthSlots), overnight: s.startSlot + s.lengthSlots > 96, startSlot: s.startSlot, lengthSlots: s.lengthSlots, paidHours: (s.lengthSlots - joinedUnpaidMeal(s, s.lengthSlots)) / 4,
   template: s.templateName ?? null, schedule: s.versionName, versionId: s.versionId, activities: (s.activities ?? []).map((a: any) => ({ ...a, startTime: hhmm(a.startSlot), endTime: hhmm(a.startSlot + a.slots) })) });
 
 /** Which days in [from,to] fall inside a published schedule for any group this employee is eligible for -- not just
@@ -142,7 +146,7 @@ function colorShift<T extends { activities: { type: string }[] }>(shift: T, colo
 
 export async function myShifts(tx: Tx, employeeId: string, from: string, to: string) {
   return (await tx.q<any>(
-    `SELECT s.id, s.day::text AS day, s.start_slot, s.length_slots, s.activities, s.version_id, t.name AS template_name, coalesce(t.meal_slots, 0) AS meal_slots, v.name AS version_name
+    `SELECT s.id, s.day::text AS day, s.start_slot, s.length_slots, s.activities, s.version_id, t.name AS template_name, ${TPL_JOIN_COLS}, v.name AS version_name
      FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id LEFT JOIN shift_templates t ON t.id = s.template_id
      WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = $1 AND s.day >= $2::date AND s.day <= $3::date ORDER BY s.day, s.start_slot`, [employeeId, from, to])).map(shiftDto);
 }
@@ -162,15 +166,9 @@ selfService.get('/profile', requires('self:use'), async (req, res) => {
 
 /** Manually typed change of your own password -- requires the current one, unlike the admin-triggered reset above. */
 selfService.put('/change-password', requires('self:use'), async (req, res) => {
-  const p = me(req), b = parse(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(8).max(100) }), req.body);
-  await withTenant(p.tenantId, async (tx) => {
-    const u = await tx.one<any>('SELECT id, password_hash FROM users WHERE tenant_id = :t AND id = $1', [p.userId]);
-    if (!u || !(await bcrypt.compare(b.currentPassword, u.passwordHash))) throw bad('Current password is incorrect.');
-    if (b.currentPassword === b.newPassword) throw bad('Choose a password different from your current one.');
-    await tx.exec('UPDATE users SET password_hash = $2 WHERE tenant_id = :t AND id = $1', [p.userId, await bcrypt.hash(b.newPassword, 12)]);
-    await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: p.userId, entityName: p.username, diffSummary: 'Changed their own password' });
-  });
-  res.json({ ok: true });
+  const p = me(req), b = parse(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(1).max(100) }), req.body);
+  // the same rules and the same code path as choosing a password at first sign-in
+  res.json({ ok: true, ...(await changeOwnPassword(p, req, b.currentPassword, b.newPassword)) });
 });
 
 selfService.get('/schedule', requires('self:use'), async (req, res) => {
@@ -293,6 +291,7 @@ selfService.post('/time-off', requires('self:use'), async (req, res) => {
       [w.employeeId, b.type, b.startDate, b.endDate, b.reason, status, a.auto ? 'Automatic approval' : null, a.auto ? new Date().toISOString() : null, a.auto, a.auto ? 'Within the notice, balance and cover rules' : a.reasons.join(' ')]))!.id;
     const row = (await tx.q<any>(`${OWN_SQL} AND o.id = $2`, [w.employeeId, id]))[0];
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TIME_OFF', entityId: id, entityName: `${w.emp.firstName} ${w.emp.lastName}`, reason: b.reason || undefined, after: { ...toDto(row), source: 'SELF' }, diffSummary: `${b.type.toLowerCase()} ${b.startDate} to ${b.endDate}: ${a.auto ? 'approved automatically' : 'sent for approval'}` });
+    if (a.auto) await reconcileForEmployee(tx, p, req, w.employeeId);
     if (!a.auto) {
       const managers = (await tx.q<{ id: string }>(`SELECT u.id FROM users u WHERE u.tenant_id = :t AND u.status = 'ACTIVE' AND u.role IN ('WFM_ADMIN', 'WFM_MANAGER', 'SCHEDULER')`)).map((r) => r.id);
       await notify(tx, managers, { kind: 'TIME_OFF', title: 'Time off request', body: `${w.emp.firstName} ${w.emp.lastName}: ${b.type.toLowerCase()} ${b.startDate} to ${b.endDate}`, data: { screen: 'time-off', id } });
@@ -313,6 +312,7 @@ selfService.post('/time-off/:id/cancel', requires('self:use'), async (req, res) 
     if (cur.status === 'APPROVED' && cur.startDay <= w.today) throw conflict('Approved time off that has started cannot be cancelled here. Ask your manager.');
     await tx.exec(`UPDATE time_off SET status = 'CANCELLED', decided_by = $2, decided_at = now() WHERE tenant_id = :t AND id = $1`, [id, `${w.emp.firstName} ${w.emp.lastName}`]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'TIME_OFF', entityId: id, entityName: `${w.emp.firstName} ${w.emp.lastName}`, before: { status: cur.status }, after: { status: 'CANCELLED' }, diffSummary: 'cancelled by the employee' });
+    await reconcileForEmployee(tx, p, req, w.employeeId);
     return toDto((await tx.q<any>(`${OWN_SQL} AND o.id = $2`, [w.employeeId, id]))[0]);
   });
   await dropCache(p.tenantId, 'sched:*');

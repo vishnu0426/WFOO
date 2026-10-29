@@ -15,6 +15,7 @@ type Offer = {
   waveSize: number; wave: number; closesAt: string; createdBy: string; invited: number; queued: number; declined: number; total: number;
 };
 type Detail = Offer & { invites: { employeeId: string; name: string; employeeNumber: string; rank: number; wave: number; status: string; warnings: string[] }[] };
+type Gaps = { from: string; days: number; unpublishedDays: string[]; totalShortHours: number; gaps: { day: string; startTime: string; endTime: string; spots: number; shortHours: number }[] };
 type Suggestion = { kind: 'VTO' | 'OVERTIME'; startTime: string; endTime: string; spots: number; reason: string };
 
 const ORDERINGS: [string, string][] = [
@@ -37,6 +38,8 @@ export const OffersPanel: React.FC = () => {
   const offers = useApi<Offer[]>('/scheduling/offers', [tick]);
   const [day, setDay] = useState(today());
   const sug = useApi<{ vto: Suggestion[]; overtime: Suggestion[]; reforecastApplied?: boolean }>(group ? `/scheduling/offers/suggestions?groupId=${group.id}&day=${day}` : null, [tick]);
+  const [horizon, setHorizon] = useState(7);
+  const gaps = useApi<Gaps>(group ? `/scheduling/offers/shortages?groupId=${group.id}&days=${horizon}` : null, [tick, horizon]);
   const [form, setForm] = useState({ kind: 'VTO' as 'VTO' | 'OVERTIME', startTime: '14:00', endTime: '16:00', spots: 1, ordering: '', note: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -56,6 +59,7 @@ export const OffersPanel: React.FC = () => {
   };
   const cancel = async (id: string) => { if (!confirm('Cancel this offer? Anyone who has not answered is released.')) return; try { await api(`/scheduling/offers/${id}/cancel`, { method: 'POST' }); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } };
   const fromSuggestion = (s: Suggestion) => setForm((f) => ({ ...f, kind: s.kind, startTime: s.startTime, endTime: s.endTime, spots: s.spots }));
+  const offerForGap = (g: Gaps['gaps'][number]) => { setDay(g.day); setForm((f) => ({ ...f, kind: 'OVERTIME', startTime: g.startTime, endTime: g.endTime, spots: g.spots })); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const mine = (offers.data ?? []).filter((o) => !group || o.groupId === group.id);
 
   return (
@@ -77,6 +81,29 @@ export const OffersPanel: React.FC = () => {
           {canEdit && <div><Btn variant="primary" onClick={create} disabled={busy || !group}><Plus className="w-3.5 h-3.5" />Open offer</Btn></div>}
         </div>
         {busy && <Busy text="Checking who can take it…" />}
+      </Card>
+
+      <Card title="Gaps still to cover" sub={group ? `${group.name}: stretches in the coming days where the published schedule, rotation crews included, has fewer people than the forecast needs. Offer them as overtime and everyone who can take it without breaking a rule is asked, crew members on a day off too.` : undefined}>
+        <div className="flex items-center gap-2 mb-3 text-[12px] text-[#525252]">Look ahead
+          <Select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>{[3, 7, 14].map((d) => <option key={d} value={d}>{d} days</option>)}</Select>
+        </div>
+        {gaps.error ? <p className="text-[13px] text-[#737373]">{gaps.error}</p> : !gaps.data ? <Busy text="Looking for gaps…" /> : (
+          <div className="space-y-3">
+            {gaps.data.unpublishedDays.length > 0 && <p className="text-[12px] text-[#B7791F]">{gaps.data.unpublishedDays.length === gaps.data.days ? 'No schedule is published for these days, so there is nothing to offer yet. Publish one first.' : `No schedule is published on ${gaps.data.unpublishedDays.length} of these days (${gaps.data.unpublishedDays.slice(0, 3).join(', ')}${gaps.data.unpublishedDays.length > 3 ? ', …' : ''}).`}</p>}
+            {gaps.data.gaps.length === 0 && gaps.data.unpublishedDays.length < gaps.data.days && <p className="text-[13px] text-[#737373]">No gaps. The published schedule covers the forecast for the next {gaps.data.days} days.</p>}
+            {gaps.data.gaps.length > 0 && <>
+              <p className="text-[12px] text-[#525252]">{gaps.data.gaps.length} {gaps.data.gaps.length === 1 ? 'gap' : 'gaps'}, {gaps.data.totalShortHours} hours short in total.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {gaps.data.gaps.map((g, i) => (
+                  <div key={i} className="p-3 border border-[#E5E5E0] rounded-lg flex items-center justify-between gap-3">
+                    <div><div className="flex items-center gap-2"><Pill tone="warn">Short</Pill><span className="font-semibold text-[13px]">{g.day} · {g.startTime} to {g.endTime}</span></div><div className="text-[11px] text-[#737373] mt-1">Up to {g.spots} {g.spots === 1 ? 'person' : 'people'} short, {g.shortHours} hours in all</div></div>
+                    {canEdit && <Btn onClick={() => offerForGap(g)}>Offer overtime</Btn>}
+                  </div>
+                ))}
+              </div>
+            </>}
+          </div>
+        )}
       </Card>
 
       <Card title="Suggested from the forecast" sub={group ? `${group.name} on ${day}: where the published schedule has more or fewer people than ${sug.data?.reforecastApplied ? 'today is actually running' : 'the forecast needs'}.` : undefined}>

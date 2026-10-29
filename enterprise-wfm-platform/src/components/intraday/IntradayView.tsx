@@ -490,7 +490,72 @@ const ActionsScreen: React.FC<{ groupId: string; day: string }> = ({ groupId, da
             </div>
           </Card>
         ))}
+      <GapFixPanel groupId={groupId} />
     </div>
+  );
+};
+
+// ---------------------------------------------------------------- who could close the gap (named, rule-checked)
+
+interface GapFix { kind: string; action: string; employeeId: string; name: string; newStart: number; newLength: number; newStartTime: string; newEndTime: string; coverFromTime: string; coverToTime: string; slotsClosed: number; slotsWasted: number; paidMinutes: number; pastContractMinutes: number; why: string }
+interface GapFixes { day: string; ready: boolean; reason?: string; nowTime?: string; reforecastApplied?: boolean; before?: { shortSlots: number }; after?: { shortSlots: number }; fixes: GapFix[] }
+
+const GapFixPanel: React.FC<{ groupId: string }> = ({ groupId }) => {
+  const { can } = useForecast();
+  const canAct = can('intraday:act');
+  const [tick, setTick] = useState(0);
+  const t = useTick(60_000, true);
+  const res = useApi<GapFixes>(`/intraday/gap-fixes?groupId=${groupId}`, [t, tick, groupId]);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const s = res.data;
+  useEffect(() => { setPicked(new Set()); }, [s?.fixes.length]);
+  if (!s || !s.ready || !s.fixes.length) return s && s.ready ? <Card title="Who could help"><div className="text-[13px] text-[#525252]">Nobody needs to change: no one is short enough, or too many on, to be worth asking anyone as of {s.nowTime}.</div></Card> : null;
+  const key = (f: GapFix) => `${f.employeeId}|${f.kind}`;
+  const apply = async (list: GapFix[]) => {
+    if (!list.length) return;
+    if (reason.trim().length < 3) { setError('Say why you are changing the schedule (a few words).'); return; }
+    setBusy(true); setError(''); setNote('');
+    try {
+      const r = await api<{ applied: number; notes: string[]; refused: { name: string; why: string }[]; needsRepublish: boolean }>('/intraday/gap-fixes/apply', { method: 'POST', body: { groupId, day: s.day, reason: reason.trim(), fixes: list.map((f) => ({ employeeId: f.employeeId, kind: f.kind, newStart: f.newStart, newLength: f.newLength })) } });
+      setNote(`${r.applied} change${r.applied === 1 ? '' : 's'} made.${r.refused.length ? ` Not made: ${r.refused.map((x) => `${x.name} (${x.why})`).join('; ')}` : ''}${r.needsRepublish ? ' The schedule now has unpublished changes: publish it again so people see theirs.' : ''}`);
+      setTick((x) => x + 1);
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const chosen = s.fixes.filter((f) => picked.has(key(f)));
+  return (
+    <Card title="Who could help" sub={`As of ${s.nowTime}. Each person has to agree. Their weekly limit, rest between shifts, availability and time off have been checked.${s.before && s.after ? ` Doing all of these takes the shortage from ${s.before.shortSlots} to ${s.after.shortSlots} person-quarter-hours.` : ''}`}>
+      {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
+      {note && <Banner kind="info" onClose={() => setNote('')}>{note}</Banner>}
+      <div className="border border-[#E5E5E0] rounded-lg overflow-hidden">
+        <table className="w-full text-[13px]">
+          <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+            <tr>{canAct && <th className="p-3 w-8"></th>}<th className="p-3 text-left">Person</th><th className="p-3 text-left">Ask</th><th className="p-3 text-left">New shift</th><th className="p-3 text-left">Helps</th><th className="p-3 text-left">Cost</th></tr>
+          </thead>
+          <tbody className="divide-y divide-[#E5E5E0]">
+            {s.fixes.map((f) => (
+              <tr key={key(f)} className="hover:bg-[#FAFAF8]">
+                {canAct && <td className="p-3"><input type="checkbox" checked={picked.has(key(f))} onChange={() => setPicked((p) => { const n = new Set(p); n.has(key(f)) ? n.delete(key(f)) : n.add(key(f)); return n; })} /></td>}
+                <td className="p-3 font-semibold">{f.name}</td>
+                <td className="p-3">{f.action}<div className="text-[12px] text-[#737373]">{f.why}</div></td>
+                <td className="p-3 font-mono">{f.newStartTime}–{f.newEndTime}</td>
+                <td className="p-3">{f.kind.startsWith('RELEASE') ? `${f.slotsClosed * 15} min with fewer people` : `${f.coverFromTime}–${f.coverToTime}, closes ${(f.slotsClosed * 15 / 60).toFixed(1)} person-hours${f.slotsWasted ? ` (${(f.slotsWasted * 15 / 60).toFixed(1)} h not needed)` : ''}`}</td>
+                <td className="p-3">{f.paidMinutes > 0 ? `+${f.paidMinutes / 60} h paid${f.pastContractMinutes ? `, ${f.pastContractMinutes / 60} h past contract` : ''}` : `${f.paidMinutes / 60} h paid`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {canAct && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required), e.g. volume running 20% over forecast" className="max-w-md" />
+          <Btn variant="primary" disabled={busy || !chosen.length} onClick={() => apply(chosen)}>{chosen.length ? `Make ${chosen.length} selected change${chosen.length === 1 ? '' : 's'}` : 'Select who to ask'}</Btn>
+        </div>
+      )}
+    </Card>
   );
 };
 

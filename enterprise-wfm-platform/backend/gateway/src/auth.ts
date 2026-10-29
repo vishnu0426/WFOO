@@ -13,7 +13,7 @@ import { withTenant } from './db.ts';
 export const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string }
+export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean }
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -45,7 +45,10 @@ export const DEFAULT_PERMISSIONS: Record<Role, readonly string[]> = {
 };
 
 export const signToken = (p: Omit<Principal, 'jti'>): string =>
-  jwt.sign({ tid: p.tenantId, role: p.role, name: p.name, username: p.username }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
+  jwt.sign({ tid: p.tenantId, role: p.role, name: p.name, username: p.username, ...(p.mustChangePassword ? { mcp: true } : {}) }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
+
+/** The only requests a temporary-password session may make: see who it is, sign out, and choose a new password. */
+const ALLOWED_WHILE_TEMPORARY = /^\/api\/v1\/auth\/(me|logout|change-password)(\/|\?|$)/;
 
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   try {
@@ -53,6 +56,8 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     if (!raw) throw new HttpError(401, 'UNAUTHENTICATED', 'Sign in required');
     const p = await principalFromToken(raw);
     req.principal = p;
+    // a temporary password only opens the way to choosing a new one
+    if (p.mustChangePassword && !ALLOWED_WHILE_TEMPORARY.test(req.originalUrl)) throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Choose a new password before you continue.');
     next();
   } catch (e) { next(e instanceof HttpError ? e : new HttpError(401, 'UNAUTHENTICATED', 'Invalid or expired session')); }
 }
@@ -60,7 +65,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
 export async function principalFromToken(token: string): Promise<Principal> {
   const d = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
   if (await redis.get(`wfm:denied:${d.jti}`).catch(() => null)) throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
-  return { userId: String(d.sub), tenantId: d.tid, role: d.role, name: d.name, username: d.username, jti: String(d.jti) };
+  return { userId: String(d.sub), tenantId: d.tid, role: d.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: d.mcp === true };
 }
 
 export async function revokeToken(p: Principal): Promise<void> {

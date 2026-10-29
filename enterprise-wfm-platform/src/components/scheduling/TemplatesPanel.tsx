@@ -4,13 +4,15 @@
  */
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { api, DOW, ShiftTemplate } from '../../services/api';
+import { api, DOW, EmploymentType, ShiftTemplate, TYPE_LABEL } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
 
-type Form = { id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
-const blank = (): Form => ({ id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
+type Rule = { fromHours: number; mealMinutes: number; breakCount: number; breakMinutes: number };
+type Win = { earliest: string; latest: string };
+type Form = { minDurationHours: number | null; lengthStepMinutes: number; mealPaid: boolean; lengthRules: Rule[]; dayWindows: Record<string, Win>; groupIds: string[]; employmentTypes: string[]; skillIds: string[]; effectiveFrom: string; effectiveTo: string; id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
+const blank = (): Form => ({ minDurationHours: null, lengthStepMinutes: 60, mealPaid: false, lengthRules: [], dayWindows: {}, groupIds: [], employmentTypes: [], skillIds: [], effectiveFrom: '', effectiveTo: '', id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
 const resizeBreaks = (arr: (number | null)[], n: number): (number | null)[] => (arr.length === n ? arr : arr.length < n ? [...arr, ...new Array(n - arr.length).fill(null)] : arr.slice(0, n));
 
 const timeToMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
@@ -18,7 +20,8 @@ const minToTime = (m: number) => { m = ((m % 1440) + 1440) % 1440; return `${Str
 const durationFromTimes = (start: string, end: string) => { let diff = timeToMin(end) - timeToMin(start); if (diff <= 0) diff += 1440; return Math.round((diff / 60) * 4) / 4; };
 
 export const TemplatesPanel: React.FC = () => {
-  const { can, setNotice } = useForecast();
+  const { can, setNotice, groups } = useForecast();
+  const skills = useApi<{ id: string; name: string; status: string }[]>('/workforce/skills', []);
   const [tick, setTick] = useState(0);
   const list = useApi<ShiftTemplate[]>('/scheduling/templates', [tick]);
   const [f, setF] = useState<Form | null>(null);
@@ -27,7 +30,9 @@ export const TemplatesPanel: React.FC = () => {
 
   const save = async () => {
     if (!f) return; setError('');
-    const { id, mode, endTime, ...body } = f;
+    const { id, mode, endTime, ...rest } = f;
+    const body = { ...rest, effectiveFrom: rest.effectiveFrom || null, effectiveTo: rest.effectiveTo || null, dayWindows: Object.keys(rest.dayWindows).length ? rest.dayWindows : null, lengthRules: rest.lengthRules.length ? rest.lengthRules : null,
+      groupIds: rest.groupIds.length ? rest.groupIds : null, employmentTypes: rest.employmentTypes.length ? rest.employmentTypes : null, skillIds: rest.skillIds.length ? rest.skillIds : null };
     try { if (id) await api(`/scheduling/templates/${id}`, { method: 'PUT', body }); else await api('/scheduling/templates', { method: 'POST', body }); setF(null); setTick((t) => t + 1); }
     catch (e: any) { setError(e.message); }
   };
@@ -74,6 +79,7 @@ export const TemplatesPanel: React.FC = () => {
             mealAnchor={f.mealAnchorMinutes} breakAnchors={f.breakAnchorMinutes}
             onMealAnchor={(m) => setF((s) => s && { ...s, mealAnchorMinutes: m })}
             onBreakAnchor={(i, m) => setF((s) => s && { ...s, breakAnchorMinutes: s.breakAnchorMinutes.map((x, j) => (j === i ? m : x)) })} />
+          <Flexible f={f} setF={setF as React.Dispatch<React.SetStateAction<Form>>} groups={groups} skills={(skills.data ?? []).filter((s) => s.status === 'ACTIVE')} />
           <div>
             <div className="text-[12px] font-semibold mb-1.5">Days it can be used</div>
             <div className="flex flex-wrap gap-3 text-[13px]">{DOW.map((d, n) => <label key={d} className="flex items-center gap-1.5"><input type="checkbox" checked={f.workDays.includes(n)} onChange={(e) => setF({ ...f, workDays: e.target.checked ? [...f.workDays, n].sort() : f.workDays.filter((x) => x !== n) })} />{d}</label>)}</div>
@@ -88,11 +94,11 @@ export const TemplatesPanel: React.FC = () => {
             <tr key={t.id}>
               <td className="p-3 font-semibold">{t.name}</td>
               <td className="p-3 font-mono text-[12px]">{t.earliestStart}–{t.latestStart} <span className="text-[#737373]">every {t.startStepMinutes}m</span></td>
-              <td className="p-3">{t.durationHours}h</td><td className="p-3">{t.paidHours}h</td>
-              <td className="p-3 text-[12px]">{t.mealMinutes ? `${t.mealMinutes}m meal` : 'no meal'} · {t.breakCount}×{t.breakMinutes}m</td>
-              <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}</td>
+              <td className="p-3">{t.minDurationHours ? `${t.minDurationHours}–${t.durationHours}h` : `${t.durationHours}h`}</td><td className="p-3">{t.minDurationHours && t.paidHoursMin != null ? `${t.paidHoursMin}–${t.paidHours}h` : `${t.paidHours}h`}</td>
+              <td className="p-3 text-[12px]">{t.lengthRules?.length ? `${t.lengthRules.length} rules by length` : `${t.mealMinutes ? `${t.mealMinutes}m meal` : 'no meal'} · ${t.breakCount}×${t.breakMinutes}m`}{t.mealPaid ? ' · paid meal' : ''}</td>
+              <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}{t.dayWindows && Object.keys(t.dayWindows).length ? <span className="text-[#737373]"> · own times on {Object.keys(t.dayWindows).length}</span> : null}{t.groupIds || t.employmentTypes || t.skillIds ? <span className="text-[#737373]"> · limited</span> : null}{t.effectiveFrom || t.effectiveTo ? <span className="text-[#737373]"> · {t.effectiveFrom ?? '…'} to {t.effectiveTo ?? '…'}</span> : null}</td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button aria-label="Delete template" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formOf(t), id: null, name: `${t.name} copy` }); }}>Copy</button><button aria-label="Delete template" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
             </tr>
           ))}
         </Table>
@@ -163,6 +169,103 @@ const ActivityTimeline: React.FC<{
           </div>
         ))}
       </div>
+    </div>
+  );
+};
+
+/** The new template fields, from a template the API returned. */
+const formExtras = (t: ShiftTemplate) => ({
+  minDurationHours: t.minDurationHours ?? null, lengthStepMinutes: t.lengthStepMinutes ?? 60, mealPaid: !!t.mealPaid, lengthRules: t.lengthRules ?? [], dayWindows: t.dayWindows ?? {},
+  groupIds: t.groupIds ?? [], employmentTypes: t.employmentTypes ?? [], skillIds: t.skillIds ?? [], effectiveFrom: t.effectiveFrom ?? '', effectiveTo: t.effectiveTo ?? '',
+});
+const formOf = (t: ShiftTemplate): Form => ({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) });
+
+const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+
+/** Variable length, meal and breaks by length, a different start window on some days, who it is for and when. Left alone, a template is the fixed shape it always was. */
+const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Form>>; groups: { id: string; name: string }[]; skills: { id: string; name: string }[] }> = ({ f, setF, groups, skills }) => {
+  const [open, setOpen] = useState(false);
+  const used = f.minDurationHours != null || f.lengthRules.length > 0 || Object.keys(f.dayWindows).length > 0 || f.groupIds.length > 0 || f.employmentTypes.length > 0 || f.skillIds.length > 0 || !!f.effectiveFrom || !!f.effectiveTo || f.mealPaid;
+  const setRule = (i: number, patch: Partial<Rule>) => setF((s) => ({ ...s, lengthRules: s.lengthRules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
+  const setWin = (d: number, patch: Partial<Win> | null) => setF((s) => {
+    const next = { ...s.dayWindows };
+    if (patch === null) delete next[String(d)]; else next[String(d)] = { earliest: s.dayWindows[String(d)]?.earliest ?? s.earliestStart, latest: s.dayWindows[String(d)]?.latest ?? s.latestStart, ...patch };
+    return { ...s, dayWindows: next };
+  });
+  return (
+    <div className="border border-[#E5E5E0] rounded-lg">
+      <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-[12px] font-semibold" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span>More options: shift lengths, meals by length, times per day, who it is for{used && <span className="ml-2 font-normal text-[#737373]">(in use)</span>}</span><span>{open ? '–' : '+'}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-5">
+          <div className="space-y-2">
+            <div className="text-[12px] font-semibold">Shift length</div>
+            <p className="text-[11px] text-[#737373]">Set a shortest length and the scheduler may pick any length from there up to the length above, so a quiet hour need not cost a full shift. Leave it empty for one fixed length.</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Field label="Shortest shift (hours)" hint="Empty = fixed length"><Input type="number" min={1} max={14} step={0.25} value={f.minDurationHours ?? ''} onChange={(e) => setF({ ...f, minDurationHours: e.target.value === '' ? null : Number(e.target.value) })} /></Field>
+              <Field label="Lengths in steps of"><Select value={f.lengthStepMinutes} onChange={(e) => setF({ ...f, lengthStepMinutes: Number(e.target.value) })}>{[30, 60, 120].map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select></Field>
+              <Field label="Meal"><label className="flex items-center gap-2 text-[13px] h-9"><input type="checkbox" checked={f.mealPaid} onChange={(e) => setF({ ...f, mealPaid: e.target.checked })} />The meal is paid</label></Field>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[12px] font-semibold">Meal and breaks by shift length</div>
+            <p className="text-[11px] text-[#737373]">For example no meal under 5 hours, one break from 4 hours, a 30-minute meal and two breaks from 7 hours. The rule with the largest “from” not above the shift’s length applies; shorter shifts get none. With no rules, a fixed-length template keeps the meal and breaks above, and a variable-length one scales them.</p>
+            {f.lengthRules.map((r, i) => (
+              <div key={i} className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+                <Field label="From (hours)"><Input type="number" min={0} max={14} step={0.25} value={r.fromHours} onChange={(e) => setRule(i, { fromHours: Number(e.target.value) })} /></Field>
+                <Field label="Meal (minutes)"><Input type="number" min={0} max={120} step={15} value={r.mealMinutes} onChange={(e) => setRule(i, { mealMinutes: Number(e.target.value) })} /></Field>
+                <Field label="Breaks"><Input type="number" min={0} max={4} value={r.breakCount} onChange={(e) => setRule(i, { breakCount: Number(e.target.value) })} /></Field>
+                <Field label="Break length (minutes)"><Input type="number" min={15} max={60} step={15} value={r.breakMinutes} onChange={(e) => setRule(i, { breakMinutes: Number(e.target.value) })} /></Field>
+                <div><button type="button" className="text-[12px] underline text-[#737373] hover:text-[#C84A4A]" onClick={() => setF({ ...f, lengthRules: f.lengthRules.filter((_, j) => j !== i) })}>Remove</button></div>
+              </div>
+            ))}
+            <Btn onClick={() => setF({ ...f, lengthRules: [...f.lengthRules, { fromHours: f.lengthRules.length ? Math.min(14, f.lengthRules[f.lengthRules.length - 1].fromHours + 2) : 4, mealMinutes: 0, breakCount: 1, breakMinutes: 15 }] })}><Plus className="w-3.5 h-3.5" />Add a rule</Btn>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[12px] font-semibold">Different start times on some days</div>
+            <p className="text-[11px] text-[#737373]">Tick a day to give it its own start window; other days use the window above. A day only counts if it is ticked under “Days it can be used”.</p>
+            <div className="space-y-1.5">
+              {DOW.map((d, n) => {
+                const w = f.dayWindows[String(n)];
+                return (
+                  <div key={d} className="flex flex-wrap items-center gap-3 text-[13px]">
+                    <label className="flex items-center gap-1.5 w-16"><input type="checkbox" checked={!!w} onChange={(e) => setWin(n, e.target.checked ? {} : null)} />{d}</label>
+                    {w && <><Input type="time" step={900} value={w.earliest} onChange={(e) => setWin(n, { earliest: e.target.value })} aria-label={`${d} earliest start`} /><span className="text-[#737373]">to</span><Input type="time" step={900} value={w.latest} onChange={(e) => setWin(n, { latest: e.target.value })} aria-label={`${d} latest start`} /></>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[12px] font-semibold">Who it is offered to</div>
+            <p className="text-[11px] text-[#737373]">Leave everything unticked to offer it to everyone. Tick groups, contract types or skills to limit it; for skills, having any one of those ticked is enough.</p>
+            <div>
+              <div className="text-[11px] text-[#737373] mb-1">Contract types</div>
+              <div className="flex flex-wrap gap-3 text-[13px]">{(Object.keys(TYPE_LABEL) as EmploymentType[]).map((t) => <label key={t} className="flex items-center gap-1.5"><input type="checkbox" checked={f.employmentTypes.includes(t)} onChange={() => setF({ ...f, employmentTypes: toggle(f.employmentTypes, t) })} />{TYPE_LABEL[t]}</label>)}</div>
+            </div>
+            {groups.length > 0 && <div>
+              <div className="text-[11px] text-[#737373] mb-1">WFM groups</div>
+              <div className="flex flex-wrap gap-3 text-[13px]">{groups.map((g) => <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={f.groupIds.includes(g.id)} onChange={() => setF({ ...f, groupIds: toggle(f.groupIds, g.id) })} />{g.name}</label>)}</div>
+            </div>}
+            {skills.length > 0 && <div>
+              <div className="text-[11px] text-[#737373] mb-1">Skills</div>
+              <div className="flex flex-wrap gap-3 text-[13px]">{skills.map((k) => <label key={k.id} className="flex items-center gap-1.5"><input type="checkbox" checked={f.skillIds.includes(k.id)} onChange={() => setF({ ...f, skillIds: toggle(f.skillIds, k.id) })} />{k.name}</label>)}</div>
+            </div>}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[12px] font-semibold">Dates it is in force</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Field label="From" hint="Empty = already in force"><Input type="date" value={f.effectiveFrom} onChange={(e) => setF({ ...f, effectiveFrom: e.target.value })} /></Field>
+              <Field label="Until" hint="Empty = no end date"><Input type="date" value={f.effectiveTo} onChange={(e) => setF({ ...f, effectiveTo: e.target.value })} /></Field>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

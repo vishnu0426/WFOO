@@ -9,7 +9,7 @@ import type { Principal } from '../../auth.ts';
 import { bad, conflict, notFound } from '../../http.ts';
 
 export const SLOT_H = 0.25;
-export const MODELS = ['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston'] as const;
+export const MODELS = ['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima'] as const;
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const r2 = (v: number) => Math.round(v * 100) / 100;
 export const num = (v: unknown, d: number) => (v === null || v === undefined || v === '' || Number.isNaN(+(v as number)) ? d : +(v as number));
@@ -240,6 +240,33 @@ export async function versionRecords(tenantId: string, v: any, queueId: string |
     return out;
   };
   return queueId ? compute() : cached(ck, 3600, compute);
+}
+
+/**
+ * Planning to a confidence level instead of the single central forecast. "Confidence" is how sure we want to be of having
+ * enough people in an interval: 50 is the central forecast, 90 plans for the forecast's own upper (P90) volume, and levels
+ * between are interpolated. The requirement is then worked out again by the same staffing model at that volume, so
+ * service-level, shrinkage and occupancy targets all still apply. Returns required people per `day|slot`.
+ */
+export const confidenceShare = (level: number) => Math.min(1.25, Math.max(0, (level - 50) / 40));
+
+export async function riskRequired(tenantId: string, v: any, level: number): Promise<Map<string, number>> {
+  const f = confidenceShare(level);
+  const out = new Map<string, number>();
+  if (f <= 0 || v.kind !== 'SHORT') return out;
+  const loaded = await withTenant(tenantId, async (tx) => ({ group: await loadGroup(tx, v.wfmGroupId), rows: await versionRows(tx, v.id, {}) }));
+  const { group, rows } = loaded;
+  const ck = key(tenantId, 'fvrisk', v.id, v.rev, [level, group.serviceLevel, group.answerSec, group.shrinkage, group.occupancyCap, group.method, group.patienceSec, group.blended, group.queues.map((q) => `${q.id}${q.concurrency}${q.openSlot}${q.closeSlot}`).join('')].join('-'));
+  const entries = await cached(ck, 3600, async () => {
+    const lifted = rows.map((r) => {
+      const k80 = r.volume > 0 ? r.vol / r.volume : 1;                  // an adjustment scales the band with it
+      return { ...r, vol: r.vol + f * Math.max(0, r.p90 - r.volume) * k80 };
+    });
+    const staff = aggregateStaff(await runStaffing(group, lifted));
+    return [...staff].map(([k, s]) => [k, s.required] as [string, number]);
+  });
+  for (const [k, n] of entries) out.set(k, n);
+  return out;
 }
 
 export const bucketRecords = (records: Rec[], grain: '15' | '30' | '60'): Rec[] => {

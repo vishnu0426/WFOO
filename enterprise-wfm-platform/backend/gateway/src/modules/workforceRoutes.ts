@@ -10,6 +10,7 @@ import { audit } from '../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { dropCache } from '../infra.ts';
 import { parseCsv } from './csv.ts';
+import { reconcileForEmployee } from './rotations.ts';
 import { notify, usersOf } from '../notify.ts';
 
 export const workforce = Router();
@@ -31,6 +32,8 @@ const EmpFields = z.object({
   maxConsecutiveDays: z.number().int().min(1).max(14).optional(), allowWeekend: z.boolean().optional(), allowOvernight: z.boolean().optional(), nightShiftConsent: z.boolean().optional(),
   primaryGroupId: uuid.nullable().optional(), eligibleGroupIds: z.array(uuid).max(50).optional(),
   preferredTemplateId: uuid.nullable().optional(),
+  // same start and end time every day: DEFAULT follows the company setting. fixedStartSlot assigns the person's usual start (15-minute slot of the day).
+  shiftConsistency: z.enum(['DEFAULT', 'REQUIRE', 'PREFER', 'OFF']).optional(), fixedStartSlot: z.number().int().min(0).max(95).nullable().optional(),
 });
 const EmpCreate = EmpFields;
 const EmpPatch = EmpFields.partial();
@@ -41,6 +44,7 @@ const COLS: Record<keyof EmpInput, string> = {
   teamId: 'team_id', location: 'location', employmentType: 'employment_type', weeklyContractHours: 'weekly_contract_hours', maxWeeklyHours: 'max_weekly_hours',
   workDaysPerWeek: 'work_days_per_week', minRestHours: 'min_rest_hours', maxConsecutiveDays: 'max_consecutive_days', allowWeekend: 'allow_weekend', allowOvernight: 'allow_overnight', nightShiftConsent: 'night_shift_consent',
   primaryGroupId: 'primary_group_id', eligibleGroupIds: 'eligible_group_ids', preferredTemplateId: 'preferred_template_id',
+  shiftConsistency: 'shift_consistency', fixedStartSlot: 'fixed_start_slot',
 };
 const CASTS: Partial<Record<keyof EmpInput, string>> = { eligibleGroupIds: '::uuid[]', teamId: '::uuid', primaryGroupId: '::uuid', hireDate: '::date', preferredTemplateId: '::uuid' };
 
@@ -51,6 +55,7 @@ const empDto = (e: any, skills: any[] = []) => ({
   maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
   primaryGroupId: e.primaryGroupId, primaryGroupName: e.primaryGroupName ?? null, eligibleGroupIds: e.eligibleGroupIds, version: e.version,
   preferredTemplateId: e.preferredTemplateId, preferredTemplateName: e.preferredTemplateName ?? null,
+  shiftConsistency: (e.shiftConsistency ?? 'DEFAULT') as 'DEFAULT' | 'REQUIRE' | 'PREFER' | 'OFF', fixedStartSlot: (e.fixedStartSlot ?? null) as number | null,
   skills: skills.filter((s) => s.employeeId === e.id).map((s) => ({ skillId: s.skillId, name: s.name, code: s.code, proficiency: s.proficiency })),
 });
 
@@ -150,6 +155,62 @@ workforce.put('/employees/:id', requires('workforce:write'), async (req, res) =>
   res.json(out);
 });
 
+// ---------------------------------------------------------------- bulk edit (select many people, change the same things on all of them)
+
+const BulkBody = z.object({
+  ids: z.array(uuid).min(1).max(500),
+  // fields that make sense to apply to many people at once: never identity fields such as name, number, email or extension
+  changes: EmpPatch.omit({ employeeNumber: true, firstName: true, lastName: true, email: true, phone: true, extension: true }).default({}),
+  eligibleGroups: z.object({ add: z.array(uuid).max(50).default([]), remove: z.array(uuid).max(50).default([]) }).optional(),
+  skills: z.object({ add: z.array(z.object({ skillId: uuid, proficiency: z.number().int().min(1).max(5) })).max(60).default([]), remove: z.array(uuid).max(60).default([]) }).optional(),
+  reason: z.string().trim().min(3, 'is required').max(300),
+});
+
+workforce.post('/employees/bulk', requires('workforce:write'), async (req, res) => {
+  const p = me(req), b = parse(BulkBody, req.body);
+  const ids = [...new Set(b.ids)];
+  const g = b.eligibleGroups, sk = b.skills;
+  const touchesGroups = !!(g && (g.add.length || g.remove.length));
+  const touchesSkills = !!(sk && (sk.add.length || sk.remove.length));
+  if (!Object.values(b.changes).some((v) => v !== undefined) && !touchesGroups && !touchesSkills) throw bad('Choose at least one thing to change');
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const all = await loadEmployees(tx);
+    const byId = new Map(all.map((e) => [e.id, e]));
+    const updated: string[] = [], skipped: { id: string; name: string; reason: string }[] = [];
+    for (const id of ids) {
+      const before = byId.get(id);
+      if (!before) { skipped.push({ id, name: 'Unknown', reason: 'Employee not found' }); continue; }
+      try { checkEmployee({ weeklyContractHours: b.changes.weeklyContractHours ?? before.weeklyContractHours, maxWeeklyHours: b.changes.maxWeeklyHours ?? before.maxWeeklyHours, primaryGroupId: null, eligibleGroupIds: [] }); }
+      catch (e: any) { skipped.push({ id, name: before.name, reason: e.message }); continue; }
+      const data: Partial<EmpInput> = { ...b.changes };
+      // a person who is eligible for a group is always eligible for their primary group; changing either never wipes the rest of the list
+      if (touchesGroups || b.changes.primaryGroupId !== undefined || b.changes.eligibleGroupIds !== undefined) {
+        const next = new Set<string>(b.changes.eligibleGroupIds ?? before.eligibleGroupIds ?? []);
+        for (const x of g?.add ?? []) next.add(x);
+        for (const x of g?.remove ?? []) next.delete(x);
+        const primary = b.changes.primaryGroupId !== undefined ? b.changes.primaryGroupId : before.primaryGroupId;
+        if (primary) next.add(primary);
+        data.eligibleGroupIds = [...next];
+      }
+      if (Object.keys(data).length) {
+        // writeEmployee adds the primary group to whatever eligible list it is given, which is already complete here
+        await writeEmployee(tx, id, data);
+      }
+      if (touchesSkills) {
+        if (sk!.remove.length) await tx.exec('DELETE FROM employee_skills WHERE tenant_id = :t AND employee_id = $1 AND skill_id = ANY($2::uuid[])', [id, sk!.remove]);
+        if (sk!.add.length) await tx.exec(
+          `INSERT INTO employee_skills (tenant_id, employee_id, skill_id, proficiency) SELECT :t, $1, s, p FROM unnest($2::uuid[], $3::int[]) AS x(s, p)
+           ON CONFLICT (employee_id, skill_id) DO UPDATE SET proficiency = EXCLUDED.proficiency`, [id, sk!.add.map((s) => s.skillId), sk!.add.map((s) => s.proficiency)]);
+      }
+      const [after] = await loadEmployees(tx, { id });
+      await audit(tx, p, req, { action: 'UPDATE', entityType: 'EMPLOYEE', entityId: id, entityName: after.name, reason: b.reason, before, after, diffSummary: `bulk edit of ${ids.length} people` });
+      updated.push(id);
+    }
+    return { updated: updated.length, skipped };
+  });
+  res.json(out);
+});
+
 workforce.delete('/employees/:id', requires('workforce:write'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   await withTenant(p.tenantId, async (tx) => {
@@ -189,7 +250,7 @@ const HEAD: Record<string, string[]> = {
 
 workforce.post('/employees/import', requires('workforce:write'), async (req, res) => {
   const p = me(req);
-  const b = parse(z.object({ csv: z.string().min(1).max(5_000_000), dryRun: z.boolean().default(true), columnMap: z.record(z.string(), z.number().int()).optional() }), req.body);
+  const b = parse(z.object({ csv: z.string().min(1).max(5_000_000), dryRun: z.boolean().default(true), stopOnError: z.boolean().default(false), columnMap: z.record(z.string(), z.number().int()).optional() }), req.body);
   const matrix = parseCsv(b.csv);
   if (matrix.length < 2) throw bad('The file has a header but no data rows');
   const header = matrix[0].map((h) => h.trim().toLowerCase().replace(/[\s-]+/g, '_'));
@@ -252,7 +313,8 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
     });
     const diff = { new: plan.filter((x) => x.action === 'NEW').length, updated: plan.filter((x) => x.action === 'UPDATE').length, unchanged: plan.filter((x) => x.action === 'UNCHANGED').length };
     const result = { dryRun: b.dryRun, rows: matrix.length - 1, diff, errors: errors.slice(0, 100), errorCount: errors.length, sample: plan.slice(0, 30).map((x) => ({ line: x.line, name: x.name, employeeNumber: x.input.employeeNumber, action: x.action })), committed: false, headers, headerSample, columnMap, mapped: true };
-    if (b.dryRun) return result;
+    if (b.dryRun) return { ...result, stopOnError: b.stopOnError };
+    if (b.stopOnError && errors.length) throw bad(`Nothing was imported: ${errors.length} row${errors.length === 1 ? ' has' : 's have'} a problem and you chose to stop on any error. First: line ${errors[0].line}, ${errors[0].message}`, errors.slice(0, 20));
     // rows with a problem were never added to `plan`, so they're simply left out here -- a good row isn't held back
     // by someone else's file having a bad one. Their line numbers are still in `errors` so they can be fixed and re-imported.
     for (const x of plan) {
@@ -413,6 +475,7 @@ workforce.post('/time-off', requires('workforce:write'), async (req, res) => {
       [b.employeeId, b.type, b.startDate, b.endDate, b.reason ?? '', b.approve ? 'APPROVED' : 'REQUESTED', b.approve ? p.name : null, b.approve ? new Date().toISOString() : null]))!.id;
     const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TIME_OFF', entityId: id, entityName: emp.name, after: toDto(t) });
+    if (b.approve) await reconcileForEmployee(tx, p, req, b.employeeId);   // approved leave takes the person off their generated rotation shifts
     return toDto(t);
   });
   await dropCache(me(req).tenantId, 'sched:*');
@@ -429,6 +492,7 @@ workforce.post('/time-off/:id/decide', requires('workforce:write'), async (req, 
     const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
     await audit(tx, p, req, { action: b.status === 'APPROVED' ? 'APPROVE' : b.status === 'REJECTED' ? 'REJECT' : 'UPDATE', entityType: 'TIME_OFF', entityId: id, entityName: cur.employeeName, reason: b.reason, before: { status: cur.status }, after: { status: b.status } });
     if (b.status !== 'CANCELLED') await notify(tx, await usersOf(tx, [cur.employeeId]), { kind: 'TIME_OFF', title: `Time off ${b.status === 'APPROVED' ? 'approved' : 'declined'}`, body: `${cur.startDay} to ${cur.endDay}${b.reason ? `: ${b.reason}` : ''}`, data: { screen: 'time-off', id } });
+    await reconcileForEmployee(tx, p, req, cur.employeeId);   // approving takes the person off their rotation shifts; cancelling puts them back
     return toDto(t);
   });
   await dropCache(p.tenantId, 'sched:*');

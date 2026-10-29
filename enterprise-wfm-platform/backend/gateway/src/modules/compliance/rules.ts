@@ -71,7 +71,8 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 const utcMs = (d: string) => { const [y, m, dd] = d.split('-').map(Number); return Date.UTC(y, m - 1, dd); };
 export const addDaysStr = (d: string, n: number) => new Date(utcMs(d) + n * 864e5).toISOString().slice(0, 10);
 const dow = (d: string) => (new Date(utcMs(d)).getUTCDay() + 6) % 7;
-const mondayOf = (d: string) => addDaysStr(d, -dow(d));
+/** First day of the pay week `d` falls in; weeks start on Monday unless `weekStart` (Monday 0 ... Sunday 6) says otherwise. */
+const mondayOf = (d: string, weekStart = 0) => addDaysStr(d, -((dow(d) - weekStart + 7) % 7));
 const slotOfTime = (t: string) => { const [h, m] = t.split(':').map(Number); return Math.floor((h * 60 + m) / 15); };
 const paidH = (s: { lengthSlots: number; mealSlots: number }) => (s.lengthSlots - s.mealSlots) / 4;
 
@@ -110,7 +111,7 @@ export function limitsFrom(rules: Rule[]): { minRestHours?: number; maxWeeklyHou
 }
 
 /** Everything the rules say about one person's shifts. */
-export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[]): Finding[] {
+export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[], weekStart = 0): Finding[] {
   const out: Finding[] = [];
   const shifts = [...list].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.startSlot - b.startSlot));
   const add = (r: Rule, day: string, message: string) => out.push({ rule: r.type, severity: r.severity, employeeId: person.id, day, message });
@@ -134,7 +135,7 @@ export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[]
     }
     if (r.type === 'MAX_WEEKLY_HOURS') {
       const weeks = new Map<string, number>();
-      for (const s of shifts) weeks.set(mondayOf(s.day), (weeks.get(mondayOf(s.day)) ?? 0) + paidH(s));
+      for (const s of shifts) weeks.set(mondayOf(s.day, weekStart), (weeks.get(mondayOf(s.day, weekStart)) ?? 0) + paidH(s));
       for (const [wk, h] of weeks) if (h > p.hours + 1e-9) add(r, wk, `${person.name} works ${r1(h)}h in the week of ${wk} (limit ${p.hours}h)`);
     }
   }
@@ -142,11 +143,11 @@ export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[]
 }
 
 /** Hours that attract the overtime premium, with the multiple to pay. Reported, never a violation. */
-export function premiumHours(rules: Rule[], list: ShiftLite[]): { hours: number; multiplier: number } {
+export function premiumHours(rules: Rule[], list: ShiftLite[], weekStart = 0): { hours: number; multiplier: number } {
   const r = rules.find((x) => x.type === 'OVERTIME_PREMIUM');
   if (!r) return { hours: 0, multiplier: 1 };
   const byDay = new Map<string, number>(), byWeek = new Map<string, number>();
-  for (const s of list) { byDay.set(s.day, (byDay.get(s.day) ?? 0) + paidH(s)); byWeek.set(mondayOf(s.day), (byWeek.get(mondayOf(s.day)) ?? 0) + paidH(s)); }
+  for (const s of list) { byDay.set(s.day, (byDay.get(s.day) ?? 0) + paidH(s)); byWeek.set(mondayOf(s.day, weekStart), (byWeek.get(mondayOf(s.day, weekStart)) ?? 0) + paidH(s)); }
   let daily = 0, weekly = 0;
   for (const h of byDay.values()) daily += Math.max(0, h - r.params.afterDailyHours);
   for (const h of byWeek.values()) weekly += Math.max(0, h - r.params.afterWeeklyHours);

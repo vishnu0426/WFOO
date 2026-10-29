@@ -19,6 +19,7 @@ import { UsersAndRolesView } from './components/admin/UsersAndRolesView';
 import { StaffingTraceabilityModal } from './components/staffing/StaffingTraceabilityModal';
 import { CommandPalette } from './components/common/CommandPalette';
 import { LoginView } from './components/auth/LoginView';
+import { ChangePasswordView } from './components/auth/ChangePasswordView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ForecastProvider, useForecast } from './services/forecastStore';
 import { api, getStoredSession, Session, storeSession } from './services/api';
@@ -61,6 +62,7 @@ export default function App() {
   };
 
   if (!session) return <LoginView onLogin={setSession} />;
+  if (session.mustChangePassword) return <ChangePasswordView session={session} onChanged={setSession} onSignOut={signOut} />;
   return (
     <ForecastProvider session={session} onNavigate={navigate}>
       <Shell session={session} module={module} sub={sub} navigate={navigate} onSignOut={signOut} />

@@ -1,8 +1,10 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { withTenant, raw } from '../db.ts';
-import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, me, permissionsFor, requires, revokeToken, signToken, type Role } from '../auth.ts';
+import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, me, permissionsFor, requires, revokeToken, signToken, type Principal, type Role } from '../auth.ts';
+import { checkNewPassword } from '../passwordPolicy.ts';
+import { config } from '../config.ts';
 import { audit } from '../audit.ts';
 import { HttpError, bad, notFound, parse } from '../http.ts';
 import { dropCache, redis } from '../infra.ts';
@@ -14,14 +16,37 @@ const Login = z.object({ tenant: z.string().optional(), username: z.string().min
 
 async function sessionFor(tenantId: string, userId: string) {
   const [tenant] = await raw<{ id: string; name: string; code: string; timezone: string; currency: string; fourEyes: boolean }>('SELECT * FROM tenants WHERE id = $1', [tenantId]);
-  const user = await withTenant(tenantId, (tx) => tx.one<any>('SELECT id, username, display_name, email, role, employee_id FROM users WHERE tenant_id = :t AND id = $1', [userId]));
+  const user = await withTenant(tenantId, (tx) => tx.one<any>('SELECT id, username, display_name, email, role, employee_id, must_change_password FROM users WHERE tenant_id = :t AND id = $1', [userId]));
   if (!user) throw notFound('User');
   const perms = [...(await permissionsFor(tenantId, user.role as Role))].sort();
   return {
     user: { id: user.id, userName: user.displayName, username: user.username, email: user.email, role: user.role, tenantId, tenantName: tenant.name, employeeId: user.employeeId },
     tenant: { id: tenant.id, name: tenant.name, code: tenant.code, timezone: tenant.timezone, currency: tenant.currency, fourEyes: tenant.fourEyes },
     permissions: perms,
+    /** signed in with a temporary password: the app must ask for a new one before anything else */
+    mustChangePassword: !!user.mustChangePassword,
   };
+}
+
+/** A person replaces their own password. Needs the current one, applies the password rules, clears the temporary flag and returns a fresh session. */
+export async function changeOwnPassword(p: Principal, req: Request, currentPassword: string, newPassword: string) {
+  const limitKey = `wfm:pwchange:${p.userId}`;
+  if ((Number(await redis.get(limitKey).catch(() => 0)) || 0) >= 5) throw new HttpError(429, 'TOO_MANY_ATTEMPTS', 'Too many attempts. Try again in 15 minutes.');
+  const user = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT id, username, display_name, role, password_hash FROM users WHERE tenant_id = :t AND id = $1', [p.userId]));
+  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    await redis.multi().incr(limitKey).expire(limitKey, 900).exec().catch(() => {});
+    throw bad('Current password is incorrect.');
+  }
+  const problem = checkNewPassword(newPassword, { current: currentPassword, username: user.username });
+  if (problem) throw bad(problem);
+  await withTenant(p.tenantId, async (tx) => {
+    await tx.exec('UPDATE users SET password_hash = $2, must_change_password = false, password_changed_at = now() WHERE tenant_id = :t AND id = $1', [p.userId, await bcrypt.hash(newPassword, 12)]);
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: p.userId, entityName: user.username, diffSummary: p.mustChangePassword ? 'Replaced a temporary password' : 'Changed their own password' });
+  });
+  await redis.del(limitKey).catch(() => {});
+  if (p.mustChangePassword) await revokeToken(p);          // a temporary-password session ends here; the fresh token below replaces it. A voluntary change leaves the current session alone.
+  const token = signToken({ userId: user.id, tenantId: p.tenantId, role: user.role, name: user.displayName, username: user.username });
+  return { token, ...(await sessionFor(p.tenantId, user.id)) };
 }
 
 publicAuth.post('/auth/login', async (req, res) => {
@@ -50,12 +75,16 @@ publicAuth.post('/auth/login', async (req, res) => {
     await tx.exec('UPDATE users SET last_login_at = now() WHERE tenant_id = :t AND id = $1', [user.id]);
     await audit(tx, { userId: user.id, tenantId: tenant.id, role: user.role, name: user.displayName, username: user.username, jti: '' }, req, { action: 'LOGIN', entityType: 'USER', entityId: user.id, entityName: user.username });
   });
-  const token = signToken({ userId: user.id, tenantId: tenant.id, role: user.role, name: user.displayName, username: user.username });
+  const token = signToken({ userId: user.id, tenantId: tenant.id, role: user.role, name: user.displayName, username: user.username, mustChangePassword: !!user.mustChangePassword });
   res.json({ token, ...(await sessionFor(tenant.id, user.id)) });
 });
 
 authed.get('/auth/me', async (req, res) => { const p = me(req); res.json(await sessionFor(p.tenantId, p.userId)); });
 authed.post('/auth/logout', async (req, res) => { await revokeToken(me(req)); res.json({ ok: true }); });
+authed.post('/auth/change-password', async (req, res) => {
+  const b = parse(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(1).max(100) }), req.body);
+  res.json(await changeOwnPassword(me(req), req, b.currentPassword, b.newPassword));
+});
 
 // ---------------------------------------------------------------- users (admin)
 
@@ -81,8 +110,8 @@ authed.post('/users', requires('users:write'), async (req, res) => {
   const p = me(req), b = parse(NewUser, req.body);
   const created = await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>(
-      `INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id) VALUES (:t, $1, $2, $3, $4, $5, $6) RETURNING id, username, display_name AS user_name, email, role, status, employee_id`,
-      [b.username, b.displayName, b.email ?? null, b.role, await bcrypt.hash(b.password, 12), b.employeeId ?? null]);
+      `INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id, username, display_name AS user_name, email, role, status, employee_id`,
+      [b.username, b.displayName, b.email ?? null, b.role, await bcrypt.hash(b.password, 12), b.employeeId ?? null, config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u!.id, entityName: b.username, after: { username: b.username, role: b.role } });
     return u;
   });
@@ -98,9 +127,9 @@ authed.patch('/users/:id', requires('users:write'), async (req, res) => {
     const hash = b.password ? await bcrypt.hash(b.password, 12) : null;
     const after = await tx.one<any>(
       `UPDATE users SET display_name = coalesce($2, display_name), email = CASE WHEN $3::boolean THEN $4 ELSE email END, role = coalesce($5, role),
-              status = coalesce($6, status), password_hash = coalesce($7, password_hash) WHERE tenant_id = :t AND id = $1
+              status = coalesce($6, status), password_hash = coalesce($7, password_hash), must_change_password = must_change_password OR $8::boolean WHERE tenant_id = :t AND id = $1
        RETURNING id, username, display_name AS user_name, email, role, status`,
-      [id, b.displayName ?? null, b.email !== undefined, b.email ?? null, b.role ?? null, b.status ?? null, hash]);
+      [id, b.displayName ?? null, b.email !== undefined, b.email ?? null, b.role ?? null, b.status ?? null, hash, !!hash && id !== p.userId && config.forcePasswordChange]);   // a password set by an administrator is temporary; setting your own is not
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: id, entityName: before.username, before: { role: before.role, status: before.status }, after: { role: after!.role, status: after!.status, passwordReset: !!b.password } });
     return after;
   });

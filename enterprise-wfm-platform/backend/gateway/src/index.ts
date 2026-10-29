@@ -19,6 +19,7 @@ import { poolingRoutes, rollupRoutes, sitesRoutes } from './modules/sites.ts';
 import { bidsAdmin, bidsMe, startBidTicker } from './modules/bids/routes.ts';
 import { offersAdmin, offersMe, offerPolicyRoutes, startOfferTicker } from './modules/offers/routes.ts';
 import { intraday } from './modules/intradayRoutes.ts';
+import './modules/intradayGapRoutes.ts';   // adds the gap-fix routes to the intraday router
 import { rotations } from './modules/rotations.ts';
 import { attendance } from './modules/attendance.ts';
 import { integrationsAdmin, integrationsPublic } from './modules/integrations/routes.ts';
