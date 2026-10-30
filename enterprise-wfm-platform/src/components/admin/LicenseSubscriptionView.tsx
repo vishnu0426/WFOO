@@ -138,7 +138,7 @@ export const LicenseSubscriptionView: React.FC = () => {
       </div>
 
       {notice && <Banner kind="ok">{notice}</Banner>}
-      {error && <Banner kind="error">{error}</Banner>}
+      {error && <Banner kind="err">{error}</Banner>}
 
       {/* Grace period or lifecycle warnings */}
       {lifecycle.message && (

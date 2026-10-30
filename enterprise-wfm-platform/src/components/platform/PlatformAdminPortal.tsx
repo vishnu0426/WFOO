@@ -128,20 +128,33 @@ interface PlatformAuditResponse {
 
 interface EmergencyResetLedgerItem {
   id: string;
-  tenantId: string;
-  userId: string;
-  createdByAdminEmail: string;
+  tenantId?: string;
+  tenant_id?: string;
+  userId?: string;
+  user_id?: string;
+  createdByAdminEmail?: string;
+  created_by_admin_email?: string;
   tempPasswordHint?: string;
-  expiresAt: string;
+  temp_password_hint?: string;
+  expiresAt?: string;
+  expires_at?: string;
   usedAt?: string;
-  createdAt: string;
-  username: string;
-  displayName: string;
+  used_at?: string;
+  createdAt?: string;
+  created_at?: string;
+  username?: string;
+  target_username?: string;
+  targetUsername?: string;
+  displayName?: string;
+  display_name?: string;
   email?: string;
-  role: string;
-  tenantName: string;
-  tenantCode: string;
-  tokenStatus: 'ACTIVE' | 'USED' | 'EXPIRED';
+  role?: string;
+  tenantName?: string;
+  tenant_name?: string;
+  tenantCode?: string;
+  tenant_code?: string;
+  tokenStatus?: 'ACTIVE' | 'USED' | 'EXPIRED';
+  token_status?: 'ACTIVE' | 'USED' | 'EXPIRED';
 }
 
 interface EmergencyResetResult {
@@ -234,13 +247,18 @@ interface TreeOrg {
   name: string;
   code: string;
   displayName: string;
+  display_name?: string;
   legalName: string;
+  legal_name?: string;
   contactName?: string;
+  contact_name?: string;
   contactEmail?: string;
+  contact_email?: string;
   timezone: string;
   currency: string;
   locale?: string;
   createdAt?: string;
+  created_at?: string;
   workspaceCount: number;
   adminCount: number;
   workspaces: TreeWorkspace[];
@@ -1006,17 +1024,6 @@ export const PlatformAdminPortal: React.FC = () => {
               {busy ? 'Authenticating...' : 'Sign In as Super Admin'}
             </button>
           </form>
-
-          <div className="pt-3 text-center border-t border-[#E5E5E0]">
-            <button
-              onClick={() => {
-                window.location.href = '/';
-              }}
-              className="inline-flex items-center gap-1.5 text-[11px] text-[#737373] hover:text-[#171717] hover:underline transition-colors"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" /> Return to Tenant Application
-            </button>
-          </div>
         </div>
       </div>
     );

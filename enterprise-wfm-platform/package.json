@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000",
+    "dev:superadmin": "vite --config superadmin-portal/vite.config.ts superadmin-portal --port 3001",
     "build": "vite build",
+    "build:superadmin": "vite build superadmin-portal",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",

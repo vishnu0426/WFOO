@@ -61,15 +61,6 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
           <LogIn className="w-4 h-4" />
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
-
-        <div className="pt-2 text-center border-t border-[#E5E5E0]">
-          <a
-            href="/platform"
-            className="text-[11px] text-[#737373] hover:text-[#171717] hover:underline inline-flex items-center gap-1"
-          >
-            Platform Super Admin Portal →
-          </a>
-        </div>
       </form>
     </div>
   );

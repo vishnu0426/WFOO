@@ -75,7 +75,28 @@ export default function App() {
   };
 
   if (pathname.startsWith('/platform') || location.pathname.startsWith('/platform')) {
-    return <PlatformAdminPortal />;
+    if (typeof window !== 'undefined') {
+      window.location.href = 'http://localhost:3001';
+    }
+    return (
+      <div className="min-h-screen bg-[#FAFAF8] flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-white border border-[#E5E5E0] rounded-lg shadow-xs p-6 space-y-4 text-center">
+          <div className="w-10 h-10 rounded bg-[#171717] mx-auto flex items-center justify-center text-white">
+            <ShieldAlert className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-[16px] font-semibold text-[#171717]">Redirecting to Super Admin Portal</h1>
+            <p className="text-[12px] text-[#737373] mt-1">Platform Super Admin is now hosted separately on port 3001.</p>
+          </div>
+          <a
+            href="http://localhost:3001"
+            className="w-full px-4 py-2 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold inline-flex items-center justify-center gap-2"
+          >
+            Go to http://localhost:3001 →
+          </a>
+        </div>
+      </div>
+    );
   }
 
   if (!session) return <LoginView onLogin={setSession} />;
