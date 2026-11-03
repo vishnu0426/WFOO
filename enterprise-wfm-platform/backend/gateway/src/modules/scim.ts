@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { hashPassword } from '../passwordHash.ts';
 import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import { withTenant } from '../db.ts';
+import { joinDefaultWorkspace } from './workspaceMembership.ts';
 import { ROLES, dropUserState, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { HttpError } from '../http.ts';
@@ -97,6 +98,7 @@ scim.post('/Users', wrap(async (req, res, p) => {
     const u = await tx.one<any>(
       `INSERT INTO users (tenant_id, username, display_name, email, role, status, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, false) RETURNING *`,
       [b.userName, b.displayName ?? b.userName, b.email, b.role ?? defaultRole, b.active === false ? 'DISABLED' : 'ACTIVE', await hashPassword(randomBytes(24).toString('hex'), 10), await employeeId(tx, b.employeeNumber)]);
+    await joinDefaultWorkspace(tx, u.id, u.employeeId ?? null, u.role);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u.id, entityName: b.userName, diffSummary: 'Provisioned by SCIM' });
     return withEmp(tx, u);
   });

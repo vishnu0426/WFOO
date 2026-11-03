@@ -11,7 +11,7 @@ import { OutboundBlocked, resolveSafe, safeFetch } from '../netGuard.ts';
 import net from 'node:net';
 import { Router } from 'express';
 import { z } from 'zod';
-import { raw, withTenant } from '../db.ts';
+import { raw, resolveDefaultWorkspaceId, withTenant } from '../db.ts';
 import { me, requires, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { HttpError, bad, conflict, notFound, parse } from '../http.ts';
@@ -51,7 +51,7 @@ export async function principalFromApiKey(token: string): Promise<Principal> {
   if (n === 1) await redis.expire(rk, 90).catch(() => {});
   if (n > k.rateLimit) throw new HttpError(429, 'RATE_LIMITED', `This key is limited to ${k.rateLimit} requests a minute. Try again in a moment.`);
   if (Date.now() - (lastUsed.get(k.id) ?? 0) > 60_000) { lastUsed.set(k.id, Date.now()); void raw('UPDATE api_keys SET last_used_at = now() WHERE id = $1', [k.id]).catch(() => {}); }
-  return { userId: k.id, tenantId: k.orgId, role: 'ANALYST', name: `API key: ${k.name}`, username: `apikey:${k.prefix}`, jti: `apikey:${k.id}`, scopes: k.scopes, apiKey: true };
+  return { userId: k.id, tenantId: k.orgId, workspaceId: await resolveDefaultWorkspaceId(k.orgId), role: 'ANALYST', name: `API key: ${k.name}`, username: `apikey:${k.prefix}`, jti: `apikey:${k.id}`, scopes: k.scopes, apiKey: true };
 }
 
 const keyDto = (k: any) => ({ id: k.id, name: k.name, prefix: `wfm_${k.prefix}_…`, scopes: k.scopes, status: k.status, rateLimit: k.rateLimit, expiresAt: k.expiresAt, lastUsedAt: k.lastUsedAt, createdBy: k.createdBy, createdAt: k.createdAt, revokedAt: k.revokedAt });

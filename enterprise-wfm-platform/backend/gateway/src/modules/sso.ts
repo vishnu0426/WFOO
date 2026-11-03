@@ -11,7 +11,8 @@ import { hashPassword } from '../passwordHash.ts';
 import jwt from 'jsonwebtoken';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { raw, withTenant } from '../db.ts';
+import { raw, resolveDefaultWorkspaceId, withTenant } from '../db.ts';
+import { joinDefaultWorkspace } from './workspaceMembership.ts';
 import { me, requires, signToken, ROLES } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { config } from '../config.ts';
@@ -125,7 +126,8 @@ async function resolveUser(p: Provider, claims: jwt.JwtPayload, req: Request) {
       u = await tx.one<any>(
         `INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, false) RETURNING *`,
         [login, String(claims.name ?? login), claims.email ?? (login.includes('@') ? login : null), role, await hashPassword(randomBytes(24).toString('hex'), 10), await employeeByEmail(tx, mail)]);
-      await audit(tx, { userId: u.id, tenantId: p.tenantId, role, name: u.displayName, username: u.username, jti: '' }, req, { action: 'CREATE', entityType: 'USER', entityId: u.id, entityName: login, diffSummary: `Created on first single sign-on as ${role}` });
+      await joinDefaultWorkspace(tx, u.id, u.employeeId ?? null, role);
+      await audit(tx, { userId: u.id, tenantId: p.tenantId, workspaceId: '', role, name: u.displayName, username: u.username, jti: '' }, req, { action: 'CREATE', entityType: 'USER', entityId: u.id, entityName: login, diffSummary: `Created on first single sign-on as ${role}` });
     } else if (p.syncRole && mapped && mapped !== u.role) {
       await tx.exec('UPDATE users SET role = $2 WHERE tenant_id = :t AND id = $1', [u.id, mapped]);
       u = { ...u, role: mapped };
@@ -136,7 +138,7 @@ async function resolveUser(p: Provider, claims: jwt.JwtPayload, req: Request) {
       if (emp) { await tx.exec('UPDATE users SET employee_id = $2 WHERE tenant_id = :t AND id = $1 AND employee_id IS NULL', [u.id, emp]); u = { ...u, employeeId: emp }; }
     }
     await tx.exec('UPDATE users SET last_login_at = now() WHERE tenant_id = :t AND id = $1', [u.id]);
-    await audit(tx, { userId: u.id, tenantId: p.tenantId, role: u.role, name: u.displayName, username: u.username, jti: '' }, req, { action: 'LOGIN', entityType: 'USER', entityId: u.id, entityName: u.username, diffSummary: 'Signed in with single sign-on' });
+    await audit(tx, { userId: u.id, tenantId: p.tenantId, workspaceId: u.defaultWorkspaceId ?? '', role: u.role, name: u.displayName, username: u.username, jti: '' }, req, { action: 'LOGIN', entityType: 'USER', entityId: u.id, entityName: u.username, diffSummary: 'Signed in with single sign-on' });
     return u;
   });
 }
@@ -163,7 +165,7 @@ ssoPublic.get('/callback', async (req, res) => {
     const claims = await verifyIdToken(tok.id_token, p, c.n, doc);
     const u = await resolveUser(p, claims, req);
     res.clearCookie('wfm_sso');
-    const token = signToken({ userId: u.id, tenantId: p.tenantId, role: u.role, name: u.displayName, username: u.username });
+    const token = signToken({ userId: u.id, tenantId: p.tenantId, workspaceId: u.defaultWorkspaceId ?? await resolveDefaultWorkspaceId(p.tenantId), role: u.role, name: u.displayName, username: u.username });
     res.redirect(`${baseFor(to === 'portal' && !portalUrl() ? 'app' : to)}/#sso_token=${token}`);
   } catch (e: any) { fail(res, e?.message ?? 'Sign-in failed.', to); }
 });

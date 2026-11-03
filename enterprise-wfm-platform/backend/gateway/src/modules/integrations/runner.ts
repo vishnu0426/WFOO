@@ -2,7 +2,7 @@
  * What a connector does with rows once it has them, shared by every way rows can arrive: pushed to /live by a relay, or pulled by
  * the server itself on a schedule or by "Run now". Also writes the run history the Data Feeds page shows.
  */
-import { camelize, pool, withTenant, type Tx } from '../../db.ts';
+import { camelize, pool, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { nextRunAfter } from './schedule.ts';
 import { CONFIG_SECRET_KEYS, openFields } from '../../secrets.ts';
 import { bad } from '../../http.ts';
@@ -53,7 +53,7 @@ export function spreadIntervals<R extends { time?: string; slot?: number; volume
 /** Raw vendor rows -> field map -> entity map -> routed by the preset's `writesTo` (interval history or agent state). */
 export async function applyLiveRows(connector: any, preset: Preset, input: Record<string, unknown>[], opts: { intervalMin?: number } = {}): Promise<any> {
   const id: string = connector.id;
-  return withTenant(connector.tenantId, async (tx) => {
+  return withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const mapped = input.map((r) => mapFields(r, maps));
     refuseTimestamps(mapped);
@@ -97,8 +97,8 @@ const csvCell = (v: unknown) => { const t = String(v ?? ''); return /[",\n\r]/.t
  * and by the database pull's "Load history". A queue is found through the connector's own matching first, then by name, code or alias.
  */
 export async function stageBackfillRows(connector: any, input: Record<string, unknown>[], through: string, opts: { intervalMin?: number; label?: string } = {}) {
-  const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
-  const prep = await withTenant(connector.tenantId, async (tx) => {
+  const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, workspaceId: connector.workspaceId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
+  const prep = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, connector.id);
     const entityMaps = await tx.q<any>('SELECT source_id, target_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2', [connector.id, 'queue']);
     const queueBySource = new Map(entityMaps.filter((m) => m.targetId).map((m) => [m.sourceId, m.targetId as string]));
@@ -125,7 +125,7 @@ export async function stageBackfillRows(connector: any, input: Record<string, un
   const staged = await stageImport(principal, null, StageUpload.parse({
     dataType: 'HISTORICAL_VOLUME', fileName: `${opts.label ?? `${connector.name}-backfill-${through}`}.csv`, csv: csvRows.join('\n'), intervalMinutes: opts.intervalMin ?? 15,
   }));
-  await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET backfill_status = $2, backfill_through = $3, last_received_at = now(), last_error = NULL WHERE tenant_id = :t AND id = $1', [connector.id, 'IN_PROGRESS', through]));
+  await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.exec('UPDATE integration_connectors SET backfill_status = $2, backfill_through = $3, last_received_at = now(), last_error = NULL WHERE tenant_id = :t AND id = $1', [connector.id, 'IN_PROGRESS', through]));
   return { staged, rowsMapped: csvRows.length - 1, mappingErrors: errors.slice(0, 50), mappingErrorCount: errors.length };
 }
 
@@ -136,9 +136,9 @@ export type RunKind = 'PULL' | 'FILE' | 'LIVE' | 'BACKFILL' | 'WEBHOOK';
 export interface RunSummary { rowsIn: number; rowsOk: number; rowsRejected: number; message: string; failed?: boolean; partial?: boolean }
 
 /** One row of history per delivery or poll, kept 30 days, and the connector's own "last data / last error" fields brought up to date. */
-export async function recordRun(connector: { id: string; tenantId: string }, trigger: RunTrigger, kind: RunKind, startedAt: Date, r: RunSummary) {
+export async function recordRun(connector: { id: string; tenantId: string; workspaceId: string }, trigger: RunTrigger, kind: RunKind, startedAt: Date, r: RunSummary) {
   const status = r.failed ? 'FAILED' : r.partial || r.rowsRejected > 0 ? 'PARTIAL' : 'OK';
-  await withTenant(connector.tenantId, async (tx) => {
+  await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     await tx.exec(
       `INSERT INTO integration_runs (tenant_id, connector_id, started_at, finished_at, trigger, kind, status, rows_in, rows_ok, rows_rejected, message) VALUES (:t, $1, $2, now(), $3, $4, $5, $6, $7, $8, $9)`,
       [connector.id, startedAt, trigger, kind, status, r.rowsIn, r.rowsOk, r.rowsRejected, r.message.slice(0, 500)]);
@@ -214,7 +214,7 @@ export async function testDatabaseQuery(connector: any, config: Record<string, a
   const today = isoDay(new Date());
   const { rows, columns } = await readPostgres(config, addDays(today, -2), today, 20, db);
   const problems: string[] = [];
-  const mapped = await withTenant(connector.tenantId, async (tx) => {
+  const mapped = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, connector.id);
     const queues = await tx.q<any>('SELECT id, name, code, aliases FROM queues WHERE tenant_id = :t');
     const entity = await tx.q<any>('SELECT source_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2 AND target_id IS NOT NULL', [connector.id, 'queue']);

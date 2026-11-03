@@ -5,7 +5,7 @@
  */
 import SftpClient from 'ssh2-sftp-client';
 import { resolveSafe } from '../../netGuard.ts';
-import { withTenant } from '../../db.ts';
+import { withTenant, withWorkspace } from '../../db.ts';
 import type { Principal } from '../../auth.ts';
 import { detectFormat, parseCsv, type QueueRef } from '../csv.ts';
 import { stageImport, Upload } from '../ingestionRoutes.ts';
@@ -31,8 +31,8 @@ export async function pullSftp(connector: any, config: Record<string, any>, give
   if (missing.length) throw new Error(`The SFTP connector needs ${missing.map((k) => (k === 'host' ? 'a host' : k === 'username' ? 'a username' : 'a password')).join(', ')}. Add it in the connector settings.`);
   const { dir, match } = parseRemotePath(config.remotePath);
 
-  const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
-  const queues = await withTenant(connector.tenantId, (tx) => tx.q<QueueRef>('SELECT id, name, code, aht_default, aliases FROM queues WHERE tenant_id = :t'));
+  const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, workspaceId: connector.workspaceId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
+  const queues = await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.q<QueueRef>('SELECT id, name, code, aht_default, aliases FROM queues WHERE tenant_id = :t'));
 
   try {
     const host = given ? String(config.host).trim() : (await resolveSafe(String(config.host).trim())).address;     // the address that was checked (netGuard.ts)

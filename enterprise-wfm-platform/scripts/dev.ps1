@@ -19,6 +19,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $engine = Join-Path $root 'backend\engine'
 $gateway = Join-Path $root 'backend\gateway'
 $portal = Join-Path $root 'employee-portal'
+$superadmin = Join-Path $root 'superadmin-portal'
 $mobileDir = Join-Path $root 'mobile'
 
 function Test-Port($portNum) {
@@ -126,21 +127,24 @@ foreach ($dir in @($gateway, $root, $portal)) {
 }
 if ($Mobile -and -not (Test-Path (Join-Path $mobileDir 'node_modules'))) { Push-Location $mobileDir; npm install; Pop-Location }
 
-# 4. app: stop anything left over from an earlier run, then start engine, gateway, admin front-end, employee portal, each in its own window
+# 4. app: stop anything left over from an earlier run, then start engine, gateway, admin front-end, super admin portal, employee portal, each in its own window
 Write-Host 'Stopping anything already running...' -ForegroundColor Cyan
 Stop-Port 50051 'engine'
 Stop-Port 4000 'gateway'
 Stop-Port 3000 'admin app'
-Stop-Port 3001 'employee portal'
+Stop-Port 3001 'super admin portal'
+Stop-Port 3002 'employee portal'
 if ($Mobile) { Stop-Port 8081 'Expo dev server' }
 Start-Process powershell -WorkingDirectory $engine -ArgumentList '-NoExit', '-Command', "& '$py' server.py"
 Start-Process powershell -WorkingDirectory $gateway -ArgumentList '-NoExit', '-Command', 'npm run dev'
 Start-Process powershell -WorkingDirectory $root -ArgumentList '-NoExit', '-Command', 'npm run dev'
+Start-Process powershell -WorkingDirectory $root -ArgumentList '-NoExit', '-Command', 'npm run dev:superadmin'
 Start-Process powershell -WorkingDirectory $portal -ArgumentList '-NoExit', '-Command', 'npm run dev'
 Write-Host ''
-Write-Host 'Engine, gateway, admin front-end and employee portal are starting.' -ForegroundColor Green
-Write-Host '  Admin app:       http://localhost:3000' -ForegroundColor Green
-Write-Host '  Employee portal: http://localhost:3001' -ForegroundColor Green
+Write-Host 'Engine, gateway, admin front-end, super admin portal and employee portal are starting.' -ForegroundColor Green
+Write-Host '  Tenant Admin app:   http://localhost:3000' -ForegroundColor Green
+Write-Host '  Super Admin portal: http://localhost:3001' -ForegroundColor Green
+Write-Host '  Employee portal:    http://localhost:3002' -ForegroundColor Green
 Write-Host 'First start prints the administrator password once in the gateway window (unless BOOTSTRAP_ADMIN_PASSWORD is set).'
 
 if ($Mobile) {

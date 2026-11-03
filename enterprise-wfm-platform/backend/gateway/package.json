@@ -9,7 +9,8 @@
     "start": "tsx --env-file=../.env src/index.ts",
     "check": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts",
-    "test:password": "tsx --test test/forced/passwordChange.test.ts"
+    "test:password": "tsx --test test/forced/passwordChange.test.ts",
+    "create-superadmin": "tsx --env-file=../.env scripts/create-superadmin.ts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.0",

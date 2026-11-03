@@ -11,7 +11,7 @@ import { conflict } from '../http.ts';
 import { dropCache } from '../infra.ts';
 
 export interface Departure { futureShifts: number; schedules: number; pendingTimeOff: number; openSwaps: number; reports: number; logins: number; covers: number }
-const SYSTEM = (tenantId: string): Principal => ({ userId: null as unknown as string, tenantId, role: 'WFM_ADMIN', name: 'System', username: 'system', jti: '' });
+const SYSTEM = (tenantId: string): Principal => ({ userId: null as unknown as string, tenantId, workspaceId: '', role: 'WFM_ADMIN', name: 'System', username: 'system', jti: '' });
 
 /** What recording this departure would touch, counted without changing anything. */
 export async function departureImpact(tx: Tx, employeeId: string, lastDay: string): Promise<Departure & { leads: string[] }> {

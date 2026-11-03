@@ -15,7 +15,7 @@ import { Router } from 'express';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { checkPassword, hashPassword } from '../../passwordHash.ts';
 import { z } from 'zod';
-import { raw, withTenant, type Tx } from '../../db.ts';
+import { raw, withTenant, withWorkspace, type Tx } from '../../db.ts';
 import { me, requires, type Principal } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { HttpError, bad, conflict, notFound, parse } from '../../http.ts';
@@ -343,7 +343,7 @@ async function checkConnectorTargets(config: Record<string, string>) {
 }
 
 async function connectorByKey(id: string, presented: string) {
-  const [c] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
+  const [c] = await raw<any>('SELECT * FROM wfm.integration_connector_lookup($1)', [id]);
   if (!c || !c.apiKeyHash) return null;
   return (await keyMatches(presented, c.apiKeyHash)) ? c : null;
 }
@@ -405,14 +405,14 @@ integrationsPublic.post('/:id/live', async (req, res) => {
   });
   await recordRun(connector, 'PUSH', 'LIVE', started, summariseLive(b.rows.length, out)).catch(() => {});
   // kept for the drag-and-drop field mapper regardless of whether this row mapped cleanly -- a real sample beats a guess
-  await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(b.rows[0])]));
+  await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(b.rows[0])]));
   res.json(out);
 });
 
 /** Cloud-to-cloud webhook receiver: no connector-hosted machine, HMAC-signed by the sender against the stored secret. */
 integrationsPublic.post('/:id/webhook', async (req, res) => {
   const id = parse(uuid, req.params.id);
-  const [connector] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
+  const [connector] = await raw<any>('SELECT * FROM wfm.integration_connector_lookup($1)', [id]);
   if (!connector || !connector.webhookSecret) throw notFound('Connector');
   const signingKey = open(connector.webhookSecret);
   if (!signingKey) throw new HttpError(500, 'SECRET_UNREADABLE', 'This connector\'s signing secret cannot be read with the current key. Make the connector again or restore the key.');
@@ -424,7 +424,7 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
 
   const preset = presetById(connector.preset);
   const started = new Date();
-  const out = await withTenant(connector.tenantId, async (tx) => {
+  const out = await withWorkspace(connector.tenantId, connector.workspaceId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const m = mapFields(req.body, maps);
     if (preset?.writesTo === 'agent_state' && m.employeeNumber && m.state) {
@@ -436,6 +436,6 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
     return { accepted: 0, errors: [{ index: 0, message: 'Payload did not map to a known destination' }] };
   });
   await recordRun(connector, 'PUSH', 'WEBHOOK', started, summariseLive(1, out)).catch(() => {});
-  await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(req.body ?? {})]));
+  await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(req.body ?? {})]));
   res.json(out);
 });

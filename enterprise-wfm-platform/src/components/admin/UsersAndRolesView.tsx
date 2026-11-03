@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Plus, X } from 'lucide-react';
-import { api } from '../../services/api';
+import { api, LicenseUsageReport } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select } from '../forecasting/ui';
@@ -38,6 +38,9 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
   const [tick, setTick] = useState(0);
   const users = useApi<WUser[]>('/users', [tick]);
   const rbac = useApi<Matrix>('/rbac/matrix', [tick]);
+  const licenseReq = useApi<LicenseUsageReport>('/license', [tick]);
+  const userCap = licenseReq.data?.capacity?.users;
+  const atUserCap = !!userCap && userCap.remaining <= 0;
   const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false);
   const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); setNotice(''); try { await fn(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
 
@@ -106,7 +109,40 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
       {tab === 'USERS' ? (
         <div className="space-y-4">
           <Card title="User directory" sub="People who can sign in to the web app. Agents get a separate mobile-app login from Workforce › Employees."
-            actions={canWrite && <Btn variant="primary" onClick={() => setShowNew((s) => !s)} disabled={busy}><Plus className="w-3.5 h-3.5" />New user</Btn>}>
+            actions={canWrite && <>
+              {userCap && (
+                <span
+                  className={`px-2.5 py-1 rounded text-[12px] font-medium border flex items-center gap-1.5 ${
+                    atUserCap
+                      ? 'bg-[#FEF2F2] border-[#FCA5A5] text-[#991B1B]'
+                      : userCap.percentage >= 85
+                      ? 'bg-[#FFFBEB] border-[#FCD34D] text-[#92400E]'
+                      : 'bg-[#FAFAF8] border-[#E5E5E0] text-[#525252]'
+                  }`}
+                  title={`License allows ${userCap.max} active users. ${userCap.remaining} seats remaining.`}
+                >
+                  <span className="font-semibold">{userCap.current} / {userCap.max}</span> user accounts
+                  {atUserCap ? (
+                    <span className="font-bold uppercase text-[10px] tracking-wide text-[#DC2626]">(Limit Reached)</span>
+                  ) : (
+                    <span className="text-[11px] text-[#737373]">({userCap.remaining} left)</span>
+                  )}
+                </span>
+              )}
+              <Btn
+                variant={atUserCap ? 'secondary' : 'primary'}
+                onClick={() => {
+                  if (atUserCap) {
+                    setError(`User login capacity reached. Your subscription allows ${userCap.max} active user logins (currently ${userCap.current}). Upgrade your license to add more accounts.`);
+                    return;
+                  }
+                  setShowNew((s) => !s);
+                }}
+                disabled={busy}
+              >
+                <Plus className="w-3.5 h-3.5" />New user
+              </Btn>
+            </>}>
             {showNew && (
               <div className="mb-4 p-3 rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
                 <Field label="Username"><Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="j.doe" /></Field>

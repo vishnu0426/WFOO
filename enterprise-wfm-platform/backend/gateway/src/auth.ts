@@ -8,12 +8,41 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { HttpError } from './http.ts';
 import { cached, key, redis } from './infra.ts';
-import { withTenant } from './db.ts';
+import { resolveDefaultWorkspaceId, scopeStore, withTenant, raw } from './db.ts';
+
+export const PERMISSION_TO_MODULE: Record<string, string> = {
+  'forecast:read': 'FORECASTING',
+  'forecast:create': 'FORECASTING',
+  'forecast:adjust': 'FORECASTING',
+  'forecast:submit': 'FORECASTING',
+  'forecast:approve': 'FORECASTING',
+  'forecast:publish': 'FORECASTING',
+  'forecast:delete': 'FORECASTING',
+  'schedule:read': 'SCHEDULING',
+  'schedule:generate': 'SCHEDULING',
+  'schedule:edit': 'SCHEDULING',
+  'schedule:approve': 'SCHEDULING',
+  'schedule:publish': 'SCHEDULING',
+  'intraday:read': 'INTRADAY',
+  'intraday:act': 'INTRADAY',
+  'self:use': 'EMPLOYEE_SELF_SERVICE',
+};
+
+export async function getTenantEnabledModules(tenantId: string): Promise<string[]> {
+  const rows = await raw<any>(
+    `SELECT DISTINCT lm.module_code
+     FROM wfm.license_modules lm
+     JOIN wfm.licenses l ON l.id = lm.license_id
+     WHERE l.tenant_id = $1 AND l.status IN ('ACTIVE', 'GRACE_PERIOD', 'PROVISIONING') AND lm.enabled = true`,
+    [tenantId]
+  ).catch(() => []);
+  return rows.map((r: any) => r.moduleCode || r.module_code).filter((m: any) => typeof m === 'string' && m.length > 0);
+}
 
 export const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean; /** an API key, not a person: it holds exactly these permissions and nothing its role would give */ scopes?: string[]; apiKey?: boolean }
+export interface Principal { userId: string; tenantId: string; workspaceId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean; /** an API key, not a person: it holds exactly these permissions and nothing its role would give */ scopes?: string[]; apiKey?: boolean }
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -27,6 +56,7 @@ const ALL = [
   'forecast:read', 'forecast:create', 'forecast:adjust', 'forecast:submit', 'forecast:approve', 'forecast:publish', 'forecast:delete',
   'workforce:read', 'workforce:write', 'schedule:read', 'schedule:generate', 'schedule:edit', 'schedule:approve', 'schedule:publish',
   'intraday:read', 'intraday:act', 'audit:read', 'users:read', 'users:write', 'self:use', 'requests:approve',
+  'organization:read', 'organization:write', 'workspace:read', 'workspace:create', 'workspace:write', 'workspace:members',
 ] as const;
 export type Permission = (typeof ALL)[number];
 export const ALL_PERMISSIONS: readonly string[] = ALL;
@@ -45,7 +75,7 @@ export const DEFAULT_PERMISSIONS: Record<Role, readonly string[]> = {
 };
 
 export const signToken = (p: Omit<Principal, 'jti'>): string =>
-  jwt.sign({ tid: p.tenantId, role: p.role, name: p.name, username: p.username, ...(p.mustChangePassword ? { mcp: true } : {}) }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
+  jwt.sign({ tid: p.tenantId, wid: p.workspaceId, role: p.role, name: p.name, username: p.username, ...(p.mustChangePassword ? { mcp: true } : {}) }, config.jwtSecret, { subject: p.userId, expiresIn: config.jwtTtl as jwt.SignOptions['expiresIn'], jwtid: randomUUID() });
 
 /** The only requests a temporary-password session may make: see who it is, sign out, and choose a new password. */
 const ALLOWED_WHILE_TEMPORARY = /^\/api\/v1\/auth\/(me|logout|change-password)(\/|\?|$)/;
@@ -60,19 +90,26 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     req.principal = p;
     // a temporary password only opens the way to choosing a new one
     if (p.mustChangePassword && !ALLOWED_WHILE_TEMPORARY.test(req.originalUrl)) throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Choose a new password before you continue.');
-    next();
+    scopeStore.run({ tenantId: p.tenantId, orgId: p.tenantId, workspaceId: p.workspaceId }, next);
   } catch (e) { next(e instanceof HttpError ? e : new HttpError(401, 'UNAUTHENTICATED', 'Invalid or expired session')); }
 }
 
 export async function principalFromToken(token: string): Promise<Principal> {
   const d = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
+  if (d.aud === 'platform' || !d.tid || !d.role) {
+    throw new HttpError(401, 'UNAUTHENTICATED', 'Platform tokens cannot be used on tenant routes');
+  }
   if (await redis.get(`wfm:denied:${d.jti}`).catch(() => null)) throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
+  const workspaceId = typeof d.wid === 'string' && d.wid ? d.wid : await resolveDefaultWorkspaceId(d.tid);
   // a token outlives the account it was issued to: look at the account itself (a few seconds of cache) so disabling someone, changing
   // their role or making them choose a new password takes effect on the session they already have
-  const st = await cached<{ status: string; role: Role; mcp: boolean } | null>(key(String(d.tid), 'userstate', String(d.sub)), 5, () =>
-    withTenant(String(d.tid), (tx) => tx.one<any>('SELECT status, role, must_change_password AS mcp FROM users WHERE tenant_id = :t AND id = $1', [String(d.sub)])));
+  const st = await cached<{ status: string; role: Role; mcp: boolean; roles: Record<string, Role> } | null>(key(String(d.tid), 'userstate', String(d.sub)), 5, () =>
+    withTenant(String(d.tid), (tx) => tx.one<any>(
+      `SELECT u.status, u.role, u.must_change_password AS mcp,
+              coalesce((SELECT jsonb_object_agg(m.workspace_id::text, m.role) FROM workspace_members m WHERE m.tenant_id = u.tenant_id AND m.user_id = u.id AND m.status = 'ACTIVE'), '{}'::jsonb) AS roles
+       FROM users u WHERE u.tenant_id = :t AND u.id = $1`, [String(d.sub)])));
   if (!st || st.status !== 'ACTIVE') throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
-  return { userId: String(d.sub), tenantId: d.tid, role: st.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: st.mcp === true };
+  return { userId: String(d.sub), tenantId: d.tid, workspaceId, role: st.roles?.[workspaceId] ?? st.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: st.mcp === true };
 }
 
 /** Forget the cached account state so a change (disable, role, password reset) applies to open sessions at once. */
@@ -85,8 +122,24 @@ export async function revokeToken(p: Principal): Promise<void> {
 }
 
 export async function permissionsFor(tenantId: string, role: Role): Promise<Set<string>> {
-  const list = await cached<string[]>(key(tenantId, 'perms', role), 600, () =>
-    withTenant(tenantId, async (tx) => (await tx.q<{ permission: string }>('SELECT permission FROM role_permissions WHERE tenant_id = :t AND role = $1', [role])).map((r) => r.permission)));
+  const list = await cached<string[]>(key(tenantId, 'perms', role), 600, async () => {
+    const rawPerms = await withTenant(tenantId, async (tx) =>
+      (await tx.q<{ permission: string }>('SELECT permission FROM role_permissions WHERE tenant_id = :t AND role = $1', [role])).map((r) => r.permission)
+    );
+
+    const [hasLic] = await raw<any>('SELECT id FROM wfm.licenses WHERE tenant_id = $1', [tenantId]).catch(() => []);
+    if (!hasLic) {
+      return rawPerms;
+    }
+
+    const enabledModules = await getTenantEnabledModules(tenantId);
+    const enabledSet = new Set(enabledModules);
+
+    return rawPerms.filter((p) => {
+      const requiredModule = PERMISSION_TO_MODULE[p];
+      return !requiredModule || enabledSet.has(requiredModule);
+    });
+  });
   return new Set(list);
 }
 

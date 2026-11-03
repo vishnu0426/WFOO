@@ -1,7 +1,7 @@
 # WFM platform, single server, host networking: every container shares the host network stack, so all
 # services reach each other on 127.0.0.1 and the ports below are the real host ports.
 #
-#   admin web app :3000     employee portal :3001     gateway API :4000
+#   admin web app :3000     super admin portal :3001     employee portal :3002     gateway API :4000
 #   engine gRPC :50051 (loopback)   redis :6379 (loopback)   nats :4222 (loopback)
 #
 # Needs Linux with Docker Engine. Host networking does not work on Docker Desktop for Windows/Mac by default.

@@ -153,9 +153,9 @@ policy.put('/scheduling-policy', requires('config:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await loadPolicy(tx);
     const r = await tx.one<any>(
-      `INSERT INTO scheduling_policy (tenant_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors, defaults)
-       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb))
-       ON CONFLICT (tenant_id) DO UPDATE SET min_rest_hours = $1, max_weekly_hours = $2, max_consecutive_days = $3, max_days_per_week = $4, weights = $5, updated_by = $6, adherence_grace_seconds = $7, timeline_colors = $8,
+      `INSERT INTO scheduling_policy (tenant_id, workspace_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors, defaults)
+       VALUES (:t, :w, $1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb))
+       ON CONFLICT (tenant_id, workspace_id) DO UPDATE SET min_rest_hours = $1, max_weekly_hours = $2, max_consecutive_days = $3, max_days_per_week = $4, weights = $5, updated_by = $6, adherence_grace_seconds = $7, timeline_colors = $8,
          defaults = coalesce($9::jsonb, scheduling_policy.defaults), updated_at = now()
        RETURNING *`,
       [b.minRestHours, b.maxWeeklyHours, b.maxConsecutiveDays, b.maxDaysPerWeek, JSON.stringify(b.weights), p.name, b.adherenceGraceSeconds, JSON.stringify(b.timelineColors), b.scheduling ? JSON.stringify({ ...before.scheduling, ...b.scheduling }) : null]);

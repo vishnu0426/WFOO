@@ -15,6 +15,8 @@ import { closeAll, connectNats, consume, engine, engineReady, startEngineDiscove
 import { authenticate } from './auth.ts';
 import { HttpError, errorHandler } from './http.ts';
 import { authed, publicAuth } from './modules/authRoutes.ts';
+import { platform as platformRoutes } from './modules/platform/routes.ts';
+import { organization as organizationRoutes, workspaces as workspaceRoutes } from './modules/workspaceRoutes.ts';
 import { config as configRoutes } from './modules/configRoutes.ts';
 import { groupAdmin } from './modules/groupAdminRoutes.ts';
 import { policy as policyRoutes } from './modules/policyRoutes.ts';
@@ -51,6 +53,7 @@ import { reports, startReportTimer, stopReportTimer } from './modules/reports.ts
 import { forecast } from './modules/forecast/routes.ts';
 import { startLearningTicker } from './modules/forecast/learning.ts';
 import { auditRoutes } from './modules/auditRoutes.ts';
+import { license as licenseRoutes } from './modules/licensing/routes.ts';
 import { attachWebSocket } from './ws.ts';
 
 // Nothing in this process is allowed to take the whole service down. A failed background task is logged and the service carries on; a storm of uncaught
@@ -128,12 +131,16 @@ const api = Router();
 // Every API answer carries an ETag, so a browser can ask "has this changed?" and get a one-line "no" instead of the whole body. `no-cache` means exactly that: keep a copy, but
 // check with us before using it (never serve data that was edited a moment ago from the browser's own cache). Lists the code itself defines override this below.
 api.use((req, res, next) => { if (req.method === 'GET' || req.method === 'HEAD') res.setHeader('Cache-Control', 'private, no-cache'); next(); });
+api.use('/platform', platformRoutes);          // platform / super admin routes (own authentication)
 api.use(publicAuth);                       // sign-in is the only unauthenticated route
 api.use('/auth/sso', ssoPublic);            // sign in through the organisation's identity provider
 api.use('/integrations', integrationsPublic); // connector-key/webhook-signed ingest: a relay script or a vendor webhook, no user session
 api.use(authenticate);
 api.use(authed);                           // me, logout, users, RBAC matrix
 api.use('/config', groupAdmin);            // group summary, impact, members, history, clone, file import (before the plain routes: /groups/summary is not an id)
+api.use('/license', licenseRoutes);        // licensing, subscription, and capacity governance
+api.use('/organization', organizationRoutes); // organisation profile
+api.use('/workspaces', workspaceRoutes);   // workspaces and their members
 api.use('/config', configRoutes);          // WFM groups, queues
 api.use('/config', sitesRoutes);            // sites, required skills per group, the pool they define
 api.use('/config', policyRoutes);          // activity definitions, scheduling policy

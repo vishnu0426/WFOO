@@ -9,11 +9,13 @@ import { z } from 'zod';
 import { raw, withTenant, type Tx } from '../db.ts';
 import { signInLink, welcomeMessage } from './orgLogin.ts';
 import { dropUserState, me, requires, type Principal } from '../auth.ts';
+import { joinDefaultWorkspace } from './workspaceMembership.ts';
 import { audit } from '../audit.ts';
 import { changeOwnPassword } from './authRoutes.ts';
 import { approvalAudience, waitingFor } from './approvals.ts';
 import { config } from '../config.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
+import { assertCapacity } from './licensing/service.ts';
 import { dropCache, publish } from '../infra.ts';
 import { notify, usersOf } from '../notify.ts';
 import { addDays, loadGroup, todayIn } from './forecast/service.ts';
@@ -39,8 +41,8 @@ export interface Policy {
   supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
 }
 export async function loadSelfPolicy(tx: Tx): Promise<Policy> {
-  await tx.exec('INSERT INTO self_service_policy (tenant_id) VALUES (:t) ON CONFLICT (tenant_id) DO NOTHING');
-  const r = (await tx.one<any>('SELECT * FROM self_service_policy WHERE tenant_id = :t'))!;
+  await tx.exec('INSERT INTO self_service_policy (tenant_id, workspace_id) VALUES (:t, :w) ON CONFLICT (tenant_id, workspace_id) DO NOTHING');
+  const r = (await tx.one<any>('SELECT * FROM self_service_policy WHERE tenant_id = :t AND workspace_id = :w'))!;
   return { timeOffAutoApprove: r.timeOffAutoApprove, timeOffMinNoticeDays: r.timeOffMinNoticeDays, timeOffMaxOffPercent: r.timeOffMaxOffPercent, entitlements: r.entitlements ?? {}, agentCanEditAvailability: r.agentCanEditAvailability,
     swapAutoApprove: r.swapAutoApprove, swapMaxExtraGapSlots: r.swapMaxExtraGapSlots, swapMinNoticeHours: r.swapMinNoticeHours, swapBoardHours: r.swapBoardHours,
     accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false };
@@ -124,12 +126,14 @@ selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
   const b = parse(z.object({ employeeId: uuid, username: z.string().min(3).max(60).regex(/^[a-zA-Z0-9._-]+$/).optional(), password: z.string().min(8).max(100).optional(), role: z.enum(['AGENT', 'SUPERVISOR_RTA', 'SCHEDULER']).default('AGENT') }), req.body);
   const password = b.password ?? randomBytes(9).toString('base64url');
   const out = await withTenant(p.tenantId, async (tx) => {
+    await assertCapacity(tx, p.tenantId, 'USERS', 1);
     const e = await tx.one<any>('SELECT id, employee_number, first_name, last_name, email FROM employees WHERE tenant_id = :t AND id = $1', [b.employeeId]);
     if (!e) throw notFound('Employee');
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND employee_id = $1', [b.employeeId])) throw conflict('This employee already has a login');
     const username = b.username ?? String(e.employeeNumber).toLowerCase().replace(/[^a-z0-9._-]+/g, '');
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND lower(username) = lower($1)', [username])) throw conflict(`The username "${username}" is taken. Choose another.`);
     const u = await tx.one<any>('INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id', [username, `${e.firstName} ${e.lastName}`, e.email, b.role, await hashPassword(password, 12), b.employeeId, config.forcePasswordChange]);
+    await joinDefaultWorkspace(tx, u!.id, b.employeeId, b.role);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u!.id, entityName: username, after: { username, role: b.role, employeeId: b.employeeId } });
     return { userId: u!.id, username };
   });

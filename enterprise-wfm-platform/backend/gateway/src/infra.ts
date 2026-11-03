@@ -14,6 +14,7 @@ import {
 import grpc from '@grpc/grpc-js';
 import protoLoader from '@grpc/proto-loader';
 import { config } from './config.ts';
+import { currentScope } from './db.ts';
 
 // ---------------------------------------------------------------- Redis
 
@@ -119,8 +120,10 @@ function publishRaw(subj: string, data: Uint8Array) {
 }
 export function publish(tenantId: string, parts: string[], payload: unknown): void {
   const s = subject(tenantId, ...parts);
+  const workspaceId = currentScope()?.workspaceId;
+  const body = workspaceId && payload && typeof payload === 'object' && !Array.isArray(payload) ? { ...payload, workspaceId } : payload;
   let data: Uint8Array;
-  try { data = sc.encode(JSON.stringify(payload)); } catch (e) { console.error('[nats] cannot encode', s, (e as Error).message); return; }
+  try { data = sc.encode(JSON.stringify(body)); } catch (e) { console.error('[nats] cannot encode', s, (e as Error).message); return; }
   if (!natsReady()) { if (backlog.length < MAX_BACKLOG) backlog.push({ subject: s, data }); else warn('[nats] event bus is down and the backlog is full; dropping events'); return; }
   publishRaw(s, data);
 }
