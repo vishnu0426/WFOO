@@ -157,14 +157,14 @@ export const DayTimeline: React.FC<{
         <span className="ml-auto flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#D7EEDF]" />On target</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F6E3B4]" />Over</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F8D4D4]" />Short</span></span>
       </div>
       {rows.length === 0 ? (
-        <div className="border border-[#E5E5E0] rounded-lg p-6 text-[13px] text-[#737373]">
+        <div className="border border-[#E5E5E0] rounded-lg p-6 text-[13px] text-[#6B6B6B]">
           {problem !== 'ALL' || focus ? 'Nobody matches this filter on this day.' : 'Nobody is scheduled on this day.'}
         </div>
       ) : (
         <div className="border border-[#E5E5E0] rounded-lg bg-white overflow-auto max-h-[70vh]">
           <div style={{ minWidth: LEFT + track }}>
             <div className="flex sticky top-0 z-20 bg-[#FAFAF8] border-b border-[#E5E5E0] h-7">
-              <div className="sticky left-0 z-30 bg-[#FAFAF8] shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex items-center text-[11px] font-semibold uppercase tracking-wider text-[#737373]" style={{ width: LEFT }}>Time (local)</div>
+              <div className="sticky left-0 z-30 bg-[#FAFAF8] shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex items-center text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]" style={{ width: LEFT }}>Time (local)</div>
               <div className="relative h-full" style={{ width: track }}>
                 {ticks.map((q) => <span key={q} className="absolute top-1.5 text-[11px] font-mono text-[#525252] -translate-x-1/2" style={{ left: x(q) }}>{hm(q)}</span>)}
               </div>
@@ -174,7 +174,7 @@ export const DayTimeline: React.FC<{
               <div className="sticky left-0 z-30 bg-white shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 py-1.5 flex flex-col justify-center" style={{ width: LEFT }}
                 onMouseEnter={show('Staffing net', ['Scheduled against needed, per 15 minutes', 'Green: on target · amber: over · red: short'])} onMouseLeave={hide}>
                 <div className="text-[12px] font-semibold text-[#171717]">Staffing net</div>
-                <div className="text-[11px] text-[#737373]">scheduled / needed</div>
+                <div className="text-[11px] text-[#6B6B6B]">scheduled / needed</div>
               </div>
               <div className="relative h-full" style={{ width: track }}>
                 {Array.from({ length: hi - lo }, (_, i) => lo + i).map((q) => {
@@ -203,8 +203,8 @@ export const DayTimeline: React.FC<{
                 <div key={s.id} className={`flex border-b border-[#F0F0EC] last:border-0 ${isSel ? 'bg-[#EEF3FA]' : 'bg-white'} hover:bg-[#F3F6FB]`} style={{ height: ROW_H }}>
                   <div className="sticky left-0 z-10 bg-inherit shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex flex-col justify-center cursor-pointer min-w-0" style={{ width: LEFT }}
                     onClick={() => onOpen(s.employeeId)}>
-                    <div className={`text-[13px] truncate hover:underline ${flagged ? 'text-[#C84A4A] font-semibold' : 'font-semibold text-[#171717]'}`}>{s.employeeName}</div>
-                    <div className="text-[11px] text-[#737373] truncate">{s.employeeNumber} · {person?.teamName ?? 'No team'} · {paid}h</div>
+                    <div className={`text-[13px] truncate hover:underline ${flagged ? 'text-[#BC3F3F] font-semibold' : 'font-semibold text-[#171717]'}`}>{s.employeeName}</div>
+                    <div className="text-[11px] text-[#6B6B6B] truncate">{s.employeeNumber} · {s.teamName ?? person?.teamName ?? 'No team'} · {paid}h</div>
                   </div>
 
                   <div className="relative h-full" style={{ width: track }} onClick={() => onSelect(s)}>
@@ -261,8 +261,8 @@ export const DayTimeline: React.FC<{
                                 <button key={t} className={`px-2 py-1 rounded text-[11px] border ${t === a.type ? 'bg-[#171717] text-white border-[#171717]' : 'border-[#E5E5E0]'}`}
                                   onClick={() => withActs(s, acts.map((x, j) => (j === i ? { ...x, type: t } : x)), `changing it to ${ACT[t].label.toLowerCase()}`)}>{ACT[t].label}</button>
                               ))}
-                              <button className="px-2 py-1 rounded text-[11px] text-[#C84A4A] border border-[#E5E5E0]" onClick={() => withActs(s, acts.filter((_, j) => j !== i), `removing the ${st.label.toLowerCase()}`)}>Remove</button>
-                              <button className="px-2 py-1 rounded text-[11px] text-[#737373] ml-auto" onClick={() => setEditing(null)}>Close</button>
+                              <button className="px-2 py-1 rounded text-[11px] text-[#BC3F3F] border border-[#E5E5E0]" onClick={() => withActs(s, acts.filter((_, j) => j !== i), `removing the ${st.label.toLowerCase()}`)}>Remove</button>
+                              <button className="px-2 py-1 rounded text-[11px] text-[#6B6B6B] ml-auto" onClick={() => setEditing(null)}>Close</button>
                             </div>
                           )}
                         </div>

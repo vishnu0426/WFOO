@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { checkTarget, OutboundBlocked } from '../../netGuard.ts';
 /**
  * Integration Station: connector CRUD (admin, authenticated) plus the ingest endpoints a relay-family script or a
  * webhook-sending vendor calls (public, authenticated by the connector's own key/secret instead of a user session --
@@ -8,20 +10,25 @@
  * like a manual CSV upload), `ingestLive` for the live interval feed, `ingestAgentEvents` for RTA state, or a
  * direct employee upsert for HRMS. Nothing here bypasses the review a human's own import already goes through.
  */
+import { CONFIG_SECRET_KEYS, encrypt, lockFields, open } from '../../secrets.ts';
 import { Router } from 'express';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import bcrypt from 'bcryptjs';
+import { checkPassword, hashPassword } from '../../passwordHash.ts';
 import { z } from 'zod';
 import { raw, withTenant, type Tx } from '../../db.ts';
 import { me, requires, type Principal } from '../../auth.ts';
 import { audit } from '../../audit.ts';
-import { bad, conflict, notFound, parse } from '../../http.ts';
+import { HttpError, bad, conflict, notFound, parse } from '../../http.ts';
 import { stageImport, Upload as StageUpload } from '../ingestionRoutes.ts';
 import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
 import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { PRESETS, presetById, presetsByCategory, configSchemaFor, type Category } from './presets.ts';
 import { mapFields, suggestEntityMatches, type FieldMap } from './mapping.ts';
 import { startSubscription, stopSubscription } from './natsSubscriber.ts';
+import { applyLiveRows, loadFieldMaps, pullSupport, recordRun, runConnector, stageBackfillRows, summariseLive, testDatabaseQuery } from './runner.ts';
+import { checkPresetConfig } from './pullRules.ts';
+import { checkSchedule, firstRunAt, type Schedule } from './schedule.ts';
+import { openFields } from '../../secrets.ts';
 
 export const integrationsAdmin = Router();
 export const integrationsPublic = Router();
@@ -31,10 +38,11 @@ const connectorDto = (c: any, memberCount?: number) => ({
   id: c.id, wfmGroupId: c.wfmGroupId, category: c.category, method: c.method, preset: c.preset, name: c.name, status: c.status,
   config: redactConfig(c.config), lastReceivedAt: c.lastReceivedAt, lastError: c.lastError, lastSample: c.lastSample ?? null, connectedAt: c.connectedAt ?? null,
   backfillStatus: c.backfillStatus, backfillThrough: c.backfillThrough, hasWebhookSecret: !!c.webhookSecret, createdBy: c.createdBy, createdAt: c.createdAt,
+  scheduleMin: c.scheduleMin ?? null, scheduleAt: c.scheduleAt ?? null, scheduleDays: c.scheduleDays ?? null, nextRunAt: c.nextRunAt ?? null, ...pullSupport(presetById(c.preset), c.config ?? {}),
 });
 /** Secrets go into `config` (client secrets, DB creds where present) but never come back out once saved. */
 function redactConfig(config: Record<string, any>) {
-  const SECRET_KEYS = ['clientSecret', 'apiKey', 'password', 'isuPassword', 'secretAccessKey', 'privateKeyPem', 'refreshToken', 'userApiKey', 'customerApiKey', 'natsPass'];
+  const SECRET_KEYS = CONFIG_SECRET_KEYS;
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(config ?? {})) out[k] = SECRET_KEYS.includes(k) && v ? '••••••••' : v;
   return out;
@@ -43,9 +51,10 @@ function redactConfig(config: Record<string, any>) {
 // ---------------------------------------------------------------- catalogue
 
 integrationsAdmin.get('/catalog', requires('config:read'), async (_req, res) => {
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=600');   // defined by the code, changes only with a release
   const byCategory: Record<string, unknown> = {};
   for (const cat of ['ACD', 'CRM', 'HRMS', 'DATABASE', 'ONPREM', 'SFTP'] as Category[]) {
-    byCategory[cat] = presetsByCategory(cat).map((p) => ({ id: p.id, label: p.label, method: p.method, authType: p.authType, fields: p.fields, note: p.note ?? null, writesTo: p.writesTo }));
+    byCategory[cat] = presetsByCategory(cat).map((p) => ({ id: p.id, label: p.label, method: p.method, authType: p.authType, fields: p.fields, note: p.note ?? null, writesTo: p.writesTo, canPull: pullSupport(p, {}).canPull }));
   }
   res.json(byCategory);
 });
@@ -66,9 +75,28 @@ integrationsAdmin.get('/:id', requires('config:read'), async (req, res) => {
   res.json(connectorDto(c));
 });
 
+
+const ScheduleFields = {
+  scheduleMin: z.number().int().min(5).max(1440).nullable().optional(),
+  scheduleAt: z.string().regex(/^\d{2}:\d{2}$/, 'The time must look like 02:00').nullable().optional(),
+  scheduleDays: z.array(z.number().int().min(1).max(7)).max(7).nullable().optional(),
+};
+/** The whole schedule is sent together: an interval (scheduleMin) or a daily time (scheduleAt), and optionally weekdays. scheduleMin: null clears it. */
+function scheduleFromBody(b: { scheduleMin?: number | null; scheduleAt?: string | null; scheduleDays?: number[] | null }): { touched: boolean; schedule: Schedule | null } {
+  if (b.scheduleMin === undefined && b.scheduleAt === undefined && b.scheduleDays === undefined) return { touched: false, schedule: null };
+  const at = b.scheduleAt ?? null;
+  const everyMin = at ? 1440 : b.scheduleMin ?? null;
+  if (everyMin === null) return { touched: true, schedule: null };
+  const schedule: Schedule = { everyMin, at, days: b.scheduleDays && b.scheduleDays.length < 7 ? [...new Set(b.scheduleDays)].sort((x, y) => x - y) : null };
+  const err = checkSchedule(schedule);
+  if (err) throw bad(err);
+  return { touched: true, schedule };
+}
+const tzOf = (tx: Tx) => tx.one<{ timezone: string }>('SELECT timezone FROM tenants WHERE id = :t').then((r) => r?.timezone ?? 'UTC');
+
 const CreateBody = z.object({
   category: z.enum(['ACD', 'CRM', 'HRMS', 'DATABASE', 'ONPREM', 'SFTP']), preset: z.string().min(1), name: z.string().trim().min(1).max(100),
-  wfmGroupId: uuid.nullable().optional(), config: z.record(z.string(), z.string()).default({}),
+  wfmGroupId: uuid.nullable().optional(), config: z.record(z.string(), z.string()).default({}), ...ScheduleFields,
 });
 
 integrationsAdmin.post('/', requires('config:write'), async (req, res) => {
@@ -76,6 +104,8 @@ integrationsAdmin.post('/', requires('config:write'), async (req, res) => {
   const preset = presetById(b.preset);
   if (!preset || preset.category !== b.category) throw bad(`Unknown preset '${b.preset}' for category ${b.category}`);
   parse(configSchemaFor(preset), b.config); // a readable 400 naming the missing required field, not a raw zod error
+  try { checkPresetConfig(preset, b.config); } catch (e: any) { throw bad(e.message); }
+  await checkConnectorTargets(b.config);
 
   // Every connector gets an API key, not just the relay family: for API_PULL/STREAM_SUBSCRIBE presets it is what a
   // manual test push (or, once a real vendor account exists, a scheduled poll job) authenticates the /backfill and
@@ -87,7 +117,14 @@ integrationsAdmin.post('/', requires('config:write'), async (req, res) => {
     const c = await tx.one<any>(
       `INSERT INTO integration_connectors (tenant_id, wfm_group_id, category, method, preset, name, config, api_key_hash, webhook_secret, created_by)
        VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *, backfill_through::text AS backfill_through`,
-      [b.wfmGroupId ?? null, b.category, preset.method, preset.id, b.name, JSON.stringify(b.config), apiKey ? await bcrypt.hash(apiKey, 10) : null, webhookSecret, p.name]);
+      [b.wfmGroupId ?? null, b.category, preset.method, preset.id, b.name, JSON.stringify(lockFields(b.config, CONFIG_SECRET_KEYS)), apiKey ? await hashPassword(apiKey, 10) : null, webhookSecret ? encrypt(webhookSecret) : null, p.name]);
+    const sched = scheduleFromBody(b);
+    if (sched.schedule) {
+      if (!pullSupport(preset, b.config).canPull) throw bad('This connector is not pulled by the server, so it cannot be scheduled. The source sends its data to us.');
+      await tx.exec('UPDATE integration_connectors SET schedule_min = $2, schedule_at = $3, schedule_days = $4::smallint[], next_run_at = $5 WHERE tenant_id = :t AND id = $1',
+        [c!.id, sched.schedule.everyMin, sched.schedule.at, sched.schedule.days, firstRunAt(sched.schedule, new Date(), await tzOf(tx))]);
+      Object.assign(c!, { scheduleMin: sched.schedule.everyMin, scheduleAt: sched.schedule.at, scheduleDays: sched.schedule.days });
+    }
     if (preset.defaultMaps?.length) await tx.exec(
       'INSERT INTO integration_field_maps (tenant_id, connector_id, target_field, source_path, transform) SELECT :t, $1, x.f, x.s, x.tr FROM unnest($2::text[], $3::text[], $4::text[]) AS x(f, s, tr)',
       [c!.id, preset.defaultMaps.map((m) => m.targetField), preset.defaultMaps.map((m) => m.sourcePath), preset.defaultMaps.map((m) => m.transform ?? '')]);
@@ -99,15 +136,20 @@ integrationsAdmin.post('/', requires('config:write'), async (req, res) => {
 
 integrationsAdmin.put('/:id', requires('config:write'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
-  const b = parse(z.object({ name: z.string().trim().min(1).max(100).optional(), status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'ERROR']).optional(), config: z.record(z.string(), z.string()).optional() }), req.body);
+  const b = parse(z.object({ name: z.string().trim().min(1).max(100).optional(), status: z.enum(['DRAFT', 'ACTIVE', 'PAUSED', 'ERROR']).optional(), config: z.record(z.string(), z.string()).optional(), ...ScheduleFields }), req.body);
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await tx.one<any>('SELECT * FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]);
     if (!before) throw notFound('Connector');
-    if (b.config) parse(configSchemaFor(presetById(before.preset)!), b.config);
+    if (b.config) { parse(configSchemaFor(presetById(before.preset)!), b.config); try { checkPresetConfig(presetById(before.preset)!, b.config); } catch (e: any) { throw bad(e.message); } await checkConnectorTargets(b.config); }
+    const sched = scheduleFromBody(b);
+    if (sched.schedule && !pullSupport(presetById(before.preset), b.config ?? before.config ?? {}).canPull) throw bad('This connector is not pulled by the server, so it cannot be scheduled. The source sends its data to us.');
+    const nextRun = sched.schedule ? firstRunAt(sched.schedule, new Date(), await tzOf(tx)) : null;
     const c = await tx.one<any>(
-      `UPDATE integration_connectors SET name = coalesce($2, name), status = coalesce($3, status), config = coalesce($4, config), updated_at = now()
+      `UPDATE integration_connectors SET name = coalesce($2, name), status = coalesce($3, status), config = coalesce($4, config), updated_at = now(),
+         schedule_min = CASE WHEN $5 THEN $6::int ELSE schedule_min END, schedule_at = CASE WHEN $5 THEN $7 ELSE schedule_at END,
+         schedule_days = CASE WHEN $5 THEN $8::smallint[] ELSE schedule_days END, next_run_at = CASE WHEN $5 THEN $9::timestamptz ELSE next_run_at END
        WHERE tenant_id = :t AND id = $1 RETURNING *, backfill_through::text AS backfill_through`,
-      [id, b.name ?? null, b.status ?? null, b.config ? JSON.stringify(b.config) : null]);
+      [id, b.name ?? null, b.status ?? null, b.config ? JSON.stringify(lockFields(b.config, CONFIG_SECRET_KEYS)) : null, sched.touched, sched.schedule?.everyMin ?? null, sched.schedule?.at ?? null, sched.schedule?.days ?? null, nextRun]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'INTEGRATION_CONNECTOR', entityId: id, entityName: c!.name, before: { status: before.status }, after: { status: c!.status } });
     return c;
   });
@@ -124,6 +166,38 @@ integrationsAdmin.delete('/:id', requires('config:write'), async (req, res) => {
   });
   await stopSubscription(id);
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- run now, run history
+
+/** Pulls from the source right now (a REST endpoint or an SFTP folder) and returns what happened. The result is also in the run history. */
+integrationsAdmin.post('/:id/run', requires('config:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT * FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));
+  if (!c) throw notFound('Connector');
+  if (c.status === 'DRAFT') throw bad('Set the connector to Active before running it.');
+  const mode = parse(z.object({ mode: z.enum(['incremental', 'backfill']).optional() }), req.body ?? {}).mode;
+  const out = await runConnector(c, 'MANUAL', { backfill: mode === 'backfill' });
+  await withTenant(p.tenantId, (tx) => audit(tx, p, req, { action: 'IMPORT', entityType: 'INTEGRATION_CONNECTOR', entityId: id, entityName: c.name, diffSummary: `${out.status}: ${out.message}` }));
+  res.json(out);
+});
+
+/** Runs the connector's query for the last two days and shows what came back, without saving anything. */
+integrationsAdmin.post('/:id/test-pull', requires('config:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT * FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));
+  if (!c) throw notFound('Connector');
+  if (c.preset !== 'DATABASE_POSTGRES_PULL') throw bad('Only a database connector has a query to test.');
+  try { res.json(await testDatabaseQuery(c, openFields(c.config, CONFIG_SECRET_KEYS))); }
+  catch (e: any) { throw bad(e.message); }
+});
+
+integrationsAdmin.get('/:id/runs', requires('config:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  res.json(await withTenant(p.tenantId, async (tx) => ({
+    runs: await tx.q<any>(`SELECT started_at, finished_at, trigger, kind, status, rows_in, rows_ok, rows_rejected, message FROM integration_runs WHERE tenant_id = :t AND connector_id = $1 ORDER BY started_at DESC LIMIT 30`, [id]),
+    files: await tx.q<any>(`SELECT file_name, file_size, status, import_job_id, message, seen_at FROM integration_files WHERE tenant_id = :t AND connector_id = $1 ORDER BY seen_at DESC LIMIT 20`, [id]),
+  })));
 });
 
 // ---------------------------------------------------------------- field maps
@@ -214,11 +288,6 @@ integrationsAdmin.put('/:id/event-rules/:eventType', requires('config:write'), a
   res.json({ ok: true });
 });
 
-async function loadFieldMaps(tx: Tx, connectorId: string): Promise<FieldMap[]> {
-  const rows = await tx.q<any>('SELECT target_field, source_path, transform FROM integration_field_maps WHERE tenant_id = :t AND connector_id = $1', [connectorId]);
-  return rows.map((r) => ({ targetField: r.targetField, sourcePath: r.sourcePath, transform: (r.transform || null) as FieldMap['transform'] }));
-}
-
 // ---------------------------------------------------------------- entity matching
 
 integrationsAdmin.post('/:id/entity-matches/suggest', requires('config:read'), async (req, res) => {
@@ -262,10 +331,36 @@ integrationsAdmin.put('/:id/entity-matches', requires('config:write'), async (re
 // ---------------------------------------------------------------- key-authenticated ingest (relay-family + manual test pulls)
 // Mounted public (before the JWT `authenticate` middleware) since an on-prem script or a webhook sender has no user session.
 
+/** The address a connector will call may not be this server's own network, a metadata service, or (unless an administrator listed it) a private network: see netGuard.ts. Said when it is saved, so it is not first found out at 3 a.m. */
+async function checkConnectorTargets(config: Record<string, string>) {
+  try {
+    if (config.baseUrl) await checkTarget(new URL(/^[a-z]+:\/\//i.test(config.baseUrl) ? config.baseUrl : `https://${config.baseUrl}`).hostname);
+    if (config.host) await checkTarget(config.host.trim());
+  } catch (e) {
+    if (e instanceof OutboundBlocked) throw bad(`${e.message} (${config.baseUrl ? 'address' : 'host'}: ${config.baseUrl || config.host})`);
+    if (!(e instanceof TypeError)) throw e;                // an address that does not parse is reported by the field checks, not here
+  }
+}
+
 async function connectorByKey(id: string, presented: string) {
   const [c] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
   if (!c || !c.apiKeyHash) return null;
-  return (await bcrypt.compare(presented, c.apiKeyHash)) ? c : null;
+  return (await keyMatches(presented, c.apiKeyHash)) ? c : null;
+}
+/**
+ * A connector sends its key with every request, and checking it against the stored bcrypt hash takes a quarter of a second of CPU. A key that has just been checked
+ * is remembered for ten minutes (by a SHA-256 of the key together with the stored hash, so changing the key, or its hash, ends it at once) instead of being checked
+ * again for every one of thousands of requests. A wrong key is never remembered.
+ */
+const keyChecked = new Map<string, number>();
+async function keyMatches(presented: string, storedHash: string): Promise<boolean> {
+  const k = createHash('sha256').update(presented).update('|').update(storedHash).digest('hex');
+  const until = keyChecked.get(k);
+  if (until && until > Date.now()) return true;
+  if (!(await checkPassword(presented, storedHash))) return false;
+  if (keyChecked.size > 5000) keyChecked.clear();
+  keyChecked.set(k, Date.now() + 10 * 60_000);
+  return true;
 }
 
 function requireBearer(req: any): string {
@@ -284,33 +379,12 @@ integrationsPublic.post('/:id/backfill', async (req, res) => {
   const connector = await connectorByKey(id, key);
   if (!connector) throw notFound('Connector');
   const b = parse(RawRows.extend({ through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }), req.body);
-  const out = await withTenant(connector.tenantId, async (tx) => {
-    const maps = await loadFieldMaps(tx, id);
-    const entityMaps = await tx.q<any>('SELECT source_id, target_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2', [id, 'queue']);
-    const queueBySource = new Map(entityMaps.filter((m) => m.targetId).map((m) => [m.sourceId, m.targetId as string]));
-    const queues = await tx.q<any>('SELECT id, name, code, aht_default AS "ahtDefault" FROM queues WHERE tenant_id = :t');
-    const queueById = new Map(queues.map((q) => [q.id, q]));
-
-    if (connector.preset === undefined) throw bad('Unknown preset');
-    const errors: string[] = [];
-    const csvRows = ['queue,date,interval,volume,aht,abandoned'];
-    b.rows.forEach((raw, i) => {
-      const m = mapFields(raw, maps);
-      const sourceQueueId = String((raw as any).queueId ?? (raw as any).queue ?? '');
-      const queueId = queueBySource.get(sourceQueueId);
-      const q = queueId ? queueById.get(queueId) : undefined;
-      if (!q) return errors.push(`Row ${i}: no queue match for '${sourceQueueId}' -- set up queue matching first (POST .../entity-matches)`);
-      const day = String(m.day ?? '').slice(0, 10), time = String(m.time ?? '00:00');
-      if (!day) return errors.push(`Row ${i}: no day mapped`);
-      csvRows.push([q.name, day, time, Number(m.volume ?? 0), Number(m.ahtSec ?? q.ahtDefault ?? 300), Number(m.abandoned ?? 0)].join(','));
-    });
-    if (csvRows.length === 1) throw bad(errors[0] ?? 'No rows could be mapped');
-
-    const principal: Principal = { userId: connector.id, tenantId: connector.tenantId, role: 'WFM_ADMIN', name: `Connector: ${connector.name}`, username: `connector:${connector.id}`, jti: '' };
-    const staged = await stageImport(principal, null, StageUpload.parse({ dataType: 'HISTORICAL_VOLUME', fileName: `${connector.name}-backfill-${b.through}.csv`, csv: csvRows.join('\n') }));
-    await tx.exec('UPDATE integration_connectors SET backfill_status = $2, backfill_through = $3, last_received_at = now(), last_error = NULL WHERE tenant_id = :t AND id = $1', [id, csvRows.length > 1 ? 'IN_PROGRESS' : 'DONE', b.through]);
-    return { staged, rowsMapped: csvRows.length - 1, mappingErrors: errors.slice(0, 50) };
+  const started = new Date();
+  const out = await stageBackfillRows(connector, b.rows, b.through).catch(async (e: any) => {
+    await recordRun(connector, 'PUSH', 'BACKFILL', started, { rowsIn: b.rows.length, rowsOk: 0, rowsRejected: b.rows.length, message: e.message, failed: true }).catch(() => {});
+    throw e;
   });
+  await recordRun(connector, 'PUSH', 'BACKFILL', started, { rowsIn: b.rows.length, rowsOk: out.rowsMapped, rowsRejected: out.mappingErrors.length, message: `${out.rowsMapped} rows staged for review${out.mappingErrors.length ? `, ${out.mappingErrors.length} could not be mapped: ${out.mappingErrors[0]}` : ''}` }).catch(() => {});
   res.status(201).json(out);
 });
 
@@ -324,35 +398,12 @@ integrationsPublic.post('/:id/live', async (req, res) => {
   if (!preset) throw bad('Unknown preset');
   const b = parse(RawRows, req.body);
 
-  const out = await withTenant(connector.tenantId, async (tx) => {
-    const maps = await loadFieldMaps(tx, id);
-    const mapped = b.rows.map((r) => mapFields(r, maps));
-
-    if (preset.writesTo === 'agent_state') {
-      // the vendor's own agent id (e.g. "1002@agnoshin.com") is never going to equal our employee_number by
-      // coincidence -- same entity-match indirection queue matching already uses, just for employees here.
-      const empMaps = await tx.q<any>('SELECT source_id, target_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2', [id, 'employee']);
-      const employees = await tx.q<any>('SELECT id, employee_number FROM employees WHERE tenant_id = :t');
-      const empNoById = new Map(employees.map((e) => [e.id, e.employeeNumber]));
-      const empNoBySource = new Map(empMaps.filter((m) => m.targetId && empNoById.has(m.targetId)).map((m) => [m.sourceId, empNoById.get(m.targetId) as string]));
-      const events = mapped.filter((m) => m.employeeNumber && m.state).map((m) => ({ employeeNumber: empNoBySource.get(String(m.employeeNumber)) ?? String(m.employeeNumber), state: String(m.state), reason: m.reason ? String(m.reason) : undefined, at: m.at ? String(m.at) : undefined }));
-      if (!events.length) throw bad('No row mapped to employeeNumber + state');
-      return { kind: 'agent_state', ...(await ingestAgentEvents(connector.tenantId, events)) };
-    }
-    if (preset.writesTo === 'interval_history') {
-      const queues = await tx.q<any>('SELECT id, name, code FROM queues WHERE tenant_id = :t');
-      const entityMaps = await tx.q<any>('SELECT source_id, target_id FROM integration_entity_maps WHERE tenant_id = :t AND connector_id = $1 AND entity_type = $2', [id, 'queue']);
-      const queueBySource = new Map(entityMaps.filter((m) => m.targetId).map((m) => [m.sourceId, m.targetId as string]));
-      const rows = mapped.map((m, i) => {
-        const sourceQueueId = String((b.rows[i] as any).queueId ?? (b.rows[i] as any).queue ?? '');
-        const queueId = queueBySource.get(sourceQueueId) ?? queues.find((q) => q.id === sourceQueueId)?.id;
-        return queueId ? { queueId, day: String(m.day ?? ''), time: m.time ? String(m.time) : undefined, slot: m.slot !== undefined ? Number(m.slot) : undefined, volume: Number(m.volume ?? 0), ahtSec: m.ahtSec !== undefined ? Number(m.ahtSec) : undefined, abandoned: m.abandoned !== undefined ? Number(m.abandoned) : undefined } : null;
-      }).filter((r): r is NonNullable<typeof r> => !!r && !!r.day);
-      if (!rows.length) throw bad('No row mapped to a known queue; set up queue matching first');
-      return { kind: 'interval_history', ...(await ingestLive(connector.tenantId, LiveRows.parse({ rows }).rows)) };
-    }
-    throw bad(`Live sync for '${preset.writesTo}' connectors is not wired yet; use the backfill/upsert path for HRMS.`);
+  const started = new Date();
+  const out = await applyLiveRows(connector, preset, b.rows).catch(async (e: any) => {
+    await recordRun(connector, 'PUSH', 'LIVE', started, { rowsIn: b.rows.length, rowsOk: 0, rowsRejected: b.rows.length, message: e.message, failed: true }).catch(() => {});
+    throw e;
   });
+  await recordRun(connector, 'PUSH', 'LIVE', started, summariseLive(b.rows.length, out)).catch(() => {});
   // kept for the drag-and-drop field mapper regardless of whether this row mapped cleanly -- a real sample beats a guess
   await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(b.rows[0])]));
   res.json(out);
@@ -363,13 +414,16 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
   const id = parse(uuid, req.params.id);
   const [connector] = await raw<any>('SELECT * FROM integration_connectors WHERE id = $1', [id]);
   if (!connector || !connector.webhookSecret) throw notFound('Connector');
+  const signingKey = open(connector.webhookSecret);
+  if (!signingKey) throw new HttpError(500, 'SECRET_UNREADABLE', 'This connector\'s signing secret cannot be read with the current key. Make the connector again or restore the key.');
   const signature = String(req.headers['x-signature'] || '');
   const rawBody = JSON.stringify(req.body ?? {});
-  const expected = createHmac('sha256', connector.webhookSecret).update(rawBody, 'utf8').digest('hex');
+  const expected = createHmac('sha256', signingKey).update(rawBody, 'utf8').digest('hex');
   const sigBuf = Buffer.from(signature, 'hex'), expBuf = Buffer.from(expected, 'hex');
   if (signature.length !== expected.length || sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) throw bad('Invalid signature');
 
   const preset = presetById(connector.preset);
+  const started = new Date();
   const out = await withTenant(connector.tenantId, async (tx) => {
     const maps = await loadFieldMaps(tx, id);
     const m = mapFields(req.body, maps);
@@ -381,6 +435,7 @@ integrationsPublic.post('/:id/webhook', async (req, res) => {
     }
     return { accepted: 0, errors: [{ index: 0, message: 'Payload did not map to a known destination' }] };
   });
+  await recordRun(connector, 'PUSH', 'WEBHOOK', started, summariseLive(1, out)).catch(() => {});
   await withTenant(connector.tenantId, (tx) => tx.exec('UPDATE integration_connectors SET last_received_at = now(), last_error = NULL, last_sample = $2::jsonb WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(req.body ?? {})]));
   res.json(out);
 });

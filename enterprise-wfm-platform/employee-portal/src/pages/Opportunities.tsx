@@ -15,8 +15,8 @@ const OfferCard: React.FC<{ o: Offer; onDone: () => void }> = ({ o, onDone }) =>
         <Pill tone={o.myStatus === 'ACCEPTED' ? 'good' : o.myStatus === 'DECLINED' ? 'neutral' : 'info'}>{o.myStatus.toLowerCase()}</Pill>
       </div>
       <div className="text-[12px] text-[#525252]">{dayLabel(o.day)} · {hm(o.startTime)}–{hm(o.endTime)}</div>
-      {o.note && <div className="text-[12px] text-[#737373]">{o.note}</div>}
-      {err && <div className="text-[11px] text-[#C84A4A]">{err}</div>}
+      {o.note && <div className="text-[12px] text-[#6B6B6B]">{o.note}</div>}
+      {err && <div className="text-[11px] text-[#BC3F3F]">{err}</div>}
       {open && <div className="flex gap-2 pt-1"><Btn variant="primary" disabled={busy} onClick={() => act(`/me/offers/${o.id}/accept`)}>Accept</Btn><Btn disabled={busy} onClick={() => act(`/me/offers/${o.id}/decline`)}>Decline</Btn></div>}
     </div>
   );
@@ -42,8 +42,8 @@ const BidCard: React.FC<{ b: Bid; onDone: () => void }> = ({ b, onDone }) => {
       ) : b.status === 'CLOSED' ? <Banner kind="warn">Closed, awaiting results.</Banner> : (
         <>
           {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
-          <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Your ranking</div>
-          {ranking.length === 0 ? <div className="text-[12px] text-[#A3A3A3] py-1">Add a pattern below</div> : ranking.map((id, i) => {
+          <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider">Your ranking</div>
+          {ranking.length === 0 ? <div className="text-[12px] text-[#6B6B6B] py-1">Add a pattern below</div> : ranking.map((id, i) => {
             const p = byId.get(id); if (!p) return null;
             return (
               <div key={id} className="flex items-center justify-between border border-[#E5E5E0] rounded-md p-2 text-[13px]">
@@ -51,14 +51,14 @@ const BidCard: React.FC<{ b: Bid; onDone: () => void }> = ({ b, onDone }) => {
                 <span className="flex gap-1">
                   <button disabled={i === 0} onClick={() => move(i, -1)} className="disabled:opacity-30">↑</button>
                   <button disabled={i === ranking.length - 1} onClick={() => move(i, 1)} className="disabled:opacity-30">↓</button>
-                  <button onClick={() => setRanking(ranking.filter((x) => x !== id))} className="text-[#C84A4A]">×</button>
+                  <button onClick={() => setRanking(ranking.filter((x) => x !== id))} className="text-[#BC3F3F]">×</button>
                 </span>
               </div>
             );
           })}
           {unranked.length > 0 && (
             <>
-              <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider pt-1">Add</div>
+              <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider pt-1">Add</div>
               {unranked.map((p) => (
                 <button key={p.id} onClick={() => setRanking([...ranking, p.id])} className="w-full text-left border border-dashed border-[#E5E5E0] rounded-md p-2 text-[13px] hover:bg-[#FAFAF8]">
                   + {p.name} · {p.days.join(' ')} {hm(p.startTime)}–{hm(p.endTime)}

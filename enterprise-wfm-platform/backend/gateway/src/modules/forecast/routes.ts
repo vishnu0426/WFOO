@@ -4,7 +4,7 @@ import { withTenant } from '../../db.ts';
 import { me, requires, requiresAny } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { HttpError, bad, conflict, isoDay, notFound, parse } from '../../http.ts';
-import { dropCache, engine, publish } from '../../infra.ts';
+import { cached, dropCache, engine, key, peekCache, publish, storeCache } from '../../infra.ts';
 import {
   MODELS, SLOT_H, addDays, aggregateStaff, bucketRecords, capacityFor, createVersion, dayRange, erlangFactor, holdout, loadGroup, loadVersion, num, realised, rollup,
   runStaffing, scenarioResult, shortLabel, todayIn, versionDto, versionRecords, versionRows, type Daily, type Group, type Overrides, type QRow, type Rec,
@@ -12,6 +12,11 @@ import {
 import { LEARNING, evaluate, learn } from './learning.ts';
 import { normalise, parseCsv, type DateFormat } from '../csv.ts';
 import { planRows, summarisePlan, withPlainVolumeHeader } from './planningImport.ts';
+import { DEMAND_SQL } from './demand.ts';
+import { MIN_OWN_DAYS } from './borrowShape.ts';
+import { analyseQueue, type QueueQuality } from './historyQuality.ts';
+import { BIAS, GOOD, POOR, trendOf } from './accuracyTrend.ts';
+import { payWeekFor } from '../payWeek.ts';
 
 export const forecast = Router();
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -36,6 +41,61 @@ forecast.get('/versions', requires('forecast:read'), async (req, res) => {
 
 // ---------------------------------------------------------------- preview before creating: a typical day from recent history
 
+/** Is each queue's history fit to forecast from? Gaps, short or stale history, odd days, abandoned callers, odd handle times. Nothing is changed. */
+/** Odd handle times for the last 120 days, against each queue's median (worked out from every third day, which is the usual to within a second or two). One piece of work per group at a time. */
+const oddWork = new Map<string, Promise<void>>();
+function startOddWork(tenantId: string, k: string, ids: string[]) {
+  if (oddWork.has(k)) return;
+  const job = withTenant(tenantId, (tx) => tx.q<any>(
+    `WITH med AS (SELECT queue_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY aht_sec) AS aht FROM interval_history
+                  WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND volume > 0 AND day >= current_date - 120 AND (day - DATE '2000-01-01') % 3 = 0 GROUP BY queue_id)
+     SELECT h.queue_id, h.day::text AS day, count(*)::int AS aht_outliers FROM interval_history h JOIN med m ON m.queue_id = h.queue_id
+     WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day >= current_date - 120 AND h.volume > 0 AND h.aht_sec > 5 * m.aht GROUP BY h.queue_id, h.day`, [ids]))
+    .then((rows) => storeCache(k, 3600, rows.map((r: any) => [`${r.queueId}|${r.day}`, r.ahtOutliers])))
+    .catch((e) => console.error('[history-quality] odd handle times:', e.message))
+    .finally(() => oddWork.delete(k));
+  oddWork.set(k, job);
+}
+
+forecast.get('/history-quality', requires('forecast:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid }), req.query);
+  // Days, volumes and abandoned calls come from the daily rollup, which is quick. Odd handle times need the intervals themselves: that part is worked out in the background,
+  // kept for an hour (live data arriving does not throw it away) and added as soon as it is ready; until then the answer says it is still being worked out.
+  const oddKey = key(p.tenantId, 'aht', 'hq', q.groupId);
+  const oddKnown = await peekCache<[string, number][]>(oddKey);
+  const out = await (() => withTenant(p.tenantId, async (tx) => {
+    const group = await loadGroup(tx, q.groupId);
+    const ids = group.queues.map((x) => x.id);
+    if (!ids.length) return { groupId: group.id, queues: [] as QueueQuality[], pending: [] as string[] };
+    const meta = await tx.q<any>('SELECT q.id, q.open_slot, q.close_slot, q.volume_basis, q.shape_from_queue_id, d.name AS shape_from_name FROM queues q LEFT JOIN queues d ON d.id = q.shape_from_queue_id WHERE q.tenant_id = :t AND q.id = ANY($1::uuid[])', [ids]);
+    // Days, volume and abandoned calls come from the daily rollup (one row per queue per day, kept exact by the database): reading a year of intervals for every queue took
+    // seconds for a big group and grew with history. Only odd handle times need the intervals themselves, and only the last 120 days of them, against a median worked out
+    // from every third day (the median of a third of the days is the queue's usual to within a second or two).
+    const days = await tx.q<any>(
+      `SELECT queue_id, day::text AS day, intervals, volume::int AS volume, abandoned::int AS abandoned FROM interval_daily
+       WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day >= current_date - 400 ORDER BY day`, [ids]);
+    if (!oddKnown) startOddWork(p.tenantId, oddKey, ids);
+    const oddBy = new Map<string, number>(oddKnown ?? []);
+    const rows = days.map((r: any) => ({ ...r, ahtOutliers: oddBy.get(`${r.queueId}|${r.day}`) ?? 0 }));
+    const today = todayIn(group.timezone ?? 'UTC');
+    const queues = group.queues.map((gq) => {
+      const m = meta.find((x: any) => x.id === gq.id);
+      const own = rows.filter((r: any) => r.queueId === gq.id);
+      const a: QueueQuality & { shapeFromQueueId?: string | null; shapeFromName?: string | null } = analyseQueue({ id: gq.id, name: gq.name, openSlot: m?.openSlot ?? 0, closeSlot: m?.closeSlot ?? 96, volumeBasis: m?.volumeBasis ?? 'OFFERED', rows: own }, today);
+      a.shapeFromQueueId = m?.shapeFromQueueId ?? null; a.shapeFromName = m?.shapeFromName ?? null;
+      if (a.shapeFromQueueId) {
+        const intervalDays = own.filter((r: any) => r.intervals > 1).length;
+        a.findings.push(intervalDays < MIN_OWN_DAYS
+          ? { code: 'BORROWED_SHAPE', severity: 'INFO', count: intervalDays, message: `Borrowing the daily pattern of ${a.shapeFromName}: this queue has ${intervalDays} of the ${MIN_OWN_DAYS} days of its own interval history it needs. Its volume level still comes from its own history. It switches to its own pattern by itself.` }
+          : { code: 'BORROWED_SHAPE_DONE', severity: 'INFO', count: intervalDays, message: `This queue has ${intervalDays} days of its own interval history, so it uses its own daily pattern. The borrowed setting (${a.shapeFromName}) can be cleared.` });
+      }
+      return a;
+    });
+    return { groupId: group.id, queues, pending: oddKnown ? [] : ['AHT_ODD'] };
+  }))();
+  res.json(out);
+});
+
 forecast.get('/preview', requires('forecast:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({
     groupId: uuid, dow: z.coerce.number().int().min(0).max(6).optional(),
@@ -50,8 +110,8 @@ forecast.get('/preview', requires('forecast:read'), async (req, res) => {
     const last = (await tx.one<{ d: string | null }>('SELECT max(day)::text AS d FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($1::uuid[])', [ids]))?.d ?? null;
     if (!last) return { group, last, first: '', rows: [], days: [] };
     const rows = await tx.q<any>(
-      `SELECT queue_id, (extract(isodow FROM day)::int - 1) AS dow, slot, sum(volume)::float8 AS tot, sum(volume * aht_sec)::float8 AS work
-       FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day > ($2::date - 56) GROUP BY queue_id, dow, slot`, [ids, last]);
+      `SELECT h.queue_id, (extract(isodow FROM h.day)::int - 1) AS dow, h.slot, sum(${DEMAND_SQL})::float8 AS tot, sum(${DEMAND_SQL} * h.aht_sec)::float8 AS work
+       FROM interval_history h JOIN queues q ON q.id = h.queue_id WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day > ($2::date - 56) GROUP BY h.queue_id, dow, h.slot`, [ids, last]);
     const days = await tx.q<any>(
       `SELECT (extract(isodow FROM day)::int - 1) AS dow, count(DISTINCT day)::int AS n, min(day)::text AS first FROM interval_history
        WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day > ($2::date - 56) GROUP BY dow`, [ids, last]);
@@ -192,8 +252,8 @@ async function splitDaysByTime(tenantId: string, group: Group, daily: Daily[], q
     const last = (await tx.one<{ d: string | null }>('SELECT max(day)::text AS d FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($1::uuid[])', [ids]))?.d;
     if (!last) return [] as any[];
     return tx.q<any>(
-      `SELECT queue_id, (extract(isodow FROM day)::int - 1) AS dow, slot, sum(volume)::float8 AS tot FROM interval_history
-       WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day > ($2::date - 56) GROUP BY queue_id, dow, slot`, [ids, last]);
+      `SELECT h.queue_id, (extract(isodow FROM h.day)::int - 1) AS dow, h.slot, sum(${DEMAND_SQL})::float8 AS tot FROM interval_history h JOIN queues q ON q.id = h.queue_id
+       WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day > ($2::date - 56) GROUP BY h.queue_id, dow, h.slot`, [ids, last]);
   });
   if (!prof.length) throw bad('There is no interval history to split this long-term forecast by time of day. Import it under Data Management first.');
   const dowTotal = new Map<number, number>();
@@ -241,7 +301,7 @@ forecast.get('/versions/:id/data', requires('forecast:read'), async (req, res) =
   if (['15', '30', '60', 'day'].includes(grain) && buckets.every((b) => b.day)) {
     const { act, sch } = await withTenant(p.tenantId, async (tx) => ({
       act: await tx.q<any>(
-        `SELECT h.day::text AS day, h.slot, sum(h.volume)::int AS vol FROM interval_history h JOIN queues qu ON qu.id = h.queue_id
+        `SELECT h.day::text AS day, h.slot, sum(h.volume + CASE WHEN qu.volume_basis = 'ANSWERED' THEN round(h.abandoned * (100 - qu.abandon_repeat_pct) / 100.0)::int ELSE 0 END)::int AS vol FROM interval_history h JOIN queues qu ON qu.id = h.queue_id
          WHERE h.tenant_id = :t AND qu.wfm_group_id = $1 AND ($2::uuid IS NULL OR h.queue_id = $2) AND h.day BETWEEN ($3::date - 7) AND $4 GROUP BY h.day, h.slot`, [v.wfmGroupId, q.queueId ?? null, from, to]),
       sch: await tx.q<any>(
         `SELECT s.day::text AS day, s.start_slot, s.length_slots FROM schedule_shifts s JOIN schedule_versions sv ON sv.id = s.version_id
@@ -487,6 +547,25 @@ forecast.get('/accuracy', requires('forecast:read'), async (req, res) => {
   const ho = await holdout(p, q.groupId, q.days);
   const real = await withTenant(p.tenantId, async (tx) => realised(tx, q.groupId, todayIn((await loadGroup(tx, q.groupId)).timezone)));
   res.json({ ...ho, realised: real });
+});
+
+/** How the published forecasts really did, week after week, per queue: the miss, whether they run high or low, and whether they are drifting. */
+forecast.get('/accuracy-trend', requires('forecast:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid, weeks: z.coerce.number().int().min(4).max(52).default(12) }), req.query);
+  res.json(await withTenant(p.tenantId, async (tx) => {
+    const group = await loadGroup(tx, q.groupId), today = todayIn(group.timezone ?? 'UTC'), from = addDays(today, -q.weeks * 7 - 7);
+    const weekStart = (await payWeekFor(tx, q.groupId)).start;
+    const rows = await tx.q<any>(
+      `WITH v AS (SELECT id FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND status IN ('PUBLISHED','ARCHIVED')),
+            f AS (SELECT DISTINCT ON (fi.queue_id, fi.day, fi.slot) fi.queue_id, fi.day, fi.slot, coalesce(fi.manual, fi.volume)::float8 AS f
+                  FROM forecast_intervals fi JOIN v ON v.id = fi.version_id WHERE fi.tenant_id = :t AND fi.slot >= 0 AND fi.day < $2::date AND fi.day >= $3::date
+                  ORDER BY fi.queue_id, fi.day, fi.slot, fi.version_id DESC)
+       SELECT f.queue_id, qu.name, f.day::text AS day, sum(${DEMAND_SQL})::float8 AS actual, sum(f.f)::float8 AS forecast, sum(abs(${DEMAND_SQL} - f.f))::float8 AS abs_err, count(*)::int AS intervals
+       FROM f JOIN interval_history h ON h.queue_id = f.queue_id AND h.day = f.day AND h.slot = f.slot JOIN queues q ON q.id = h.queue_id JOIN queues qu ON qu.id = f.queue_id
+       GROUP BY f.queue_id, qu.name, f.day ORDER BY f.day`, [q.groupId, today, from]);
+    const t = trendOf(rows.map((r: any) => ({ queueId: r.queueId, name: r.name, day: r.day, actual: r.actual, forecast: r.forecast, absErr: r.absErr, intervals: r.intervals })), weekStart, q.weeks);
+    return { groupId: q.groupId, weekStart, weeks: q.weeks, limits: { good: GOOD, poor: POOR, bias: BIAS }, ...t };
+  }));
 });
 
 // ---------------------------------------------------------------- staffing traceability

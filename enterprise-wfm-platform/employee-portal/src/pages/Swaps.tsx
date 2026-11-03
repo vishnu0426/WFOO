@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { DaySummary, Swap, SwapCandidate } from '../types';
 import { useLoad, Banner, Btn, Busy, Card, Empty, Pill, hm, dayLabel, todayIso, addDays } from '../ui';
+import { approvalLine } from '../approval';
 
 const STATUS_TONE: Record<string, 'good' | 'bad' | 'warn' | 'neutral' | 'info'> = { OPEN: 'info', PENDING_PARTNER: 'warn', PENDING_APPROVAL: 'warn', APPROVED: 'good', REJECTED: 'bad', FAILED: 'bad', EXPIRED: 'neutral', CANCELLED: 'neutral' };
 
@@ -14,8 +15,9 @@ const SwapRow: React.FC<{ s: Swap; children?: React.ReactNode }> = ({ s, childre
     </div>
     <div className="text-[12px] text-[#525252]">Give: {dayLabel(s.give.day)}, {hm(s.give.startTime)}–{hm(s.give.endTime)}</div>
     {s.get && <div className="text-[12px] text-[#525252]">Get: {dayLabel(s.get.day)}, {hm(s.get.startTime)}–{hm(s.get.endTime)}</div>}
-    {s.requesterName && <div className="text-[11px] text-[#737373]">From {s.requesterName}</div>}
-    {s.decisionReason && <div className="text-[11px] text-[#737373]">{s.decisionReason}</div>}
+    {s.requesterName && <div className="text-[11px] text-[#6B6B6B]">From {s.requesterName}</div>}
+    {s.decisionReason && <div className="text-[11px] text-[#6B6B6B]">{s.decisionReason}</div>}
+    {approvalLine(s) && <div className="text-[11px] text-[#525252]">{approvalLine(s)}</div>}
     {children}
   </div>
 );
@@ -49,7 +51,7 @@ const NewRequest: React.FC<{ initialShiftId?: string; onDone: () => void }> = ({
       {!shiftId ? (
         upcoming.length === 0 ? <Empty title="No upcoming shifts to swap" /> : (
           <div className="space-y-1.5">
-            <div className="text-[12px] text-[#737373]">Which of your shifts?</div>
+            <div className="text-[12px] text-[#6B6B6B]">Which of your shifts?</div>
             {upcoming.map((s) => (
               <button key={s.id} onClick={() => setShiftId(s.id)} className="w-full text-left border border-[#E5E5E0] rounded-md p-2 text-[13px] hover:bg-[#FAFAF8]">
                 {dayLabel(s.day)} · {hm(s.startTime)}–{hm(s.endTime)}
@@ -69,8 +71,8 @@ const NewRequest: React.FC<{ initialShiftId?: string; onDone: () => void }> = ({
             <div key={c.shiftId} className="border border-[#E5E5E0] rounded-md p-2 flex items-center justify-between gap-2">
               <div>
                 <div className="text-[13px] font-semibold text-[#171717]">{c.name}</div>
-                <div className="text-[12px] text-[#737373]">{dayLabel(c.day)} · {hm(c.startTime)}–{hm(c.endTime)}</div>
-                {c.verdict.warnings.length > 0 && <div className="text-[11px] text-[#B7791F]">{c.verdict.warnings.join('; ')}</div>}
+                <div className="text-[12px] text-[#6B6B6B]">{dayLabel(c.day)} · {hm(c.startTime)}–{hm(c.endTime)}</div>
+                {c.verdict.warnings.length > 0 && <div className="text-[11px] text-[#8F6200]">{c.verdict.warnings.join('; ')}</div>}
               </div>
               <Btn variant="primary" disabled={busy || !c.verdict.ok} onClick={() => swapWith(c.shiftId)}>Request</Btn>
             </div>
@@ -130,7 +132,7 @@ export const Swaps: React.FC<{ initialShiftId?: string; onConsumed?: () => void 
         {data.mine.length === 0 ? <Empty title="No requests yet" /> : (
           <div className="space-y-2">{data.mine.map((s) => (
             <SwapRow key={s.id} s={s}>
-              {(s.status === 'OPEN' || s.status === 'PENDING_PARTNER') && <button onClick={() => act(`/me/swaps/${s.id}/cancel`)} className="text-[11px] text-[#C84A4A] underline mt-1">Withdraw</button>}
+              {(s.status === 'OPEN' || s.status === 'PENDING_PARTNER') && <button onClick={() => act(`/me/swaps/${s.id}/cancel`)} className="text-[11px] text-[#BC3F3F] underline mt-1">Withdraw</button>}
             </SwapRow>
           ))}</div>
         )}

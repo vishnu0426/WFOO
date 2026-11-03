@@ -30,9 +30,9 @@ function usePolicy() {
 
 const LIMITS: { k: 'minRestHours' | 'maxWeeklyHours' | 'maxConsecutiveDays' | 'maxDaysPerWeek'; label: string; hint: string; unit: string; min: number; max: number; step: number }[] = [
   { k: 'minRestHours', label: 'Rest between shifts', hint: 'At least this long from the end of one shift to the start of the next', unit: 'hours', min: 0, max: 24, step: 0.5 },
-  { k: 'maxWeeklyHours', label: 'Most hours in a week', hint: 'Paid hours, Monday to Sunday', unit: 'hours', min: 1, max: 100, step: 0.5 },
+  { k: 'maxWeeklyHours', label: 'Most hours in a week', hint: 'Paid hours in the pay week', unit: 'hours', min: 1, max: 100, step: 0.5 },
   { k: 'maxConsecutiveDays', label: 'Most days in a row', hint: 'Longest run of working days without a day off', unit: 'days', min: 1, max: 14, step: 1 },
-  { k: 'maxDaysPerWeek', label: 'Most days in a week', hint: 'Working days from Monday to Sunday', unit: 'days', min: 1, max: 7, step: 1 },
+  { k: 'maxDaysPerWeek', label: 'Most days in a week', hint: 'Working days in the pay week', unit: 'days', min: 1, max: 7, step: 1 },
 ];
 
 export const SchedulingRulesPanel: React.FC = () => {
@@ -49,7 +49,7 @@ export const SchedulingRulesPanel: React.FC = () => {
           <Field key={l.k} label={l.label} hint={l.hint}>
             <div className="flex items-center gap-2">
               <Input type="number" min={l.min} max={l.max} step={l.step} disabled={!p.canWrite} placeholder="No limit" value={d[l.k] ?? ''} onChange={(e) => setLimit(l.k, e.target.value)} />
-              <span className="text-[12px] text-[#737373]">{l.unit}</span>
+              <span className="text-[12px] text-[#6B6B6B]">{l.unit}</span>
             </div>
           </Field>
         ))}
@@ -58,14 +58,14 @@ export const SchedulingRulesPanel: React.FC = () => {
         <Field label="Adherence grace period" hint="Real-time adherence only flags someone once they have been out of step with the schedule for longer than this. Judged to the second.">
           <div className="flex items-center gap-2">
             <Input type="number" min={0} max={3600} step={5} disabled={!p.canWrite} value={d.adherenceGraceSeconds} onChange={(e) => p.setDraft({ ...d, adherenceGraceSeconds: Math.max(0, Math.min(3600, Math.round(Number(e.target.value) || 0))) })} />
-            <span className="text-[12px] text-[#737373]">seconds{d.adherenceGraceSeconds >= 60 ? ` (${(d.adherenceGraceSeconds / 60).toFixed(d.adherenceGraceSeconds % 60 ? 1 : 0)} min)` : ''}</span>
+            <span className="text-[12px] text-[#6B6B6B]">seconds{d.adherenceGraceSeconds >= 60 ? ` (${(d.adherenceGraceSeconds / 60).toFixed(d.adherenceGraceSeconds % 60 ? 1 : 0)} min)` : ''}</span>
           </div>
         </Field>
       </div>
       <div className="max-w-3xl border-t border-[#E5E5E0] pt-4 space-y-3">
         <div>
           <div className="text-[13px] font-semibold text-[#171717]">Same start and end time every day</div>
-          <p className="text-[12px] text-[#737373] mt-0.5">The starting choice on Generate Schedule. A person can have their own setting, or an assigned start time, under Workforce › Employees; that always wins over this.</p>
+          <p className="text-[12px] text-[#6B6B6B] mt-0.5">The starting choice on Generate Schedule. A person can have their own setting, or an assigned start time, under Workforce › Employees; that always wins over this.</p>
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <Field label="Company default" hint="Required keeps everyone to one usual start and end; Preferred only when coverage allows">
@@ -85,7 +85,7 @@ export const SchedulingRulesPanel: React.FC = () => {
         <div className="text-[13px] font-semibold text-[#171717]">Quality checks</div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Coverage target" hint="How much of the required people-time a schedule should cover. Below it, the shortage analysis flags the schedule.">
-            <div className="flex items-center gap-2"><Input type="number" min={50} max={100} disabled={!p.canWrite} value={d.scheduling.targetCoverage} onChange={(e) => setSched({ targetCoverage: Math.max(50, Math.min(100, Math.round(Number(e.target.value) || 90))) })} /><span className="text-[12px] text-[#737373]">%</span></div>
+            <div className="flex items-center gap-2"><Input type="number" min={50} max={100} disabled={!p.canWrite} value={d.scheduling.targetCoverage} onChange={(e) => setSched({ targetCoverage: Math.max(50, Math.min(100, Math.round(Number(e.target.value) || 90))) })} /><span className="text-[12px] text-[#6B6B6B]">%</span></div>
           </Field>
           <Field label="Pay week starts on" hint="Weekly hours, days per week and overtime are counted from this day. A WFM group can use its own day (Configuration › WFM Groups). A schedule keeps the pay week it was built with.">
             <Select disabled={!p.canWrite} value={d.scheduling.payWeekStart ?? 0} onChange={(e) => setSched({ payWeekStart: Number(e.target.value) })}>{['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((n, i) => <option key={n} value={i}>{n}</option>)}</Select>
@@ -101,7 +101,7 @@ export const SchedulingRulesPanel: React.FC = () => {
           </Field>
         </div>
         <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" className="mt-0.5" disabled={!p.canWrite} checked={d.scheduling.enforcePublishChecks} onChange={(e) => setSched({ enforcePublishChecks: e.target.checked })} />
-          <span><span className="font-medium">Ask for a reason before publishing with open checks.</span> <span className="text-[#737373]">When coverage is under the target, or the forecast has changed since the schedule was built, publishing needs a written reason, which is kept with the schedule. Off: the checks are shown as warnings only.</span></span></label>
+          <span><span className="font-medium">Ask for a reason before publishing with open checks.</span> <span className="text-[#6B6B6B]">When coverage is under the target, or the forecast has changed since the schedule was built, publishing needs a written reason, which is kept with the schedule. Off: the checks are shown as warnings only.</span></span></label>
       </div>
       <div className="max-w-3xl border-t border-[#E5E5E0] pt-4">
         <div className="text-[13px] font-semibold text-[#171717] mb-2">Schedule Timeline colours</div>
@@ -113,7 +113,7 @@ export const SchedulingRulesPanel: React.FC = () => {
           ))}
         </div>
       </div>
-      <p className="text-[12px] text-[#737373]">Availability, approved time off, one shift a day and shift template days are always enforced as well.</p>
+      <p className="text-[12px] text-[#6B6B6B]">Availability, approved time off, one shift a day and shift template days are always enforced as well.</p>
       {p.error && <Banner kind="err">{p.error}</Banner>}
       {p.saved && <Banner kind="ok">Rules saved. They apply the next time a schedule is generated or checked.</Banner>}
       {p.canWrite && <div><Btn variant="primary" onClick={p.save}>Save rules</Btn></div>}
@@ -131,13 +131,13 @@ export const OptimizationPanel: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 max-w-3xl">
         {WEIGHTS.map((x) => (
           <div key={x.k}>
-            <div className="flex justify-between text-[12px]"><span className="font-semibold">{x.label}</span><span className="font-mono text-[#737373]">{d.weights[x.k]}</span></div>
+            <div className="flex justify-between text-[12px]"><span className="font-semibold">{x.label}</span><span className="font-mono text-[#6B6B6B]">{d.weights[x.k]}</span></div>
             <input type="range" min={0} max={100} disabled={!p.canWrite} value={d.weights[x.k]} onChange={(e) => p.setDraft({ ...d, weights: { ...d.weights, [x.k]: Number(e.target.value) } })} className="w-full accent-[#171717]" aria-label={x.label} />
-            <div className="text-[11px] text-[#737373]">{x.hint}</div>
+            <div className="text-[11px] text-[#6B6B6B]">{x.hint}</div>
           </div>
         ))}
       </div>
-      <p className="text-[12px] text-[#737373]">Hard rules (rest, weekly maximum, days in a row, availability, approved time off) are never traded off.</p>
+      <p className="text-[12px] text-[#6B6B6B]">Hard rules (rest, weekly maximum, days in a row, availability, approved time off) are never traded off.</p>
       {p.error && <Banner kind="err">{p.error}</Banner>}
       {p.saved && <Banner kind="ok">Weights saved.</Banner>}
       {p.canWrite && <div><Btn variant="primary" onClick={p.save}>Save weights</Btn></div>}

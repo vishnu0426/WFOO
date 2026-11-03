@@ -7,6 +7,7 @@
  * OAuth2 client-credentials flow and header-based auths follow each vendor's documented shape and are unit-tested
  * with a fake `fetch`, not a real one.
  */
+import { CONFIG_SECRET_KEYS, openFields } from '../../secrets.ts';
 import type { Preset } from './presets.ts';
 
 export type FetchFn = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; json: () => Promise<any>; text: () => Promise<string> }>;
@@ -31,7 +32,8 @@ export async function oauthToken(connectorId: string, tokenUrl: string, clientId
 }
 
 /** Header-based auths only (everything except AWS_SIGV4, which signs per-request, and MUTUAL_TLS, which needs a TLS client certificate, not a header -- see the note in presets.ts for ADP). */
-export async function authHeaders(connectorId: string, preset: Preset, config: Record<string, any>, fetchImpl: FetchFn): Promise<Record<string, string>> {
+export async function authHeaders(connectorId: string, preset: Preset, storedConfig: Record<string, any>, fetchImpl: FetchFn): Promise<Record<string, string>> {
+  const config = openFields(storedConfig, CONFIG_SECRET_KEYS);          // credentials are encrypted at rest and opened only to be used
   switch (preset.authType) {
     case 'NONE': return {};
     case 'BEARER_STATIC': return { Authorization: `Bearer ${config.apiKey}` };

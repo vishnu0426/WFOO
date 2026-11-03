@@ -11,6 +11,7 @@ import { audit } from '../../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../../http.ts';
 import { notify, usersOf } from '../../notify.ts';
 import { addDays, dayRange } from '../forecast/service.ts';
+import { payWeekFor, weekdayOf } from '../payWeek.ts';
 import { loadCtx, placeActivities, refreshStats, requirementFor, revision, validateShifts, type PlacedShift, type ShiftRow } from '../scheduleRoutes.ts';
 import { whoAmI } from '../selfService.ts';
 import { hhmm } from '../workforceRoutes.ts';
@@ -22,7 +23,7 @@ const uuid = z.string().uuid();
 const SPD = 96;
 const DAY = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const slotOf = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t); return m ? Math.min(95, Math.floor((+m[1] * 60 + +m[2]) / 15)) : NaN; };
-const isMonday = (d: string) => { const [y, m, dd] = d.split('-').map(Number); return new Date(Date.UTC(y, m - 1, dd)).getUTCDay() === 1; };
+const WEEKDAY = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 // ---------------------------------------------------------------- what a pattern means
 
@@ -35,8 +36,9 @@ function shiftsOf(pattern: PatternRow, tpl: Tpl, employeeId: string, from: strin
   for (let w = 0; w < weeks; w++) for (const d of pattern.workDays) { const i = w * 7 + d; out.push({ employeeId, day: addDays(from, i), dayIdx: i, startSlot: pattern.startSlot, lengthSlots: tpl.lengthSlots, templateId: tpl.id }); }
   return out;
 }
-const describe = (p: PatternRow, t: Tpl) => ({
-  id: p.id, name: p.name, days: p.workDays.map((d) => DAY[d]), startTime: hhmm(p.startSlot), endTime: hhmm(p.startSlot + t.lengthSlots), overnight: p.startSlot + t.lengthSlots > SPD,
+/** A pattern's days count from the first day of the round, which is the first day of the pay week: day 0 is that weekday, not always Monday. */
+const describe = (p: PatternRow, t: Tpl, startDow: number) => ({
+  id: p.id, name: p.name, days: p.workDays.map((d) => DAY[(startDow + d) % 7]), startTime: hhmm(p.startSlot), endTime: hhmm(p.startSlot + t.lengthSlots), overnight: p.startSlot + t.lengthSlots > SPD,
   paidHours: (t.lengthSlots - t.mealSlots) / 4, capacity: p.capacity, templateName: t.name,
 });
 
@@ -55,7 +57,7 @@ const roundDto = (r: any, extra: Record<string, unknown> = {}) => ({
 /** Which patterns each person may hold: everything the scheduler would check, on the pattern's weeks, including the labour-law pack. */
 async function fitsFor(tenantId: string, r: any, patterns: PatternRow[], tpls: Map<string, Tpl>) {
   const { from, to } = weeksOf(r);
-  const ctx = await withTenant(tenantId, (tx) => loadCtx(tx, r.wfmGroupId, from, to));
+  const ctx = { ...(await withTenant(tenantId, (tx) => loadCtx(tx, r.wfmGroupId, from, to))), weekStart: weekdayOf(r.periodStart) };   // a round runs in whole pay weeks from its first day
   const people = (ctx.employees as any[]).filter((e) => e.status === 'ACTIVE');
   const fits = new Map<string, { ok: boolean; why: string }>();
   for (const e of people) for (const p of patterns) {
@@ -84,14 +86,16 @@ async function writePatterns(tx: Tx, roundId: string, b: z.infer<typeof Body>) {
     await tx.exec('INSERT INTO bid_patterns (tenant_id, round_id, name, template_id, start_slot, work_days, capacity, position) VALUES (:t, $1, $2, $3, $4, $5, $6, $7)', [roundId, p.name, p.templateId, s, [...new Set(p.workDays)].sort(), p.capacity, pos++]);
   }
 }
-function checkRound(b: z.infer<typeof Body>) {
-  if (!isMonday(b.periodStart)) throw bad('A bid covers whole weeks, so it must start on a Monday.');
+/** A bid covers whole pay weeks, so it starts on the day the group's pay week starts (Monday unless the group or company says otherwise). */
+async function checkRound(tx: Tx, b: z.infer<typeof Body>) {
+  const start = (await payWeekFor(tx, b.groupId)).start;
+  if (weekdayOf(b.periodStart) !== start) throw bad(`A bid covers whole weeks, so it must start on a ${WEEKDAY[start]}, the day this group's pay week starts.`);
 }
 
 bidsAdmin.post('/', requires('schedule:generate'), async (req, res) => {
   const p = me(req), b = parse(Body, req.body);
-  checkRound(b);
   const id = await withTenant(p.tenantId, async (tx) => {
+    await checkRound(tx, b);
     if (!(await tx.one('SELECT 1 FROM wfm_groups WHERE tenant_id = :t AND id = $1', [b.groupId]))) throw notFound('WFM group');
     const r = (await tx.one<{ id: string }>(
       `INSERT INTO bid_rounds (tenant_id, wfm_group_id, name, method, period_start, weeks, fill_unranked, closes_at, seed, created_by) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
@@ -105,8 +109,8 @@ bidsAdmin.post('/', requires('schedule:generate'), async (req, res) => {
 
 bidsAdmin.put('/:id', requires('schedule:generate'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id), b = parse(Body, req.body);
-  checkRound(b);
   await withTenant(p.tenantId, async (tx) => {
+    await checkRound(tx, b);
     const cur = await tx.one<any>('SELECT status FROM bid_rounds WHERE tenant_id = :t AND id = $1', [id]);
     if (!cur) throw notFound('Bid round');
     if (cur.status !== 'DRAFT') throw conflict('Only a round that has not opened can be changed.');
@@ -129,7 +133,7 @@ async function detail(tenantId: string, id: string) {
     const names = new Map(patterns.map((p) => [p.id, p.name]));
     return roundDto(r, {
       eligible: people.length, submitted: bidders.size,
-      patterns: patterns.map((p) => ({ ...describe(p, tpls.get(p.templateId)!), firstChoices: first.get(p.id) ?? 0, canHold: people.filter((e) => fits.get(`${e.id}|${p.id}`)?.ok).length, awarded: awards.filter((a) => a.patternId === p.id).length })),
+      patterns: patterns.map((p) => ({ ...describe(p, tpls.get(p.templateId)!, weekdayOf(r.periodStart)), firstChoices: first.get(p.id) ?? 0, canHold: people.filter((e) => fits.get(`${e.id}|${p.id}`)?.ok).length, awarded: awards.filter((a) => a.patternId === p.id).length })),
       awards: awards.map((a) => ({ employeeId: a.employeeId, name: a.name, employeeNumber: a.employeeNumber, patternId: a.patternId, patternName: a.patternId ? names.get(a.patternId) ?? null : null, rank: a.rank })),
     });
   });
@@ -149,7 +153,7 @@ bidsAdmin.post('/:id/open', requires('schedule:generate'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   const r = await setStatus(p.tenantId, id, ['DRAFT'], 'OPEN');
   await withTenant(p.tenantId, async (tx) => {
-    const emps = await tx.q<{ id: string }>(`SELECT id FROM employees WHERE tenant_id = :t AND status = 'ACTIVE' AND (primary_group_id = $1 OR $1 = ANY(eligible_group_ids))`, [r.wfmGroupId]);
+    const emps = await tx.q<{ id: string }>(`SELECT id FROM employees WHERE tenant_id = :t AND status = 'ACTIVE' AND (primary_group_id = $1 OR eligible_group_ids @> ARRAY[$1::uuid])`, [r.wfmGroupId]);
     await notify(tx, await usersOf(tx, emps.map((e) => e.id)), { kind: 'BID', title: 'Shift bidding is open', body: `${r.name}: rank the patterns you would like.`, data: { screen: 'bid', id } });
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'BID_ROUND', entityId: id, entityName: r.name, diffSummary: 'opened for bids' });
   });
@@ -213,7 +217,7 @@ bidsAdmin.post('/:id/award', requires('schedule:generate'), async (req, res) => 
     const name = `${r.name} · bid result · ${r.weeks} wk from ${from}`;
     const v = (await tx.one<any>(
       `INSERT INTO schedule_versions (tenant_id, wfm_group_id, seq, name, period_start, period_end, forecast_version_id, settings, stats, created_by) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, '{}', $8) RETURNING id`,
-      [r.wfmGroupId, seq, name, from, to, fv, JSON.stringify({ bidRoundId: id, method }), p.name]))!;
+      [r.wfmGroupId, seq, name, from, to, fv, JSON.stringify({ bidRoundId: id, method, weekStart: weekdayOf(from) }), p.name]))!;
     if (chosen.length) await tx.exec(
       `INSERT INTO schedule_shifts (tenant_id, version_id, employee_id, day, template_id, start_slot, length_slots, activities, source)
        SELECT :t, $1, x.e, x.d, x.tp, x.s, x.l, x.a::jsonb, 'MANUAL' FROM unnest($2::uuid[], $3::date[], $4::uuid[], $5::int[], $6::int[], $7::text[]) AS x(e, d, tp, s, l, a)`,
@@ -277,7 +281,7 @@ bidsMe.get('/', requires('self:use'), async (req, res) => {
       award: await tx.one<any>('SELECT pattern_id, rank FROM bid_awards WHERE tenant_id = :t AND round_id = $1 AND employee_id = $2', [id, rounds.w.employeeId]),
     }));
     out.push(roundDto(r, {
-      patterns: patterns.map((x) => ({ ...describe(x, tpls.get(x.templateId)!), fits: fits.get(`${rounds.w.employeeId}|${x.id}`)?.ok ?? false, why: fits.get(`${rounds.w.employeeId}|${x.id}`)?.why ?? '' })),
+      patterns: patterns.map((x) => ({ ...describe(x, tpls.get(x.templateId)!, weekdayOf(r.periodStart)), fits: fits.get(`${rounds.w.employeeId}|${x.id}`)?.ok ?? false, why: fits.get(`${rounds.w.employeeId}|${x.id}`)?.why ?? '' })),
       myRanking: mine.ranking, myAward: r.status === 'AWARDED' ? { patternId: mine.award?.patternId ?? null, patternName: patterns.find((x) => x.id === mine.award?.patternId)?.name ?? null, rank: mine.award?.rank ?? null } : null,
     }));
   }

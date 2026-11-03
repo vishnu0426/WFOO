@@ -7,10 +7,12 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
-import { addDays, api, ConsistentTimes, CoverageWindow, dayYear, dec, dowOfDay, Employee, nextMonday, ScheduleVersion, SchedulingPolicy, ShiftTemplate, VersionMeta } from '../../services/api';
+import { addDays, api, ConsistentTimes, CoverageWindow, dayYear, dec, dowOfDay, Employee, nextWeekStart, ScheduleJob, ScheduleVersion, SchedulingPolicy, ShiftTemplate, VersionMeta } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
-import { useApi } from '../forecasting/hooks';
+import { useApi, usePayWeek } from '../forecasting/hooks';
+import { PersonPicker } from '../common/PersonPicker';
 import { Banner, Btn, Card, Empty, Field, Input, Kpi, KpiRow, Select } from '../forecasting/ui';
+import { JobCard } from './JobCard';
 
 export const WEIGHTS = [
   { k: 'understaffing', label: 'Cover the forecast', hint: 'Avoid having fewer people than needed' },
@@ -32,18 +34,28 @@ const PRESETS: { id: string; label: string; hint: string; w: Record<string, numb
 const sameWeights = (a: Record<string, number>, b: Record<string, number>) => Object.keys(b).every((k) => a[k] === b[k]);
 const hhmm = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
 
-type Readiness = { requiredHours: number | null; peakPeople: number | null; uncoveredDays: string[]; projectedDays: string[]; problem: string | null; payWeek: { start: number; source: 'GROUP' | 'COMPANY' | 'DEFAULT'; companyStart: number } };
+type Readiness = { requiredHours: number | null; peakPeople: number | null; uncoveredDays: string[]; projectedDays: string[]; problem: string | null; payWeek: { start: number; source: 'GROUP' | 'COMPANY' | 'DEFAULT'; companyStart: number }; horizon?: { weekStart: string; source: string; confidence: string }[]; estimate?: { people: number; windows: number; seconds: number }; confidenceNote?: string | null };
 type Item = { ok: boolean | 'info'; text: string; action?: { label: string; onClick: () => void } };
 
 export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (v: ScheduleVersion) => void; go: (sub: string) => void }> = ({ versions, onCreated, go }) => {
   const { group, can, go: goModule } = useForecast();
   const fcs = useApi<VersionMeta[]>(group ? `/forecast/versions?groupId=${group.id}` : null);
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
-  const emps = useApi<Employee[]>(group ? `/workforce/employees?groupId=${group.id}&status=ACTIVE` : null);
+  // counts and hours only, however large the group: the people themselves are never downloaded here
+  const emps = useApi<{ people: number; weeklyHours: number; teams: { id: string; name: string; people: number; weeklyHours: number }[] }>(group ? `/workforce/employees/summary?groupId=${group.id}&status=ACTIVE` : null);
   const coverageWindows = useApi<CoverageWindow[]>(group ? `/config/groups/${group.id}/coverage-windows` : null);
   const [coverageSource, setCoverageSource] = useState<'FORECAST' | 'MANUAL'>('FORECAST');
-  const [from, setFrom] = useState(nextMonday());
+  const savedWeek = usePayWeek(group?.id);                 // a new schedule starts on the first day of the group's pay week, not always a Monday
+  const [fromPick, setFrom] = useState<string | null>(null);
+  const from = fromPick ?? nextWeekStart(savedWeek, 0);
   const [weeks, setWeeks] = useState(1);
+  const [customOn, setCustomOn] = useState(false);   // "Custom…" picked in How far ahead, even if the number matches a preset
+  // a range past four weeks is built in the background, window by window; the first `solveWeeks` are solved shift by shift and the rest repeat the last solved cycle
+  const [solveWeeksPick, setSolveWeeksPick] = useState<number | null>(null);
+  const [solverPick, setSolverPick] = useState('AUTO');
+  const [jobId, setJobId] = useState<string | null>(null);
+  const long = weeks > 4;
+  const solveWeeks = Math.min(weeks, solveWeeksPick ?? Math.min(weeks, 13));
   // The pay week (Monday 0 ... Sunday 6) comes from the saved setting for this group, else the company's. Picking another day here applies to this run only.
   const [weekPick, setWeekPick] = useState<number | null>(null);
   const [saved, setSaved] = useState(0);              // bumped after saving, to read the saved pay week again
@@ -52,7 +64,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   const [skip, setSkip] = useState<string[]>([]);
   const [scope, setScope] = useState<'ALL' | 'TEAM' | 'EMPLOYEE'>('ALL');
   const [skipTeam, setSkipTeam] = useState<string[]>([]);
-  const [skipEmp, setSkipEmp] = useState<string[]>([]);
+  const [skipEmp, setSkipEmp] = useState<Employee[]>([]);   // people left out under "By employee"
   const [w, setW] = useState<Record<string, number>>(PRESETS[0].w);
   const [custom, setCustom] = useState(false);
   // Same start and end every day for the whole period: starts from the company setting (Configuration › Scheduling Rules). A person's own setting still wins.
@@ -77,7 +89,9 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   useEffect(() => { if (result) resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [result]);
 
   const to = addDays(from, weeks * 7 - 1);
-  const readiness = useApi<Readiness>(group ? `/scheduling/readiness?groupId=${group.id}&from=${from}&weeks=${weeks}&coverageSource=${coverageSource}` : null, [from, weeks, coverageSource, group?.id, saved]);
+  const readiness = useApi<Readiness>(group ? `/scheduling/readiness?groupId=${group.id}&from=${from}&weeks=${weeks}&coverageSource=${coverageSource}&timeLimitSec=${limit}&solveWeeks=${solveWeeks}` : null, [from, weeks, coverageSource, group?.id, saved, limit, solveWeeks]);
+  const running = useApi<ScheduleJob[]>(group ? `/scheduling/jobs?groupId=${group.id}&active=true` : null, [group?.id]);
+  useEffect(() => { if (!jobId && running.data?.length) setJobId(running.data[0].id); }, [running.data]);
   const weekStart = weekPick ?? readiness.data?.payWeek.start ?? 0;
   const setWeekStart = (n: number) => setWeekPick(n === readiness.data?.payWeek.start ? null : n);
   const payWeek = readiness.data?.payWeek;
@@ -89,13 +103,12 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   const published = fcs.data?.find((v) => v.kind === 'SHORT' && v.status === 'PUBLISHED');
   const active = (tpls.data ?? []).filter((t) => t.status === 'ACTIVE');
   const chosen = active.filter((t) => !skip.includes(t.id));
-  const teamsInGroup = [...new Map((emps.data ?? []).filter((e) => e.teamId).map((e) => [e.teamId!, e.teamName!])).entries()];
-  const included = scope === 'ALL' ? (emps.data ?? [])
-    : scope === 'TEAM' ? (emps.data ?? []).filter((e) => e.teamId && !skipTeam.includes(e.teamId))
-    : (emps.data ?? []).filter((e) => !skipEmp.includes(e.id));
+  const teamsInGroup: [string, string][] = (emps.data?.teams ?? []).map((t) => [t.id, t.name]);
+  const keptTeams = (emps.data?.teams ?? []).filter((t) => !skipTeam.includes(t.id));
+  const includedCount = scope === 'ALL' ? emps.data?.people ?? 0 : scope === 'TEAM' ? keptTeams.reduce((n, t) => n + t.people, 0) : Math.max(0, (emps.data?.people ?? 0) - skipEmp.length);
 
   // hours people are contracted for across these dates, against what the staffing target needs
-  const contractHours = included.reduce((n, e) => n + e.weeklyContractHours * weeks, 0);
+  const contractHours = (scope === 'ALL' ? emps.data?.weeklyHours ?? 0 : scope === 'TEAM' ? keptTeams.reduce((n, t) => n + t.weeklyHours, 0) : (emps.data?.weeklyHours ?? 0) - skipEmp.reduce((n, e) => n + e.weeklyContractHours, 0)) * weeks;
   const needHours = readiness.data?.requiredHours ?? null;
 
   // hours of the day that no chosen template can have someone working (informational: fine if the phones are closed then)
@@ -120,17 +133,17 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   const startDow = dowOfDay(from);
   const misaligned = startDow !== weekStart;
   const hasPriorPublished = versions.some((v) => v.wfmGroupId === group?.id && v.status === 'PUBLISHED' && v.periodEnd >= addDays(from, -1) && v.periodStart < from);
-  const ready = coverageReady && chosen.length > 0 && included.length > 0 && !(readiness.data?.problem && coverageSource === 'FORECAST');
+  const ready = coverageReady && chosen.length > 0 && includedCount > 0 && !(readiness.data?.problem && coverageSource === 'FORECAST');
 
   const items: Item[] = [
     coverageSource === 'FORECAST'
       ? { ok: !!published, text: published ? `Forecast: ${published.name}` : 'No published short-term forecast', action: !published && can('forecast:create') ? { label: 'Open Forecasting', onClick: () => goModule('forecast-dashboard', 'forecasting') } : undefined }
       : { ok: (coverageWindows.data?.length ?? 0) > 0, text: (coverageWindows.data?.length ?? 0) > 0 ? `${coverageWindows.data?.length} coverage window${coverageWindows.data?.length === 1 ? '' : 's'} set` : 'No coverage windows set for this group', action: (coverageWindows.data?.length ?? 0) === 0 ? { label: 'WFM Groups', onClick: () => goModule('wfm-groups', 'configuration') } : undefined },
     { ok: chosen.length > 0, text: chosen.length ? `${chosen.length} shift template${chosen.length === 1 ? '' : 's'} chosen` : 'No shift templates chosen', action: chosen.length === 0 ? { label: 'Shift Templates', onClick: () => go('shift-templates') } : undefined },
-    { ok: included.length > 0, text: included.length ? `${included.length} of ${emps.data?.length ?? 0} active people included` : 'No employees in this group', action: included.length === 0 ? { label: 'Employees', onClick: () => goModule('employees', 'workforce') } : undefined },
+    { ok: includedCount > 0, text: includedCount ? `${includedCount} of ${emps.data?.people ?? 0} active people included` : 'No employees in this group', action: includedCount === 0 ? { label: 'Employees', onClick: () => goModule('employees', 'workforce') } : undefined },
   ];
   if (readiness.data?.problem && coverageSource === 'FORECAST') items.push({ ok: false, text: readiness.data.problem });
-  if (needHours !== null && included.length) {
+  if (needHours !== null && includedCount) {
     const diff = contractHours - needHours, pct = needHours ? Math.round((diff / needHours) * 100) : 0;
     items.push(diff >= 0
       ? { ok: true, text: `Needs ${Math.round(needHours).toLocaleString()} h; contracts give ${Math.round(contractHours).toLocaleString()} h (${pct}% to spare)` }
@@ -138,6 +151,11 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   }
   if (readiness.data?.uncoveredDays.length) items.push({ ok: false, text: `No staffing target for ${readiness.data.uncoveredDays.length} day${readiness.data.uncoveredDays.length === 1 ? '' : 's'}` });
   if (readiness.data?.projectedDays.length) items.push({ ok: 'info', text: `${readiness.data.projectedDays.length} day${readiness.data.projectedDays.length === 1 ? ' is' : 's are'} beyond the short-term forecast: staffed from the long-term forecast` });
+  if (long && readiness.data?.estimate) {
+    const m = Math.max(1, Math.round(readiness.data.estimate.seconds / 60));
+    items.push({ ok: 'info', text: `Builds in the background in about ${m} minute${m === 1 ? '' : 's'} (${readiness.data.estimate.windows} four-week window${readiness.data.estimate.windows === 1 ? '' : 's'} for ${readiness.data.estimate.people} people). It keeps running if you leave this page.` });
+    if (readiness.data.confidenceNote) items.push({ ok: 'info', text: readiness.data.confidenceNote });
+  }
   items.push(misaligned
     ? { ok: false, text: `Starts on a ${WEEKDAYS[startDow]} but the pay week starts on ${WEEKDAYS[weekStart]}: people may not reach full contract hours`, action: { label: `Use ${WEEKDAYS[startDow]} week`, onClick: () => setWeekStart(startDow) } }
     : { ok: true, text: `Pay week starts on ${WEEKDAYS[weekStart]}, the same day the schedule starts` });
@@ -148,15 +166,29 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     if (!group) return;
     setBusy(true); setError(''); setResult(null);
     try {
-      const v = await api<ScheduleVersion>('/scheduling/versions', {
-        method: 'POST', body: {
-          groupId: group.id, from, weeks, ...(weekPick !== null ? { weekStart: weekPick } : {}), timeLimitSec: limit, weights: w, consistentTimes: steady, optimizeBreaks: breaksOn, assumeRepeat: repeat && weeks === 1, templateIds: chosen.map((t) => t.id), coverageSource, ...(coverageSource === 'FORECAST' ? { confidence } : {}),
-          ...(scope === 'EMPLOYEE' ? { employeeIds: included.map((e) => e.id) } : {}),
-          ...(scope === 'TEAM' ? { teamIds: teamsInGroup.filter(([id]) => !skipTeam.includes(id)).map(([id]) => id) } : {}),
-        },
-      });
-      setResult(v); onCreated(v);
+      const body = {
+        groupId: group.id, from, weeks, ...(weekPick !== null ? { weekStart: weekPick } : {}), timeLimitSec: limit, weights: w, consistentTimes: steady, optimizeBreaks: breaksOn, assumeRepeat: repeat && weeks === 1, templateIds: chosen.map((t) => t.id), coverageSource, solver: solverPick, ...(coverageSource === 'FORECAST' ? { confidence } : {}),
+        ...(scope === 'EMPLOYEE' && skipEmp.length ? { excludeEmployeeIds: skipEmp.map((e) => e.id) } : {}),
+        ...(scope === 'TEAM' ? { teamIds: teamsInGroup.filter(([id]) => !skipTeam.includes(id)).map(([id]) => id) } : {}),
+      };
+      if (long) {                                    // a background job: the answer arrives through the progress card
+        const j = await api<ScheduleJob>('/scheduling/jobs', { method: 'POST', body: { ...body, windowWeeks: 4, solveWeeks } });
+        setJobId(j.id); setBusy(false);
+        return;
+      }
+      try {
+        const v = await api<ScheduleVersion>('/scheduling/versions', { method: 'POST', body });
+        setResult(v); onCreated(v);
+      } catch (e: any) {
+        // too big to answer while waiting: the same request runs as a background job and reports through the progress card
+        if (!String(e?.message).includes('while you wait')) throw e;
+        const j = await api<ScheduleJob>('/scheduling/jobs', { method: 'POST', body: { ...body, windowWeeks: 4, solveWeeks } });
+        setJobId(j.id);
+      }
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const jobFinished = async (j: ScheduleJob) => {
+    if (j.status === 'DONE' && j.versionId) { try { const v = await api<ScheduleVersion>(`/scheduling/versions/${j.versionId}`); setResult(v); onCreated(v); } catch (e: any) { setError(e.message); } }
   };
   const solver = result?.stats.solver;
 
@@ -168,6 +200,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
 
   return (
     <div className="space-y-6">
+      {jobId && <JobCard jobId={jobId} canCancel={can('schedule:generate')} onFinished={jobFinished} />}
       {result && solver && (
         <div ref={resultRef}>
           <Card title={`Created ${result.name}`} sub="A draft. Review it on the timeline, fix anything flagged, then publish.">
@@ -176,13 +209,15 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
               <Kpi label="Shifts" value={result.stats.shifts} sub={`${result.stats.people} people`} />
               <Kpi label="Paid hours" value={dec(result.stats.hours.paid, 0)} sub={`${dec(result.stats.hours.overtime, 0)}h above contract`} />
               <Kpi label="Rule violations" value={result.stats.violations} tone={result.stats.violations ? 'bad' : 'good'} sub={result.stats.violations ? 'must be fixed to publish' : 'none'} />
-              <Kpi label="Solver" value={<span className="text-[15px]">{solver.status === 'OPTIMAL' ? 'Best possible' : 'Good solution'}</span>} sub={`${solver.wallSec}s · ${solver.candidates.toLocaleString()} options${solver.status === 'OPTIMAL' ? '' : ` · within ${dec(solver.gap * 100, 1)}% of best`}`} />
+              <Kpi label="Solver" value={<span className="text-[15px]">{solver.status === 'OPTIMAL' ? 'Best possible' : 'Good solution'}</span>} sub={`${solver.wallSec}s · ${solver.candidates.toLocaleString()} options${solver.status === 'OPTIMAL' ? '' : ` · within ${dec(solver.gap * 100, 1)}% of best`}${solver.backend && solver.backend !== 'cpsat' ? ` · answered by ${solver.backend}` : ''}`} />
             </KpiRow>
+            {solver.backend && solver.backend !== 'cpsat' && <Banner kind="warn">The main solver could not answer this one, so a backup ({solver.backend}) built it. {solver.attempts?.join('; ')}</Banner>}
             {result.stats.uncoveredDays && result.stats.uncoveredDays.length > 0 && <Banner kind="warn">Neither forecast covers {result.stats.uncoveredDays.join(', ')}, so those days have no staffing target.</Banner>}
             {result.stats.projectedDays && result.stats.projectedDays.length > 0 && <Banner kind="warn">{result.stats.projectedDays.join(', ')} {result.stats.projectedDays.length > 1 ? 'are' : 'is'} beyond the short-term forecast's reach — staffed from the long-term forecast projected onto intervals by historical shape, lower confidence than a normal day.</Banner>}
             {result.settings?.report && <ReportSummary report={result.settings.report} />}
             <div className="flex flex-wrap gap-2">
               <Btn variant="primary" onClick={() => go('schedule-timeline')}>Open timeline</Btn>
+              {result.settings?.plan && <Btn onClick={() => go('year-plan')}>Open the year plan</Btn>}
               <Btn onClick={() => go('schedule-quality')}>See score, shortages and full report</Btn>
             </div>
           </Card>
@@ -198,12 +233,29 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                 <button type="button" className={`px-3 py-1 rounded-md border ${coverageSource === 'FORECAST' ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#E5E5E0]'}`} onClick={() => setCoverageSource('FORECAST')}>From forecast</button>
                 <button type="button" className={`px-3 py-1 rounded-md border ${coverageSource === 'MANUAL' ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#E5E5E0]'}`} onClick={() => setCoverageSource('MANUAL')}>Set manually</button>
               </div>
-              {coverageSource === 'FORECAST' && published && <p className="text-[12px] text-[#737373] mt-1.5">The schedule must fall inside the forecast’s dates: {dayYear(published.fromDay)} to {dayYear(published.toDay)}.</p>}
+              {coverageSource === 'FORECAST' && published && <p className="text-[12px] text-[#6B6B6B] mt-1.5">The schedule must fall inside the forecast’s dates: {dayYear(published.fromDay)} to {dayYear(published.toDay)}.</p>}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Field label="Starts on" hint={`${fmtShort(from)} to ${fmtShort(to)}`}><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} min={coverageSource === 'FORECAST' ? published?.fromDay : undefined} max={coverageSource === 'FORECAST' ? published?.toDay : undefined} /></Field>
               <Field label="Pay week starts on" hint={weekPick !== null ? 'For this run only' : payWeek?.source === 'GROUP' ? `Saved for ${group.name}` : payWeek?.source === 'COMPANY' ? 'Company setting' : 'Not set: Monday'}><Select value={weekStart} onChange={(e) => setWeekStart(Number(e.target.value))}>{WEEKDAYS.map((n, i) => <option key={n} value={i}>{n}</option>)}</Select></Field>
-              <Field label="Length"><Select value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} week{n > 1 ? 's' : ''}</option>)}</Select></Field>
+              <Field label="How far ahead" hint={`${fmtShort(from)} to ${fmtShort(to)} · ${weeks} ${weeks === 1 ? 'week' : 'weeks'}`}>
+                <div className="space-y-2">
+                  <Select
+                    value={customOn || ![1, 2, 4, 13, 26, 52].includes(weeks) ? 'custom' : weeks}
+                    onChange={(e) => {
+                      setSolveWeeksPick(null);
+                      if (e.target.value === 'custom') setCustomOn(true);
+                      else { setCustomOn(false); setWeeks(Number(e.target.value)); }
+                    }}
+                  >
+                    {([[1, '1 week'], [2, '2 weeks'], [4, '4 weeks'], [13, '13 weeks · quarter'], [26, '26 weeks · 6 months'], [52, '52 weeks · 12 months']] as const).map(([n, label]) => <option key={n} value={n}>{label}</option>)}
+                    <option value="custom">Custom…</option>
+                  </Select>
+                  {(customOn || ![1, 2, 4, 13, 26, 52].includes(weeks)) && (
+                    <label className="flex items-center gap-1.5 text-[12px] text-[#6B6B6B]"><Input type="number" min={1} max={52} className="!w-20" value={weeks} onChange={(e) => { setWeeks(Math.min(52, Math.max(1, Number(e.target.value) || 1))); setSolveWeeksPick(null); }} aria-label="Weeks" /> weeks</label>
+                  )}
+                </div>
+              </Field>
             </div>
             {coverageSource === 'FORECAST' && (
               <Field label="How sure to be of having enough people" hint={confidence <= 50 ? 'Staff to the forecast as published: right on a normal day, short when it runs busy' : `Staff for a busier day than the forecast: about ${confidence} days in 100 are covered, at the cost of more people on shift`}>
@@ -214,6 +266,16 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                   <option value={95}>Very safe (95%)</option>
                 </Select>
               </Field>
+            )}
+            {long && (
+              <div className="rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] p-3 space-y-2">
+                <div className="text-[12px] font-semibold">Long range</div>
+                <p className="text-[12px] text-[#525252]">A long schedule is built in the background, four weeks at a time, each starting from where the one before it ended. Weeks close to today are solved shift by shift. Weeks far ahead depend on a forecast that gets less certain, so they repeat the last solved cycle and are re-solved as they come closer.</p>
+                <label className="flex flex-wrap items-center gap-2 text-[13px]">Solve the first
+                  <Select className="!w-auto" value={solveWeeks} onChange={(e) => setSolveWeeksPick(Number(e.target.value))}>{[...new Set([4, 8, 13, 26, weeks].filter((n) => n <= weeks))].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n === weeks ? `all ${n} weeks (slowest)` : `${n} weeks`}</option>)}</Select>
+                  shift by shift{solveWeeks < weeks ? ', then repeat that pattern' : ''}
+                </label>
+              </div>
             )}
             {weekPick !== null && can('config:write') && (
               <p className="text-[12px] text-[#525252]">This run uses a {WEEKDAYS[weekPick]} pay week. <button type="button" className="underline font-semibold" onClick={saveAsGroupDefault}>Save {WEEKDAYS[weekPick]} as the pay week for {group.name}</button> so everyone uses it, including overtime and compliance checks.</p>
@@ -230,7 +292,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
             <div>
               <div className="text-[12px] font-semibold mb-1.5">Shift templates to use</div>
               <div className="flex flex-wrap gap-3 text-[13px]">
-                {active.map((t) => <label key={t.id} className="flex items-center gap-1.5"><input type="checkbox" checked={!skip.includes(t.id)} onChange={(e) => setSkip(e.target.checked ? skip.filter((x) => x !== t.id) : [...skip, t.id])} />{t.name} <span className="text-[11px] text-[#737373]">{t.earliestStart}–{t.latestStart}, {t.durationHours}h</span></label>)}
+                {active.map((t) => <label key={t.id} className="flex items-center gap-1.5"><input type="checkbox" checked={!skip.includes(t.id)} onChange={(e) => setSkip(e.target.checked ? skip.filter((x) => x !== t.id) : [...skip, t.id])} />{t.name} <span className="text-[11px] text-[#6B6B6B]">{t.earliestStart}–{t.latestStart}, {t.durationHours}h</span></label>)}
               </div>
             </div>
             <div>
@@ -238,22 +300,27 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
               <div className="flex gap-1.5 text-[13px] mb-2">
                 {(['ALL', 'TEAM', 'EMPLOYEE'] as const).map((s) => (
                   <button key={s} type="button" className={`px-3 py-1 rounded-md border ${scope === s ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#E5E5E0]'}`} onClick={() => setScope(s)}>
-                    {s === 'ALL' ? 'Everyone in the group' : s === 'TEAM' ? 'By team' : 'By employee'}
+                    {s === 'ALL' ? 'Everyone in the group' : s === 'TEAM' ? 'By team' : 'Everyone except…'}
                   </button>
                 ))}
               </div>
               {scope === 'TEAM' && (
                 <div className="flex flex-wrap gap-3 text-[13px]">
-                  {teamsInGroup.length === 0 ? <span className="text-[12px] text-[#737373]">No one in this group belongs to a team.</span> : teamsInGroup.map(([id, name]) => (
+                  {teamsInGroup.length === 0 ? <span className="text-[12px] text-[#6B6B6B]">No one in this group belongs to a team.</span> : teamsInGroup.map(([id, name]) => (
                     <label key={id} className="flex items-center gap-1.5"><input type="checkbox" checked={!skipTeam.includes(id)} onChange={(e) => setSkipTeam(e.target.checked ? skipTeam.filter((x) => x !== id) : [...skipTeam, id])} />{name}</label>
                   ))}
                 </div>
               )}
               {scope === 'EMPLOYEE' && (
-                <div className="flex flex-wrap gap-3 text-[13px] max-h-40 overflow-auto">
-                  {(emps.data ?? []).map((e) => (
-                    <label key={e.id} className="flex items-center gap-1.5"><input type="checkbox" checked={!skipEmp.includes(e.id)} onChange={(ev) => setSkipEmp(ev.target.checked ? skipEmp.filter((x) => x !== e.id) : [...skipEmp, e.id])} />{e.name}</label>
-                  ))}
+                <div className="text-[13px]">
+                  <div className="text-[12px] text-[#6B6B6B] mb-1.5">Everyone in the group is scheduled except the people you add here.</div>
+                  <div className="max-w-xs mb-2"><PersonPicker value="" status="ACTIVE" groupId={group?.id} placeholder="Leave someone out…" ariaLabel="Leave a person out" onChange={(id, person) => { if (person && !skipEmp.some((x) => x.id === id)) setSkipEmp([...skipEmp, person]); }} /></div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {skipEmp.map((e) => (
+                      <span key={e.id} className="inline-flex items-center gap-1 rounded-full border border-[#E5E5E0] bg-[#FAFAF8] pl-2.5 pr-1.5 py-0.5 text-[12px]">{e.name}
+                        <button type="button" aria-label={`Include ${e.name} again`} className="text-[#6B6B6B] hover:text-[#1A1A1A]" onClick={() => setSkipEmp(skipEmp.filter((x) => x.id !== e.id))}>×</button></span>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -264,7 +331,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
               {PRESETS.map((p) => (
                 <button key={p.id} type="button" onClick={() => { setW(p.w); setCustom(false); }} className={`text-left rounded-lg border px-3 py-2 ${preset?.id === p.id && !custom ? 'border-[#1A1A1A] bg-[#FAFAF8]' : 'border-[#E5E5E0] hover:bg-[#FAFAF8]'}`}>
                   <div className="text-[13px] font-semibold">{p.label}</div>
-                  <div className="text-[11px] text-[#737373]">{p.hint}</div>
+                  <div className="text-[11px] text-[#6B6B6B]">{p.hint}</div>
                 </button>
               ))}
             </div>
@@ -275,20 +342,20 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
                 {WEIGHTS.map((x) => (
                   <div key={x.k}>
-                    <div className="flex justify-between text-[12px]"><span className="font-semibold">{x.label}</span><span className="font-mono text-[#737373]">{w[x.k]}</span></div>
+                    <div className="flex justify-between text-[12px]"><span className="font-semibold">{x.label}</span><span className="font-mono text-[#6B6B6B]">{w[x.k]}</span></div>
                     <input type="range" min={0} max={100} value={w[x.k]} onChange={(e) => setW({ ...w, [x.k]: Number(e.target.value) })} className="w-full accent-[#171717]" />
-                    <div className="text-[11px] text-[#737373]">{x.hint}</div>
+                    <div className="text-[11px] text-[#6B6B6B]">{x.hint}</div>
                   </div>
                 ))}
               </div>
             )}
-            <p className="text-[11px] text-[#737373]">Always enforced, never traded off: one shift a day, rest between shifts, weekly maximum, days in a row, days per week, availability, approved time off and template days.</p>
+            <p className="text-[11px] text-[#6B6B6B]">Always enforced, never traded off: one shift a day, rest between shifts, weekly maximum, days in a row, days per week, availability, approved time off and template days.</p>
           </Section>
 
           <div className="border-t border-[#E5E5E0] pt-3">
             <button type="button" className="text-[13px] font-semibold flex items-center gap-1.5" onClick={() => setAdvanced(!advanced)}>
               {advanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}Advanced
-              <span className="text-[11px] font-normal text-[#737373]">same start times, week repeat, meals and breaks, solver time</span>
+              <span className="text-[11px] font-normal text-[#6B6B6B]">same start times, week repeat, meals and breaks, solver time</span>
             </button>
             {advanced && (
               <div className="mt-3 space-y-4">
@@ -307,14 +374,15 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                       </>
                     )}
                   </div>
-                  <div className="text-[11px] text-[#737373] mt-1">
+                  <div className="text-[11px] text-[#6B6B6B] mt-1">
                     {steady.mode === 'REQUIRE' ? 'Each person logs in at one usual time for the whole period and finishes at one usual time. This can lower coverage: check “Forecast covered” after generating.'
                       : steady.mode === 'PREFER' ? 'The solver keeps each person to one usual time when it can, but covering the forecast always comes first.' : 'Start and end times can change from day to day.'}
                     {' '}A person’s own setting, and any start time assigned to them, overrides this (Workforce › Employees).
                   </div>
                 </div>
-                {weeks === 1 && <label className="flex items-center gap-2 text-[13px]" title="For a first schedule with no published schedule before it."><input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />Assume the week repeats <span className="text-[11px] text-[#737373]">(the last night’s shifts past midnight cover the first hours of the first day)</span></label>}
-                <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={breaksOn} onChange={(e) => setBreaksOn(e.target.checked)} />Place meals and breaks where the phones need people most <span className="text-[11px] text-[#737373]">(within ±{pol.data?.scheduling.breakSlackMin ?? 60} min of their usual place)</span></label>
+                {weeks === 1 && <label className="flex items-center gap-2 text-[13px]" title="For a first schedule with no published schedule before it."><input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />Assume the week repeats <span className="text-[11px] text-[#6B6B6B]">(the last night’s shifts past midnight cover the first hours of the first day)</span></label>}
+                <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={breaksOn} onChange={(e) => setBreaksOn(e.target.checked)} />Place meals and breaks where the phones need people most <span className="text-[11px] text-[#6B6B6B]">(within ±{pol.data?.scheduling.breakSlackMin ?? 60} min of their usual place)</span></label>
+                <Field label="Solver" hint="Automatic uses CP-SAT and switches to HiGHS, then SCIP, then the starting roster if one fails or finds nothing. All are open source. The result says which one answered."><Select value={solverPick} onChange={(e) => setSolverPick(e.target.value)}><option value="AUTO">Automatic, with backups (recommended)</option><option value="CPSAT">CP-SAT only</option><option value="HIGHS">HiGHS only</option><option value="SCIP">SCIP only</option><option value="GREEDY">Starting roster only (fast, rough)</option></Select></Field>
                 <Field label="Solver time" hint="More time can find a better roster. Large groups need 60 seconds or more."><Select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>{[10, 30, 60, 120].map((n) => <option key={n} value={n}>Up to {n} seconds</option>)}</Select></Field>
               </div>
             )}
@@ -322,11 +390,11 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
         </Card>
 
         <div className="lg:sticky lg:top-4 space-y-3">
-          <Card title="Ready to generate?" sub={`${fmtShort(from)} to ${fmtShort(to)} · ${included.length} people · ${chosen.length} template${chosen.length === 1 ? '' : 's'}`}>
+          <Card title="Ready to generate?" sub={`${fmtShort(from)} to ${fmtShort(to)} · ${includedCount} people · ${chosen.length} template${chosen.length === 1 ? '' : 's'}`}>
             <ul className="space-y-1.5 text-[12px]">
               {items.map((it, i) => (
                 <li key={i} className="flex items-start justify-between gap-2">
-                  <span className={it.ok === true ? 'text-[#2F7D5A]' : it.ok === 'info' ? 'text-[#525252]' : 'text-[#B7791F] font-medium'}>{it.ok === true ? '✓ ' : it.ok === 'info' ? 'i ' : '! '}{it.text}</span>
+                  <span className={it.ok === true ? 'text-[#2A7553]' : it.ok === 'info' ? 'text-[#525252]' : 'text-[#8F6200] font-medium'}>{it.ok === true ? '✓ ' : it.ok === 'info' ? 'i ' : '! '}{it.text}</span>
                   {it.action && <button type="button" className="underline shrink-0" onClick={it.action.onClick}>{it.action.label}</button>}
                 </li>
               ))}
@@ -337,15 +405,15 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                 <div className="h-1.5 rounded bg-[#E5E5E0] overflow-hidden"><div className="h-full bg-[#171717] transition-all" style={{ width: `${Math.min(100, (elapsed / (limit + 5)) * 100)}%` }} /></div>
                 <ol className="text-[12px] space-y-0.5">
                   {['Preparing shifts and rules', `Looking for the best roster (up to ${limit}s)`, 'Placing meals and breaks, checking the rules'].map((t, i) => (
-                    <li key={t} className={i < stage ? 'text-[#2F7D5A]' : i === stage ? 'font-semibold' : 'text-[#A3A3A3]'}>{i < stage ? '✓ ' : i === stage ? '… ' : '· '}{t}</li>
+                    <li key={t} className={i < stage ? 'text-[#2A7553]' : i === stage ? 'font-semibold' : 'text-[#6B6B6B]'}>{i < stage ? '✓ ' : i === stage ? '… ' : '· '}{t}</li>
                   ))}
                 </ol>
-                <div className="text-[11px] text-[#737373]">{Math.round(elapsed)}s elapsed</div>
+                <div className="text-[11px] text-[#6B6B6B]">{Math.round(elapsed)}s elapsed</div>
               </div>
             )}
             {can('schedule:generate')
-              ? <Btn variant="primary" className="w-full justify-center" disabled={!ready || busy} onClick={run}><Sparkles className="w-3.5 h-3.5" />{busy ? 'Generating…' : 'Generate schedule'}</Btn>
-              : <span className="text-[12px] text-[#737373]">You do not have permission to generate schedules.</span>}
+              ? <Btn variant="primary" className="w-full justify-center" disabled={!ready || busy || !!running.data?.length} onClick={run}><Sparkles className="w-3.5 h-3.5" />{busy ? 'Starting…' : long ? `Build ${weeks} weeks in the background` : 'Generate schedule'}</Btn>
+              : <span className="text-[12px] text-[#6B6B6B]">You do not have permission to generate schedules.</span>}
           </Card>
         </div>
       </div>
@@ -355,7 +423,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <section className="space-y-3">
-    <h3 className="text-[11px] font-bold uppercase tracking-wide text-[#737373]">{title}</h3>
+    <h3 className="text-[11px] font-bold uppercase tracking-wide text-[#6B6B6B]">{title}</h3>
     {children}
   </section>
 );

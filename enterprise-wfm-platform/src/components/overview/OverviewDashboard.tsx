@@ -2,10 +2,10 @@
  * Overview: today at a glance for the active WFM group, all from live data: today's traffic against the people scheduled and required,
  * schedule coverage, adherence, forecast accuracy, what needs attention and the latest changes. Nothing here is a fixed sample.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Activity, AlertTriangle, Calendar, ChevronRight, Layers, TrendingUp, Users } from 'lucide-react';
-import { Adherence, Coverage, dec, Employee, ScheduleVersion, VersionMeta } from '../../services/api';
+import { Adherence, apiPage, Coverage, dec, Employee, ScheduleVersion, VersionMeta } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { CHART } from '../forecasting/charts';
@@ -25,10 +25,18 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
   const { groups, group, setGroupId, can, ready } = useForecast();
   const gid = group?.id;
   const cov = useApi<Coverage>(gid && can('intraday:read') ? `/intraday/coverage?groupId=${gid}` : null);
-  const adh = useApi<Adherence>(gid && can('intraday:read') ? `/intraday/adherence?groupId=${gid}` : null);
+  const adh = useApi<Adherence>(gid && can('intraday:read') ? `/intraday/adherence?groupId=${gid}&summary=1` : null);      // the totals only: Overview does not draw every agent
   const fcs = useApi<VersionMeta[]>(gid && can('forecast:read') ? `/forecast/versions?groupId=${gid}` : null);
   const sch = useApi<ScheduleVersion[]>(gid && can('schedule:read') ? `/scheduling/versions?groupId=${gid}` : null);
-  const emps = useApi<Employee[]>(gid && can('workforce:read') ? `/workforce/employees?groupId=${gid}&status=ACTIVE` : null);
+  // a head-count needs one row and the total, not the whole group
+  const [activeCount, setActiveCount] = useState<number | null>(null);
+  useEffect(() => {
+    setActiveCount(null);
+    if (!gid || !can('workforce:read')) return;
+    let live = true;
+    apiPage<Employee>(`/workforce/employees?groupId=${gid}&status=ACTIVE&limit=1`).then((r) => live && setActiveCount(r.total)).catch(() => {});
+    return () => { live = false; };
+  }, [gid]);   // eslint-disable-line react-hooks/exhaustive-deps
   const log = useApi<Audit[]>(can('audit:read') ? '/audit?limit=8' : null);
   const [trace, setTrace] = useState<{ title: string; volume: number; ahtSec: number } | null>(null);
 
@@ -66,7 +74,7 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
       <PageHeader title="Overview" badge={<Pill tone={status.tone}>{status.text}</Pill>}
         sub={c ? `${group?.name} · ${new Date(c.day + 'T00:00:00').toLocaleDateString('en', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}${c.nowTime ? ` · now ${c.nowTime} (${c.timezone})` : ''}` : 'Today across forecasting, scheduling and the live floor.'}
         actions={groups.length > 0 && (
-          <div className="flex items-center gap-2 text-[12px] text-[#525252]"><Layers className="w-3.5 h-3.5 text-[#737373]" />
+          <div className="flex items-center gap-2 text-[12px] text-[#525252]"><Layers className="w-3.5 h-3.5 text-[#6B6B6B]" />
             <Select value={gid ?? ''} onChange={(e) => setGroupId(e.target.value)} className="w-auto!" aria-label="WFM group">{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
           </div>
         )} />
@@ -77,7 +85,7 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
         <>
           {attention.find((x) => x.tone === 'bad') && (() => { const x = attention.find((y) => y.tone === 'bad')!; return (
             <div className="p-4 bg-[#FCEBEC] border border-[#C84A4A]/30 rounded-lg flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3"><AlertTriangle className="w-5 h-5 text-[#C84A4A]" /><div><div className="text-[14px] font-bold text-[#171717]">{x.title}</div><div className="text-[12px] text-[#525252] mt-0.5">{x.detail}</div></div></div>
+              <div className="flex items-center gap-3"><AlertTriangle className="w-5 h-5 text-[#BC3F3F]" /><div><div className="text-[14px] font-bold text-[#171717]">{x.title}</div><div className="text-[12px] text-[#525252] mt-0.5">{x.detail}</div></div></div>
               <button onClick={() => onNavigate(...x.go)} className="px-4 py-2 rounded bg-[#171717] hover:bg-[#333] text-white text-[12px] font-semibold">Open live coverage</button>
             </div>); })()}
 
@@ -96,7 +104,7 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
                 sub={wape == null ? 'Needs published forecast and actuals' : `${dec(wape * 100)}% average miss (WAPE)${c?.stats.wape != null ? ' today' : ''}`} />
             </div>
             <div onClick={() => onNavigate('workforce', 'employees')} className="cursor-pointer hover:opacity-90">
-              <Kpi label="Active people" value={emps.data ? emps.data.length : '–'} sub={pubSched ? `${pubSched.stats.people} on the published schedule` : 'In this WFM group'} />
+              <Kpi label="Active people" value={activeCount ?? '–'} sub={pubSched ? `${pubSched.stats.people} on the published schedule` : 'In this WFM group'} />
             </div>
           </div>
 
@@ -104,7 +112,7 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
             <Card className="lg:col-span-2" title="Today: traffic against people"
               sub={c ? `${c.forecastName}. Bars are calls or chats per 15 minutes; lines are people required and scheduled. Click a bar to see how the requirement was worked out.` : undefined}
               actions={<button onClick={() => onNavigate('intraday', 'live-coverage')} className="text-[12px] font-semibold text-[#171717] hover:underline flex items-center gap-1">Open live coverage<ChevronRight className="w-3.5 h-3.5" /></button>}>
-              {!c ? <p className="text-[13px] text-[#737373]">{cov.data && cov.data.ready === false ? cov.data.reason : cov.error || 'Live coverage needs a published short-term forecast for this group.'}</p> : (
+              {!c ? <p className="text-[13px] text-[#6B6B6B]">{cov.data && cov.data.ready === false ? cov.data.reason : cov.error || 'Live coverage needs a published short-term forecast for this group.'}</p> : (
                 <div style={{ height: 300 }}>
                   <ResponsiveContainer>
                     <ComposedChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -130,8 +138,8 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
               <div className="space-y-2">
                 {attention.slice(0, 7).map((x, i) => (
                   <button key={i} onClick={() => onNavigate(...x.go)} className="w-full text-left p-3 rounded-lg border border-[#E5E5E0] hover:bg-[#FAFAF8] flex items-start justify-between gap-2">
-                    <div><div className="flex items-center gap-2"><Pill tone={x.tone}>{x.tone === 'bad' ? 'Urgent' : x.tone === 'warn' ? 'Check' : 'To do'}</Pill><span className="font-semibold text-[13px] text-[#171717]">{x.title}</span></div><div className="text-[11px] text-[#737373] mt-1">{x.detail}</div></div>
-                    <ChevronRight className="w-4 h-4 text-[#737373] shrink-0 mt-0.5" />
+                    <div><div className="flex items-center gap-2"><Pill tone={x.tone}>{x.tone === 'bad' ? 'Urgent' : x.tone === 'warn' ? 'Check' : 'To do'}</Pill><span className="font-semibold text-[13px] text-[#171717]">{x.title}</span></div><div className="text-[11px] text-[#6B6B6B] mt-1">{x.detail}</div></div>
+                    <ChevronRight className="w-4 h-4 text-[#6B6B6B] shrink-0 mt-0.5" />
                   </button>
                 ))}
               </div>
@@ -151,14 +159,14 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
 
             <Card className="lg:col-span-2" title="Recent changes" sub="The latest entries in the audit log."
               actions={can('audit:read') && <button onClick={() => onNavigate('audit')} className="text-[12px] font-semibold text-[#171717] hover:underline flex items-center gap-1">Open audit log<ChevronRight className="w-3.5 h-3.5" /></button>}>
-              {!can('audit:read') ? <p className="text-[13px] text-[#737373]">Recent changes are shown to people with audit access.</p>
-                : !log.data ? <p className="text-[13px] text-[#737373]">{log.error || 'Loading…'}</p>
-                : !log.data.length ? <p className="text-[13px] text-[#737373]">No changes recorded yet.</p>
+              {!can('audit:read') ? <p className="text-[13px] text-[#6B6B6B]">Recent changes are shown to people with audit access.</p>
+                : !log.data ? <p className="text-[13px] text-[#6B6B6B]">{log.error || 'Loading…'}</p>
+                : !log.data.length ? <p className="text-[13px] text-[#6B6B6B]">No changes recorded yet.</p>
                 : <ul className="divide-y divide-[#E5E5E0]">{log.data.map((r) => (
                   <li key={r.id} className="py-2.5 flex items-start justify-between gap-3 text-[13px]">
                     <div><span className="font-semibold">{r.actorName}</span> <span className="text-[#525252]">{r.action.toLowerCase()}</span> <span className="font-medium">{r.entityName ?? label(r.entityType)}</span>
-                      <div className="text-[11px] text-[#737373]">{label(r.entityType)}{r.reason ? ` · ${r.reason}` : r.diffSummary ? ` · ${r.diffSummary}` : ''}</div></div>
-                    <span className="text-[11px] text-[#737373] whitespace-nowrap">{ago(r.timestamp)}</span>
+                      <div className="text-[11px] text-[#6B6B6B]">{label(r.entityType)}{r.reason ? ` · ${r.reason}` : r.diffSummary ? ` · ${r.diffSummary}` : ''}</div></div>
+                    <span className="text-[11px] text-[#6B6B6B] whitespace-nowrap">{ago(r.timestamp)}</span>
                   </li>))}</ul>}
             </Card>
           </div>
@@ -170,8 +178,8 @@ export const OverviewDashboard: React.FC<{ onNavigate: (module: string, subSecti
 };
 
 const Row: React.FC<{ icon: React.ReactNode; k: string; v: string; go?: () => void }> = ({ icon, k, v, go }) => (
-  <div className={`flex items-start gap-2.5 ${go ? 'cursor-pointer hover:opacity-80' : ''}`} onClick={go}>
-    <span className="text-[#737373] mt-0.5">{icon}</span>
-    <div><dt className="text-[11px] text-[#737373]">{k}</dt><dd className="text-[#171717] font-medium">{v}</dd></div>
+  <div className={go ? 'cursor-pointer hover:opacity-80' : ''} onClick={go}>
+    <dt className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]"><span aria-hidden="true" className="shrink-0">{icon}</span>{k}</dt>
+    <dd className="pl-[22px] text-[#171717] font-medium">{v}</dd>
   </div>
 );

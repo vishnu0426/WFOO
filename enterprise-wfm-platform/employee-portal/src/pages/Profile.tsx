@@ -29,7 +29,7 @@ const PasswordCard: React.FC = () => {
     <Card title="Password" actions={!open && <Btn onClick={() => { setOpen(true); setOk(false); }}>Change password</Btn>}>
       {ok && !open && <Banner kind="ok" onClose={() => setOk(false)}>Password changed.</Banner>}
       {!open ? (
-        <div className="text-[13px] text-[#737373]">••••••••••</div>
+        <div className="text-[13px] text-[#6B6B6B]">••••••••••</div>
       ) : (
         <form onSubmit={submit} className="space-y-3">
           {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
@@ -71,8 +71,8 @@ export const Profile: React.FC<{ onSignOut: () => void }> = ({ onSignOut }) => {
     <div className="space-y-4">
       <Card>
         <div className="text-[16px] font-semibold text-[#171717]">{p.name}</div>
-        <div className="text-[12px] text-[#737373]">{p.employeeNumber} · {p.team ?? 'No team'} · {p.group ?? 'No group'}{p.extension ? ` · Ext. ${p.extension}` : ''}</div>
-        <div className="text-[12px] text-[#737373] mt-2">{p.employmentType.replace(/_/g, ' ').toLowerCase()} · {p.weeklyContractHours}h/week · {p.timezone}</div>
+        <div className="text-[12px] text-[#6B6B6B]">{p.employeeNumber} · {p.team ?? 'No team'} · {p.group ?? 'No group'}{p.extension ? ` · Ext. ${p.extension}` : ''}</div>
+        <div className="text-[12px] text-[#6B6B6B] mt-2">{p.employmentType.replace(/_/g, ' ').toLowerCase()} · {p.weeklyContractHours}h/week · {p.timezone}</div>
         {p.skills.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {p.skills.map((s) => <span key={s.name} className="text-[11px] bg-[#F5F5F2] text-[#525252] rounded px-1.5 py-0.5">{s.name} · L{s.proficiency}</span>)}
@@ -82,14 +82,14 @@ export const Profile: React.FC<{ onSignOut: () => void }> = ({ onSignOut }) => {
 
       <Card title="Availability" sub={avail.data?.canSetHardLimits ? undefined : "You can only mark what you'd prefer; your manager sets any hard limits"} actions={<Btn onClick={addWindow}>Add</Btn>}>
         {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
-        {current.length === 0 ? <div className="text-[13px] text-[#737373]">No windows set.</div> : (
+        {current.length === 0 ? <div className="text-[13px] text-[#6B6B6B]">No windows set.</div> : (
           <div className="space-y-2">
             {current.map((w, i) => (
               <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-1.5 items-end">
                 <Field label="Day"><Select value={w.dayOfWeek} onChange={(e) => update(i, { dayOfWeek: Number(e.target.value) })}>{DOW.map((d, n) => <option key={d} value={n}>{d}</option>)}</Select></Field>
                 <Field label="Start"><Input type="time" value={w.startTime} onChange={(e) => update(i, { startTime: e.target.value })} /></Field>
                 <Field label="End"><Input type="time" value={w.endTime} onChange={(e) => update(i, { endTime: e.target.value })} /></Field>
-                <button onClick={() => remove(i)} className="text-[#C84A4A] text-[12px] pb-2">×</button>
+                <button onClick={() => remove(i)} className="text-[#BC3F3F] text-[12px] pb-2">×</button>
                 <div className="col-span-4 -mt-1"><Select value={w.kind} onChange={(e) => update(i, { kind: e.target.value as AvailabilityKind })}>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</Select></div>
               </div>
             ))}

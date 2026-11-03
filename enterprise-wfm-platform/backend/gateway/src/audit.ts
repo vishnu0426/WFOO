@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import type { Tx } from './db.ts';
 import type { Principal } from './auth.ts';
 
-export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'IMPORT' | 'EXPORT' | 'GENERATE' | 'ROLLBACK' | 'LOGIN' | 'ADJUST';
+export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'IMPORT' | 'EXPORT' | 'GENERATE' | 'ROLLBACK' | 'LOGIN' | 'LOGIN_FAILED' | 'ADJUST';
 
 export interface AuditInput {
   action: AuditAction;

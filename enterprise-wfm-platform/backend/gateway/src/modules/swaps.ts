@@ -9,7 +9,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
-import { me, requires, type Principal } from '../auth.ts';
+import { me, requires, requiresAny, type Principal } from '../auth.ts';
+import { approvalAudience, approverLevel, teamLimit, waitingFor } from './approvals.ts';
 import { audit } from '../audit.ts';
 import { bad, conflict, notFound, parse } from '../http.ts';
 import { dropCache, publish } from '../infra.ts';
@@ -18,6 +19,7 @@ import { noticeFinding } from './compliance/rules.ts';
 import { computeStats, liveStats, loadVersion, refreshStats, revision, validateShifts, type ShiftRow } from './scheduleRoutes.ts';
 import { loadSelfPolicy, whoAmI, type Me, type Policy } from './selfService.ts';
 import { hhmm } from './workforceRoutes.ts';
+import { tzFmt } from '../tzFormat.ts';
 
 export const swapsMe = Router();       // mounted at /me/swaps
 export const swapsAdmin = Router();    // mounted at /scheduling/swaps
@@ -33,7 +35,7 @@ type Move = { shiftId: string; toEmployeeId: string };
 
 const epoch = (day: string, slot: number) => { const [y, m, d] = day.split('-').map(Number); return Date.UTC(y, m - 1, d, 0, slot * 15); };
 function nowIn(tz: string): number {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+  const parts = tzFmt('en-CA', tz, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
   const g = (t: string) => +parts.find((x) => x.type === t)!.value;
   return Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'));
 }
@@ -84,7 +86,7 @@ const dto = (s: any) => ({
   id: s.id, kind: s.kind, status: s.status, note: s.note, versionId: s.versionId, versionName: s.versionName, requesterId: s.requesterId, requesterName: s.requesterName, partnerId: s.partnerId, partnerName: s.partnerName ?? null,
   give: { shiftId: s.requesterShiftId, day: s.rDay, startTime: hhmm(s.rStart), endTime: hhmm(s.rStart + s.rLen) },
   get: s.partnerShiftId ? { shiftId: s.partnerShiftId, day: s.pDay, startTime: hhmm(s.pStart), endTime: hhmm(s.pStart + s.pLen) } : null,
-  decisionReason: s.decisionReason, decidedBy: s.decidedBy, decidedAt: s.decidedAt, autoApproved: s.autoApproved, checks: s.checks, expiresAt: s.expiresAt, createdAt: s.createdAt, updatedAt: s.updatedAt,
+  decisionReason: s.decisionReason, decidedBy: s.decidedBy, decidedAt: s.decidedAt, decidedLevel: s.decidedLevel ?? null, escalatedAt: s.escalatedAt ?? null, autoApproved: s.autoApproved, checks: s.checks, expiresAt: s.expiresAt, createdAt: s.createdAt, updatedAt: s.updatedAt,
 });
 async function expire(tx: Tx) { await tx.exec(`UPDATE shift_swaps SET status = 'EXPIRED', updated_at = now() WHERE tenant_id = :t AND status IN ('OPEN', 'PENDING_PARTNER') AND expires_at < now()`); }
 async function load(tx: Tx, id: string) { const r = (await tx.q<any>(`${SQL} AND sw.id = $1`, [id]))[0]; if (!r) throw notFound('Swap request'); return r; }
@@ -98,7 +100,7 @@ const movesOf = (s: any): Move[] => (s.kind === 'SWAP' ? [{ shiftId: s.requester
 // ---------------------------------------------------------------- doing it
 
 /** Make the change in the published schedule. Same-day swaps exchange the times, so nobody is ever briefly on two shifts. */
-async function apply(tenantId: string, s: any, by: Principal, how: string, reason: string | null) {
+async function apply(tenantId: string, s: any, by: Principal, how: string, reason: string | null, level: 'SUPERVISOR' | 'MANAGER' | null = null) {
   await withTenant(tenantId, async (tx) => {
     const a = (await tx.one<any>('SELECT * FROM schedule_shifts WHERE tenant_id = :t AND id = $1', [s.requesterShiftId]))!;
     if (s.kind === 'SWAP') {
@@ -112,9 +114,9 @@ async function apply(tenantId: string, s: any, by: Principal, how: string, reaso
     } else {
       await tx.exec(`UPDATE schedule_shifts SET employee_id = $2, source = 'MANUAL' WHERE tenant_id = :t AND id = $1`, [a.id, s.partnerId]);
     }
-    await tx.exec(`UPDATE shift_swaps SET status = 'APPROVED', auto_approved = $2, decided_by = $3, decided_at = now(), decision_reason = $4, updated_at = now() WHERE tenant_id = :t AND id = $1`, [s.id, how === 'auto', by.name, reason]);
+    await tx.exec(`UPDATE shift_swaps SET status = 'APPROVED', auto_approved = $2, decided_by = $3, decided_at = now(), decision_reason = $4, decided_level = $5, updated_at = now() WHERE tenant_id = :t AND id = $1`, [s.id, how === 'auto', by.name, reason, level]);
     const summary = s.kind === 'SWAP' ? `Shift swap: ${s.requesterName} (${s.rDay}) and ${s.partnerName} (${s.pDay})` : `Shift given away: ${s.requesterName}'s shift on ${s.rDay} taken by ${s.partnerName}`;
-    await audit(tx, by, null, { action: 'UPDATE', entityType: 'SCHEDULE_VERSION', entityId: s.versionId, entityName: s.versionName, reason: reason ?? undefined, diffSummary: `${summary} (${how === 'auto' ? 'approved by the rules' : 'approved by a manager'})` });
+    await audit(tx, by, null, { action: 'UPDATE', entityType: 'SCHEDULE_VERSION', entityId: s.versionId, entityName: s.versionName, reason: reason ?? undefined, diffSummary: `${summary} (${how === 'auto' ? 'approved by the rules' : level === 'SUPERVISOR' ? 'approved by the team supervisor, first line' : 'approved by a manager'})` });
   });
   const st = await refreshStats(tenantId, s.versionId);
   await withTenant(tenantId, async (tx) => {
@@ -143,7 +145,7 @@ async function settle(p: Principal, swapId: string, pol: Policy) {
   if (pol.swapAutoApprove && verdict.auto) { await apply(p.tenantId, s, p, 'auto', null); return { status: 'APPROVED', verdict }; }
   await withTenant(p.tenantId, async (tx) => {
     await tx.exec(`UPDATE shift_swaps SET status = 'PENDING_APPROVAL', checks = $2, updated_at = now() WHERE tenant_id = :t AND id = $1`, [swapId, JSON.stringify(verdict)]);
-    await notify(tx, (await tx.q<{ id: string }>(MANAGERS)).map((r) => r.id), { kind: 'SWAP', title: 'Shift change needs approval', body: `${s.requesterName} and ${s.partnerName}: ${s.rDay}${s.pDay ? ` and ${s.pDay}` : ''}`, data: { screen: 'swap', id: swapId } });
+    await notify(tx, (await approvalAudience(tx, s.requesterId)).users, { kind: 'SWAP', title: 'Shift change needs approval', body: `${s.requesterName} and ${s.partnerName}: ${s.rDay}${s.pDay ? ` and ${s.pDay}` : ''}`, data: { screen: 'swap', id: swapId } });
     await notify(tx, await usersOf(tx, [s.requesterId, s.partnerId]), { kind: 'SWAP', title: 'Waiting for a manager', body: verdict.warnings[0] ?? 'A manager will review the change.', data: { screen: 'swap', id: swapId } });
   });
   return { status: 'PENDING_APPROVAL', verdict };
@@ -167,7 +169,8 @@ swapsMe.get('/', requires('self:use'), async (req, res) => {
     const rows = (await tx.q<any>(`${SQL} AND (sw.requester_id = $1 OR sw.partner_id = $1) ORDER BY sw.created_at DESC LIMIT 60`, [w.employeeId])).map(dto);
     const board = (await tx.q<any>(
       `${SQL} AND sw.status = 'OPEN' AND sw.requester_id <> $1 AND (sw.expires_at IS NULL OR sw.expires_at > now()) AND re.primary_group_id IS NOT DISTINCT FROM $2 AND rs.day >= $3::date ORDER BY rs.day, rs.start_slot LIMIT 60`, [w.employeeId, w.emp.primaryGroupId, w.today])).map(dto);
-    return { mine: rows.filter((r) => r.requesterId === w.employeeId), incoming: rows.filter((r) => r.partnerId === w.employeeId && r.status === 'PENDING_PARTNER'), board };
+    const wf = rows.some((r) => r.requesterId === w.employeeId && r.status === 'PENDING_APPROVAL') ? await waitingFor(tx, w.employeeId) : null;     // who has the change that is waiting for approval
+    return { mine: rows.filter((r) => r.requesterId === w.employeeId).map((r) => ({ ...r, waitingFor: r.status === 'PENDING_APPROVAL' ? wf : null })), incoming: rows.filter((r) => r.partnerId === w.employeeId && r.status === 'PENDING_PARTNER'), board };
   }));
 });
 
@@ -254,19 +257,23 @@ swapsMe.post('/:id/cancel', requires('self:use'), (req, res) => respond(req, res
 
 swapsAdmin.get('/', requires('schedule:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ status: z.string().optional() }), req.query);
-  const out = await withTenant(p.tenantId, async (tx) => { await expire(tx); return (await tx.q<any>(`${SQL} AND ($1::text IS NULL OR sw.status = $1) ORDER BY (sw.status = 'PENDING_APPROVAL') DESC, sw.updated_at DESC LIMIT 200`, [q.status ?? null])).map(dto); });
+  const out = await withTenant(p.tenantId, async (tx) => {
+    await expire(tx);
+    const lim = await teamLimit(tx, p);
+    return (await tx.q<any>(`${SQL} AND ($1::text IS NULL OR sw.status = $1) AND ($2::uuid[] IS NULL OR re.team_id = ANY($2::uuid[])) ORDER BY (sw.status = 'PENDING_APPROVAL') DESC, sw.updated_at DESC LIMIT 200`, [q.status ?? null, lim ? lim.teamIds : null])).map(dto);
+  });
   res.json(out);
 });
 
-swapsAdmin.post('/:id/decide', requires('schedule:edit'), async (req, res) => {
+swapsAdmin.post('/:id/decide', requiresAny('schedule:edit', 'requests:approve'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   const b = parse(z.object({ approve: z.boolean(), reason: z.string().trim().max(300).default('') }), req.body);
   if (!b.approve && b.reason.length < 3) throw bad('Give a reason when declining.');
-  const { s, pol } = await withTenant(p.tenantId, async (tx) => ({ s: await load(tx, id), pol: await loadSelfPolicy(tx) }));
+  const { s, pol, level } = await withTenant(p.tenantId, async (tx) => { const s = await load(tx, id); return { s, pol: await loadSelfPolicy(tx), level: await approverLevel(tx, p, s.requesterId, 'schedule:edit') }; });
   if (s.status !== 'PENDING_APPROVAL') throw conflict(`This request is ${s.status.toLowerCase().replace('_', ' ')}, not waiting for approval.`);
   if (!b.approve) {
     await withTenant(p.tenantId, async (tx) => {
-      await tx.exec(`UPDATE shift_swaps SET status = 'REJECTED', decided_by = $2, decided_at = now(), decision_reason = $3, updated_at = now() WHERE tenant_id = :t AND id = $1`, [id, p.name, b.reason]);
+      await tx.exec(`UPDATE shift_swaps SET status = 'REJECTED', decided_by = $2, decided_at = now(), decision_reason = $3, decided_level = $4, updated_at = now() WHERE tenant_id = :t AND id = $1`, [id, p.name, b.reason, level]);
       await audit(tx, p, req, { action: 'REJECT', entityType: 'SHIFT_SWAP', entityId: id, entityName: `${s.requesterName} ${s.rDay}`, reason: b.reason });
       await notify(tx, await usersOf(tx, [s.requesterId, s.partnerId]), { kind: 'SWAP', title: 'Shift change declined', body: b.reason, data: { screen: 'swap', id } });
     });
@@ -275,6 +282,6 @@ swapsAdmin.post('/:id/decide', requires('schedule:edit'), async (req, res) => {
   const { live } = await liveFor(p.tenantId, s.versionId);
   const v = evaluate(live, pol, movesOf(s));
   if (!v.ok) throw conflict(`This can no longer be approved: ${v.blockers.join(' ')}`);
-  await apply(p.tenantId, s, p, 'manager', b.reason || null);
+  await apply(p.tenantId, s, p, 'manager', b.reason || null, level);
   res.json(dto(await withTenant(p.tenantId, (tx) => load(tx, id))));
 });

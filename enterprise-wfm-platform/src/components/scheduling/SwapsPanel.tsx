@@ -14,6 +14,7 @@ import { Banner, Btn, Busy, Card, Empty, Pill } from '../forecasting/ui';
 type Verdict = { ok: boolean; auto: boolean; blockers: string[]; warnings: string[]; extraGapSlots: number; coverageBefore: number; coverageAfter: number };
 type Shift = { shiftId: string; day: string; startTime: string; endTime: string };
 type Swap = {
+  decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null; escalatedAt?: string | null;
   id: string; kind: 'SWAP' | 'GIVEAWAY'; status: string; note: string; versionName: string; requesterName: string; partnerName: string | null; give: Shift; get: Shift | null;
   decisionReason: string | null; decidedBy: string | null; decidedAt: string | null; autoApproved: boolean; checks: Partial<Verdict>; createdAt: string; updatedAt: string;
 };
@@ -48,7 +49,7 @@ export const SwapsPanel: React.FC = () => {
       <Card title="Shift swaps" sub="Requests from colleagues to trade shifts. Approving changes the published schedule and tells both people."
         actions={<div className="flex rounded border border-[#E5E5E0] bg-[#FAFAF8] p-0.5 text-[12px]">
           {([['PENDING_APPROVAL', 'Needs approval'], ['', 'All requests']] as const).map(([id, label]) => (
-            <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded font-semibold ${filter === id ? 'bg-white shadow-xs text-[#171717]' : 'text-[#737373]'}`}>{label}</button>
+            <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded font-semibold ${filter === id ? 'bg-white shadow-xs text-[#171717]' : 'text-[#6B6B6B]'}`}>{label}</button>
           ))}
         </div>}>
         {list.loading && !list.data && <Busy text="Loading…" />}
@@ -64,20 +65,22 @@ export const SwapsPanel: React.FC = () => {
                     <Pill tone={st.tone}>{st.label}</Pill>
                     <span className="font-semibold text-[14px]">{s.kind === 'SWAP' ? `${s.requesterName} and ${s.partnerName}` : `${s.requesterName} gives away a shift${s.partnerName ? ` to ${s.partnerName}` : ''}`}</span>
                     {s.autoApproved && <Pill tone="info">Approved by the rules</Pill>}
+                    {s.decidedLevel && <Pill tone="info">{s.decidedLevel === 'SUPERVISOR' ? 'Decided by the supervisor' : 'Decided by a manager'}</Pill>}
+                    {s.escalatedAt && s.status === 'PENDING_APPROVAL' && <Pill tone="warn">Overdue: the managers have been told</Pill>}
                   </div>
-                  <span className="text-[11px] text-[#737373]">{when(s.updatedAt)} · {s.versionName}</span>
+                  <span className="text-[11px] text-[#6B6B6B]">{when(s.updatedAt)} · {s.versionName}</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[13px]">
-                  <div className="p-2.5 rounded bg-[#FAFAF8] border border-[#E5E5E0]"><div className="text-[11px] text-[#737373]">{s.requesterName} works</div><div className="font-medium">{day(s.give.day)} · {s.give.startTime}–{s.give.endTime}</div></div>
-                  {s.get && <div className="p-2.5 rounded bg-[#FAFAF8] border border-[#E5E5E0]"><div className="text-[11px] text-[#737373]">{s.partnerName} works</div><div className="font-medium">{day(s.get.day)} · {s.get.startTime}–{s.get.endTime}</div></div>}
+                  <div className="p-2.5 rounded bg-[#FAFAF8] border border-[#E5E5E0]"><div className="text-[11px] text-[#6B6B6B]">{s.requesterName} works</div><div className="font-medium">{day(s.give.day)} · {s.give.startTime}–{s.give.endTime}</div></div>
+                  {s.get && <div className="p-2.5 rounded bg-[#FAFAF8] border border-[#E5E5E0]"><div className="text-[11px] text-[#6B6B6B]">{s.partnerName} works</div><div className="font-medium">{day(s.get.day)} · {s.get.startTime}–{s.get.endTime}</div></div>}
                 </div>
                 {s.note && <p className="text-[12px] text-[#525252]">“{s.note}”</p>}
                 {(c.blockers?.length || c.warnings?.length || c.coverageBefore !== undefined) && (
                   <div className="text-[12px] space-y-1">
-                    {c.blockers?.map((m, i) => <div key={i} className="text-[#C84A4A]">✕ {m}</div>)}
-                    {c.warnings?.map((m, i) => <div key={i} className="text-[#B7791F]">! {m}</div>)}
-                    {c.ok && !c.warnings?.length && <div className="text-[#2F7D5A]">✓ Every rule is met</div>}
-                    {c.coverageBefore !== undefined && <div className="text-[#737373]">Coverage {dec(c.coverageBefore)}% to {dec(c.coverageAfter ?? c.coverageBefore)}%</div>}
+                    {c.blockers?.map((m, i) => <div key={i} className="text-[#BC3F3F]">✕ {m}</div>)}
+                    {c.warnings?.map((m, i) => <div key={i} className="text-[#8F6200]">! {m}</div>)}
+                    {c.ok && !c.warnings?.length && <div className="text-[#2A7553]">✓ Every rule is met</div>}
+                    {c.coverageBefore !== undefined && <div className="text-[#6B6B6B]">Coverage {dec(c.coverageBefore)}% to {dec(c.coverageAfter ?? c.coverageBefore)}%</div>}
                   </div>
                 )}
                 {s.decisionReason && <p className="text-[12px] text-[#525252]">{s.decidedBy ? `${s.decidedBy}: ` : ''}{s.decisionReason}</p>}

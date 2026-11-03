@@ -16,7 +16,10 @@ export async function usersOf(tx: Tx, employeeIds: (string | null | undefined)[]
 export async function notify(tx: Tx, userIds: string[], n: Note): Promise<void> {
   const users = [...new Set(userIds)];
   if (!users.length) return;
-  for (const u of users) await tx.exec('INSERT INTO notifications (tenant_id, user_id, kind, title, body, data) VALUES (:t, $1, $2, $3, $4, $5)', [u, n.kind, n.title, n.body ?? '', JSON.stringify(n.data ?? {})]);
+  // one statement for everyone (a published schedule reaches thousands of people at once)
+  await tx.exec('INSERT INTO notifications (tenant_id, user_id, kind, title, body, data) SELECT :t, u, $2, $3, $4, $5::jsonb FROM unnest($1::uuid[]) AS u', [users, n.kind, n.title, n.body ?? '', JSON.stringify(n.data ?? {})]);
+  // email and SMS for the people who want them (loaded on use: the channel code itself sends notifications, so the two cannot import each other)
+  await (await import('./modules/channels.ts')).queueForUsers(tx, users, n);
   const tokens = (await tx.q<{ token: string }>('SELECT token FROM push_tokens WHERE tenant_id = :t AND user_id = ANY($1::uuid[])', [users])).map((r) => r.token);
   if (tokens.length) setImmediate(() => void sendPush(tokens, n));
 }

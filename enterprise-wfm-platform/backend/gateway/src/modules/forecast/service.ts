@@ -7,6 +7,9 @@ import { cached, dropCache, engine, key } from '../../infra.ts';
 import { audit } from '../../audit.ts';
 import type { Principal } from '../../auth.ts';
 import { bad, conflict, notFound } from '../../http.ts';
+import { DEMAND_SQL } from './demand.ts';
+import { borrowSlots, MIN_OWN_DAYS, shareByslot, shouldBorrow } from './borrowShape.ts';
+import { tzFmt } from '../../tzFormat.ts';
 
 export const SLOT_H = 0.25;
 export const MODELS = ['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima'] as const;
@@ -22,7 +25,7 @@ export const addDays = (s: string, n: number) => { const d = utc(s); d.setUTCDat
 export const dayRange = (from: string, to: string, max = 800) => { const o: string[] = []; for (let d = from; d <= to && o.length < max; d = addDays(d, 1)) o.push(d); return o; };
 export const label = (s: string) => utc(s).toLocaleDateString('en', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 /** Today's calendar date in an IANA zone. */
-export const todayIn = (tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+export const todayIn = (tz: string) => tzFmt('en-CA', tz, { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 /** Weekday with Monday = 0, from a calendar date string. */
 export const dowOf = (s: string) => (utc(s).getUTCDay() + 6) % 7;
@@ -105,14 +108,18 @@ const SHAPE_WEEKS = 12; // how far back to look for a same-weekday intraday shap
  * averaged over the last SHAPE_WEEKS same weekdays. Falls back to a flat shape if there is no history yet. */
 async function intradayShape(tx: Tx, queueId: string, dow: number): Promise<number[]> {
   const pgDow = (dow + 1) % 7; // our Monday = 0, Postgres EXTRACT(DOW) Sunday = 0
-  const rows = await tx.q<{ slot: number; volume: number }>(
-    `SELECT slot, volume::float8 AS volume FROM interval_history
-     WHERE tenant_id = :t AND queue_id = $1 AND extract(dow FROM day) = $2 AND day >= current_date - ($3 * 7) AND slot >= 0`,
-    [queueId, pgDow, SHAPE_WEEKS]);
-  const bySlot = new Array(96).fill(0);
-  for (const r of rows) bySlot[r.slot] += r.volume;
-  const total = bySlot.reduce((a, b) => a + b, 0);
-  return total > 0 ? bySlot.map((v) => v / total) : new Array(96).fill(1 / 96);
+  const shapeOf = (id: string) => tx.q<{ day: string; slot: number; volume: number }>(
+    `SELECT h.day::text AS day, h.slot, (${DEMAND_SQL})::float8 AS volume FROM interval_history h JOIN queues q ON q.id = h.queue_id
+     WHERE h.tenant_id = :t AND h.queue_id = $1 AND extract(dow FROM h.day) = $2 AND h.day >= current_date - ($3 * 7) AND h.slot >= 0`,
+    [id, pgDow, SHAPE_WEEKS]);
+  let rows = await shapeOf(queueId);
+  // a new queue with too little history of its own uses the pattern of the queue it was told to borrow from (see borrowShape.ts)
+  const link = await tx.one<{ shapeFromQueueId: string | null }>('SELECT shape_from_queue_id FROM queues WHERE tenant_id = :t AND id = $1', [queueId]);
+  if (link?.shapeFromQueueId) {
+    const own = await tx.one<{ n: number }>('SELECT count(*)::int AS n FROM interval_daily WHERE tenant_id = :t AND queue_id = $1', [queueId]);
+    if ((own?.n ?? 0) < MIN_OWN_DAYS) { const donor = await shapeOf(link.shapeFromQueueId); if (donor.length) rows = donor; }
+  }
+  return shareByslot(rows) ?? new Array(96).fill(1 / 96);
 }
 
 /**
@@ -300,19 +307,30 @@ export function rollup(daily: Daily[], grain: 'week' | 'month') {
 
 export const shortLabel = (kind: string) => (kind === 'SHORT' ? 'Short-term' : 'Long-term');
 
-async function historyFor(tx: Tx, group: Group, cutoff: string) {
+async function historyFor(tx: Tx, group: Group, cutoff: string) {   // demand, not just answered calls: a queue that counts only answered calls gets its abandoned callers added back (see demand.ts)
   const ids = group.queues.map((q) => q.id);
   const daily = await tx.q<any>(
-    `SELECT queue_id, day::text AS day, sum(volume)::float8 AS volume, coalesce(sum(volume::float8 * aht_sec) / nullif(sum(volume), 0), 0) AS aht
-     FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day < $2 GROUP BY queue_id, day ORDER BY day`, [ids, cutoff]);
+    `SELECT h.queue_id, h.day::text AS day, sum(${DEMAND_SQL})::float8 AS volume, coalesce(sum(${DEMAND_SQL}::float8 * h.aht_sec) / nullif(sum(${DEMAND_SQL}), 0), 0) AS aht
+     FROM interval_history h JOIN queues q ON q.id = h.queue_id WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 GROUP BY h.queue_id, h.day ORDER BY h.day`, [ids, cutoff]);
   const slots = await tx.q<any>(
-    `SELECT queue_id, day::text AS day, slot, volume::float8 AS volume, aht_sec::float8 AS aht FROM interval_history
-     WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day < $2 AND day >= ($2::date - 57) ORDER BY day, slot`, [ids, cutoff]);
-  return group.queues.map((q) => ({
-    queue_id: q.idx, name: q.name, channel: q.channel,
-    daily: daily.filter((r) => r.queueId === q.id).map((r) => ({ day: r.day, slot: -1, volume: r.volume, aht_sec: r.aht })),
-    slots: slots.filter((r) => r.queueId === q.id).map((r) => ({ day: r.day, slot: r.slot, volume: r.volume, aht_sec: r.aht })),
-  }));
+    `SELECT h.queue_id, h.day::text AS day, h.slot, (${DEMAND_SQL})::float8 AS volume, h.aht_sec::float8 AS aht FROM interval_history h JOIN queues q ON q.id = h.queue_id
+     WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 AND h.day >= ($2::date - 57) ORDER BY h.day, h.slot`, [ids, cutoff]);
+  // a new queue that has been told to borrow the daily pattern of a similar queue uses it until it has enough of its own (see borrowShape.ts)
+  const links = await tx.q<{ id: string; shapeFromQueueId: string }>('SELECT id, shape_from_queue_id FROM queues WHERE tenant_id = :t AND id = ANY($1::uuid[]) AND shape_from_queue_id IS NOT NULL', [ids]);
+  const donorIds = [...new Set(links.map((l) => l.shapeFromQueueId))];
+  const donorRows = donorIds.length ? await tx.q<any>(
+    `SELECT h.queue_id, h.day::text AS day, h.slot, (${DEMAND_SQL})::float8 AS volume, h.aht_sec::float8 AS aht FROM interval_history h JOIN queues q ON q.id = h.queue_id
+     WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 AND h.day >= ($2::date - 57) AND h.slot >= 0 ORDER BY h.day, h.slot`, [donorIds, cutoff]) : [];
+  return group.queues.map((q) => {
+    const ownDaily = daily.filter((r) => r.queueId === q.id).map((r) => ({ day: r.day, slot: -1, volume: r.volume, aht_sec: r.aht }));
+    let ownSlots = slots.filter((r) => r.queueId === q.id).map((r) => ({ day: r.day, slot: r.slot, volume: r.volume, aht_sec: r.aht }));
+    const link = links.find((l) => l.id === q.id);
+    if (link) {
+      const donor = donorRows.filter((r: any) => r.queueId === link.shapeFromQueueId).map((r: any) => ({ day: r.day, slot: r.slot, volume: r.volume, aht_sec: r.aht }));
+      if (shouldBorrow(ownSlots, donor)) ownSlots = borrowSlots(ownDaily, ownSlots, donor).slots;
+    }
+    return { queue_id: q.idx, name: q.name, channel: q.channel, daily: ownDaily, slots: ownSlots };
+  });
 }
 
 async function eventsFor(tx: Tx, group: Group) {
@@ -472,7 +490,7 @@ export async function holdout(p: Principal, groupId: string, span: number) {
     const cutoff = addDays(today, -span);
     const dates = dayRange(cutoff, addDays(today, -1));
     const prep = await withTenant(p.tenantId, async (tx) => ({ queues: await historyFor(tx, group, cutoff), events: await eventsFor(tx, group),
-      act: await tx.q<any>(`SELECT queue_id, day::text AS day, slot, volume::float8 AS volume FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($1::uuid[]) AND day >= $2 AND day < $3`, [group.queues.map((q) => q.id), cutoff, today]) }));
+      act: await tx.q<any>(`SELECT h.queue_id, h.day::text AS day, h.slot, (${DEMAND_SQL})::float8 AS volume FROM interval_history h JOIN queues q ON q.id = h.queue_id WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day >= $2 AND h.day < $3`, [group.queues.map((q) => q.id), cutoff, today]) }));
     if (prep.queues.every((q) => q.daily.length < 28)) throw bad('Need at least 4 weeks of history before the hold-out window to run this test.');
     const resp = await engine.forecastSeries({ queues: prep.queues, dates, slots_per_day: 96, events: prep.events, model: group.model, reconcile: true });
     const actual = new Map<string, number>(prep.act.map((a: any) => [`${a.queueId}|${a.day}|${a.slot}`, a.volume]));
@@ -520,8 +538,8 @@ export async function realised(tx: Tx, groupId: string, today: string) {
           f AS (SELECT DISTINCT ON (fi.queue_id, fi.day, fi.slot) fi.queue_id, fi.day, fi.slot, coalesce(fi.manual, fi.volume)::float8 AS f
                 FROM forecast_intervals fi JOIN v ON v.id = fi.version_id WHERE fi.tenant_id = :t AND fi.slot >= 0 AND fi.day <= $2
                 ORDER BY fi.queue_id, fi.day, fi.slot, fi.version_id DESC)
-     SELECT f.day::text AS day, sum(h.volume)::float8 AS actual, sum(f.f)::float8 AS forecast, sum(abs(h.volume - f.f))::float8 AS abs_err, count(*)::int AS intervals
-     FROM f JOIN interval_history h ON h.queue_id = f.queue_id AND h.day = f.day AND h.slot = f.slot GROUP BY f.day ORDER BY f.day`, [groupId, today]);
+     SELECT f.day::text AS day, sum(${DEMAND_SQL})::float8 AS actual, sum(f.f)::float8 AS forecast, sum(abs(${DEMAND_SQL} - f.f))::float8 AS abs_err, count(*)::int AS intervals
+     FROM f JOIN interval_history h ON h.queue_id = f.queue_id AND h.day = f.day AND h.slot = f.slot JOIN queues q ON q.id = h.queue_id GROUP BY f.day ORDER BY f.day`, [groupId, today]);
   return rows.map((r) => ({ day: r.day, actual: r2(r.actual), forecast: r2(r.forecast), wape15: r.actual ? r2(r.absErr / r.actual) : 0, bias: r.actual ? r2((r.forecast - r.actual) / r.actual) : 0, intervals: r.intervals }));
 }
 

@@ -13,7 +13,7 @@ export type Profile = {
 };
 
 export type Home = {
-  name: string; today: string; timezone: string; todayShift: Shift | null; nextShift: Shift | null; publishedToday: boolean; weekHours: number; unreadNotifications: number;
+  name: string; today: string; timezone: string; todayShift: Shift | null; nextShift: Shift | null; publishedToday: boolean; weekHours: number; weekFrom: string; weekTo: string; payWeekStart: number; unreadNotifications: number;
   pendingTimeOff: number; swapsIncoming: number; swapsMine: number; boardOpen: number; offersOpen: number;
 };
 
@@ -23,6 +23,7 @@ export type TimeOffType = 'VACATION' | 'SICK' | 'PERSONAL' | 'HOLIDAY' | 'TRAINI
 export type TimeOff = {
   id: string; type: TimeOffType; startDate: string; endDate: string; days: number; status: string; reason: string | null;
   decidedBy: string | null; decidedAt: string | null; autoDecided: boolean; decisionNote: string | null; createdAt: string;
+  decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null; escalatedAt?: string | null; waitingFor?: { level: 'SUPERVISOR' | 'MANAGER'; names: string[] } | null;
 };
 export type TimeOffBalance = { type: TimeOffType; entitledDays: number; usedDays: number; remainingDays: number };
 export type TimeOffRules = { autoApprove: boolean; minNoticeDays: number; maxOffPercent: number };
@@ -36,7 +37,8 @@ export type Swap = {
   id: string; kind: 'SWAP' | 'GIVEAWAY'; status: SwapStatus; note: string | null; versionId: string; versionName: string;
   requesterId: string; requesterName: string; partnerId: string | null; partnerName: string | null;
   give: { shiftId: string; day: string; startTime: string; endTime: string }; get: { shiftId: string; day: string; startTime: string; endTime: string } | null;
-  decisionReason: string | null; decidedBy: string | null; decidedAt: string | null; autoApproved: boolean; checks: unknown; expiresAt: string | null; createdAt: string; updatedAt: string;
+  decisionReason: string | null; decidedBy: string | null; decidedAt: string | null; autoApproved: boolean; checks: unknown;
+  decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null; escalatedAt?: string | null; waitingFor?: { level: 'SUPERVISOR' | 'MANAGER'; names: string[] } | null; expiresAt: string | null; createdAt: string; updatedAt: string;
 };
 export type SwapCandidate = {
   shiftId: string; employeeId: string; name: string; day: string; startTime: string; endTime: string;

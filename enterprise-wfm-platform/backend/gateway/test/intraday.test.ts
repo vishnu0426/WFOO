@@ -46,7 +46,7 @@ describe('intraday and adherence', () => {
     assert.ok(PASSWORD, 'set ADMIN_PASSWORD');
     const r = await call(null, 'POST', '/auth/login', { username: 'admin', password: PASSWORD, tenant: TENANT });
     assert.equal(r.status, 200, r.text); admin = r.json.token;
-    ctx.day = iso(addDays(new Date(), -1));
+    ctx.day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);   // yesterday in UTC, the zone these groups use (the local date can already be a day ahead)
   });
 
   it('builds a group, a published forecast and a published schedule for yesterday', async () => {
@@ -108,6 +108,7 @@ describe('intraday and adherence', () => {
       ...b.activities.map((x: any) => ({ from: (x.startSlot + x.slots) * 15, st: AV, r: '' })),
       { from: (b.startSlot + b.lengthSlots) * 15, st: LO, r: '' },
     ];
+    plan.sort((x, y) => x.from - y.from || Number(y.st === AV) - Number(x.st === AV));    // when one activity ends the minute the next starts, the end is reported first
     for (const s of plan) ev.push({ employeeNumber: b.employeeNumber, state: s.st, reason: s.r, at: at(s.from) });
     // c: an ACD state nobody has mapped yet
     ev.push({ employeeNumber: c.employeeNumber, state: MY, at: at(c.startSlot * 15) });

@@ -1,4 +1,4 @@
-# Backend architecture for the Enterprise WFM Platform
+# Backend architecture for AgnoWFM
 
 Derived from `docs/BACKEND_RESEARCH.md` and the front-end contract in `docs/REVERSE_ENGINEERING.md`.
 Stack: **Node.js (TypeScript) gateway, Python engine, PostgreSQL, Redis, NATS JetStream, gRPC.**

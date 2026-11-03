@@ -13,7 +13,8 @@ export const DEFAULT_SUB: Record<ModuleId, string> = {
   configuration: 'wfm-groups', 'data-management': 'staged-imports', audit: '', administration: 'users',
 };
 
-export const HOME = { module: 'forecasting' as ModuleId, sub: DEFAULT_SUB.forecasting };
+/** Where signing in, signing out and a bare "/" land: the Overview. */
+export const HOME = { module: 'overview' as ModuleId, sub: DEFAULT_SUB.overview };
 
 export const toPath = (module: string, sub?: string) => `/${module}${sub ? `/${sub}` : ''}`;
 

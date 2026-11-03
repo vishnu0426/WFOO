@@ -214,3 +214,19 @@ if __name__ == "__main__":
             t = time.time()
             fn()
             print(f"PASS {name} ({time.time() - t:.1f}s)")
+
+
+def test_email_open_all_day_is_not_staffed_at_night():
+    day = date.today().isoformat()
+    def run(with_voice):
+        req = wfm_pb2.StaffingRequest(interval_min=15, shrinkage=0.3)
+        req.params.add(channel="email", occupancy_cap=0.85, open_slot=0, close_slot=96)       # "open" 24 hours
+        req.params.add(channel="voice", service_level=0.8, answer_sec=20, occupancy_cap=0.9, method="erlang_c")
+        req.inputs.add(channel="email", day=day, slot=-1, volume=900, aht_sec=420)
+        if with_voice:
+            for s in range(36, 72):                                                           # voice from 09:00 to 18:00
+                req.inputs.add(channel="voice", day=day, slot=s, volume=20, aht_sec=300)
+        return {o.slot for o in staffing.staff_intervals(req) if o.channel == "email" and o.base > 0}
+    with_voice, alone = run(True), run(False)
+    assert with_voice and min(with_voice) >= 36 and max(with_voice) < 72, "email is worked while the live queues are"
+    assert alone and min(alone) >= 32 and max(alone) < 80, "with no live queue, ordinary daytime hours"

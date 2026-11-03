@@ -13,6 +13,7 @@ export function attachWebSocket(server: http.Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const byTenant = new Map<string, Set<WebSocket>>();
 
+  wss.on('error', (e) => console.error('[ws]', e.message));
   wss.on('connection', async (ws, req) => {
     try {
       const token = new URL(req.url ?? '', 'http://x').searchParams.get('token') ?? '';
@@ -21,6 +22,7 @@ export function attachWebSocket(server: http.Server): void {
       const set = byTenant.get(p.tenantId) ?? new Set();
       set.add(ws); byTenant.set(p.tenantId, set);
       ws.on('close', () => set.delete(ws));
+      ws.on('error', () => set.delete(ws));                    // a dropped browser must never reach the process as an unhandled error
       ws.send(JSON.stringify({ subject: 'hello', payload: { tenantId: p.tenantId } }));
     } catch { ws.close(4401, 'unauthorized'); }
   });

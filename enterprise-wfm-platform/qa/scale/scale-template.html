@@ -1,0 +1,153 @@
+<title>WFM 50k Scale Test</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: same dossier as the release gate — verdict first, then the 13 scenario groups as a scorecard, then evidence. */
+:root {
+  --paper: #f6f7f9; --sheet: #ffffff; --ink: #151a22; --ink-2: #4a5361; --ink-3: #6b7482; --rule: #dde1e7; --rule-2: #eceff3; --accent: #1f5c99; --accent-soft: #e6eef7;
+  --crit: #a3191b; --crit-bg: #fbe9e8; --high: #b4470c; --high-bg: #fdeee3; --med: #8a6100; --med-bg: #fbf3dc; --low: #3f6b2a; --low-bg: #ebf4e4; --info: #4f5a6b; --info-bg: #eef0f3; --pass: #2f7a3a; --fail: #b3261e;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif; --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --paper: #0f1318; --sheet: #161b22; --ink: #e8ecf1; --ink-2: #b4bcc8; --ink-3: #8b94a3; --rule: #2a313b; --rule-2: #20262e; --accent: #7fb2e8; --accent-soft: #1b2a3b; --crit: #ff8a80; --crit-bg: #3a1716; --high: #ffab73; --high-bg: #3a2416; --med: #f0c75e; --med-bg: #342a12; --low: #9fd38a; --low-bg: #1d2e17; --info: #b4bcc8; --info-bg: #222932; --pass: #8fd49a; --fail: #ff8a80; color-scheme: dark } }
+:root[data-theme="dark"] { --paper: #0f1318; --sheet: #161b22; --ink: #e8ecf1; --ink-2: #b4bcc8; --ink-3: #8b94a3; --rule: #2a313b; --rule-2: #20262e; --accent: #7fb2e8; --accent-soft: #1b2a3b; --crit: #ff8a80; --crit-bg: #3a1716; --high: #ffab73; --high-bg: #3a2416; --med: #f0c75e; --med-bg: #342a12; --low: #9fd38a; --low-bg: #1d2e17; --info: #b4bcc8; --info-bg: #222932; --pass: #8fd49a; --fail: #ff8a80; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 40px }
+h1, h2, h3 { font-family: var(--display); font-stretch: 82%; letter-spacing: -0.01em; text-wrap: balance; margin: 0; line-height: 1.12 }
+h1 { font-size: clamp(30px, 5vw, 46px); font-weight: 800 } h2 { font-size: 24px; font-weight: 700 } h3 { font-size: 17px; font-weight: 700 }
+p { margin: 0; max-width: 76ch }
+.eyebrow { font: 600 11.5px/1 var(--body); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3) }
+.mono, code, .num { font-family: var(--mono); font-variant-numeric: tabular-nums }
+code { font-size: .88em; background: var(--rule-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+section { display: grid; gap: 16px; min-width: 0 }
+.sec-head { display: grid; gap: 6px; border-top: 2px solid var(--ink); padding-top: 12px } .sec-head p { color: var(--ink-2) }
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: start }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); font-size: 13.5px; margin-top: 10px }
+.stamp { border: 3px solid var(--crit); color: var(--crit); padding: 10px 18px 12px; border-radius: 6px; transform: rotate(-2deg); text-align: center; background: var(--sheet); min-width: 200px }
+.stamp.go { border-color: var(--pass); color: var(--pass) } .stamp.warn { border-color: var(--high); color: var(--high) }
+.stamp b { display: block; font: 800 34px/1.05 var(--display); font-stretch: 75% } .stamp span { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase }
+.lede { font-size: 17px; max-width: 82ch }
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); border: 1px solid var(--rule); background: var(--sheet); border-radius: 8px }
+.fig { padding: 16px 18px; border-right: 1px solid var(--rule-2); display: grid; gap: 4px; align-content: start } .fig:last-child { border-right: 0 }
+.fig b { font: 700 28px/1 var(--display); font-stretch: 85% } .fig small { color: var(--ink-2); font-size: 12.5px }
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet) }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px }
+th, td { text-align: left; padding: 9px 12px; border-top: 1px solid var(--rule-2); vertical-align: top }
+thead th { border-top: 0; font: 600 11.5px/1.2 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3) }
+td.n, th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap }
+.ok { color: var(--pass); font-weight: 600 } .bad { color: var(--fail); font-weight: 600 } .warn { color: var(--high); font-weight: 600 }
+.sev { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 var(--body); padding: 5px 9px; border-radius: 999px; white-space: nowrap }
+.sev i { width: 7px; height: 7px; border-radius: 50%; background: currentColor }
+.s-Critical { color: var(--crit); background: var(--crit-bg) } .s-High { color: var(--high); background: var(--high-bg) } .s-Medium { color: var(--med); background: var(--med-bg) } .s-Low { color: var(--low); background: var(--low-bg) } .s-Info { color: var(--info); background: var(--info-bg) }
+.note { color: var(--ink-2); font-size: 13.5px } .sub { color: var(--ink-3); font-size: 12.5px; display: block }
+.bar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px; vertical-align: middle; margin-left: 6px; opacity: .75 } .bar.warn { background: var(--high) }
+details.d { background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px }
+details.d.Critical { border-left-color: var(--crit) } details.d.High { border-left-color: var(--high) } details.d.Medium { border-left-color: var(--med) } details.d.Low { border-left-color: var(--low) } details.d.Info { border-left-color: var(--info) }
+details.d summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 70px 86px minmax(0, 1fr) auto; gap: 12px; padding: 11px 14px; align-items: baseline }
+details.d summary::-webkit-details-marker { display: none } details.d summary .area { color: var(--ink-3); font-size: 12.5px; text-align: right }
+details.d[open] summary { border-bottom: 1px solid var(--rule-2) }
+.dl { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; padding: 12px 14px 14px; font-size: 13.5px }
+.dl dt { color: var(--ink-3); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px } .dl dd { margin: 0; overflow-wrap: anywhere }
+.defects { display: grid; gap: 8px }
+.list { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 92ch }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+pre { font: 12.5px/1.5 var(--mono); background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; overflow-x: auto; margin: 0 }
+@media (max-width: 760px) { .top { grid-template-columns: 1fr } .stamp { justify-self: start } .two { grid-template-columns: 1fr } details.d summary { grid-template-columns: 62px minmax(0, 1fr) } details.d summary .sev, details.d summary .area { grid-column: 2; justify-self: start; text-align: left } .dl { grid-template-columns: 1fr } .fig { border-right: 0; border-bottom: 1px solid var(--rule-2) } }
+</style>
+<div class="wrap" id="app"><noscript>This report needs JavaScript to render its tables.</noscript></div>
+<script id="report-data" type="application/json">/*__DATA__*/null</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('report-data').textContent.replace('/*__DATA__*/', ''));
+  const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const n = (x) => (x == null || Number.isNaN(Number(x)) ? '—' : Number(x).toLocaleString('en-GB'));
+  const sec = (ms) => (ms == null ? '—' : ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
+  const sev = (s) => `<span class="sev s-${s}"><i></i>${s}</span>`;
+  const app = document.getElementById('app');
+  const G = D.groups;
+  const built = G.filter((g) => g.schedule?.status === 'DONE');
+  const shifts = built.reduce((a, g) => a + (g.validate?.shifts ?? g.schedule?.shifts ?? 0), 0);
+  const viol = G.reduce((a, g) => a + (g.validate?.total ?? 0), 0);
+  const cls = { GO: 'go', 'NO-GO': '', CONDITIONAL: 'warn' }[D.verdict] ?? 'warn';
+
+  app.append($(`<header class="top"><div style="display:grid;gap:10px;min-width:0"><div class="eyebrow">Scale test · Enterprise WFM Platform</div><h1>WFM 50k Scale Test</h1>
+    <div class="meta"><span>${new Date(D.generatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</span><span>${n(D.total)} employees · ${G.length} WFM groups</span><span>Schedule week from ${esc(D.weekFrom)}</span><span>${esc(D.machine)}</span></div></div>
+    <div class="stamp ${cls}"><span>Scale verdict</span><b>${esc(D.verdict)}</b><span>${built.length}/${G.length} groups scheduled</span></div></header>`));
+  app.append($(`<section><p class="lede">${esc(D.verdictLine)}</p>
+    <div class="figs">
+      <div class="fig"><span class="eyebrow">Employees</span><b class="num">${n(D.total)}</b><small>in ${G.length} groups, one org</small></div>
+      <div class="fig"><span class="eyebrow">Schedules built</span><b class="num">${built.length}/${G.length}</b><small>through the real gateway → engine pipeline</small></div>
+      <div class="fig"><span class="eyebrow">Shifts</span><b class="num">${n(shifts)}</b><small>generated and re-checked</small></div>
+      <div class="fig"><span class="eyebrow">Rule breaks found</span><b class="num">${n(viol)}</b><small>by the independent checker</small></div>
+      <div class="fig"><span class="eyebrow">Engine crashes</span><b class="num">${D.engine.crashes}</b><small>under a restart supervisor</small></div>
+      <div class="fig"><span class="eyebrow">Defects</span><b class="num">${D.defects.length}</b><small>new, from this run</small></div>
+    </div></section>`));
+
+  app.append($(`<section id="scenarios"><div class="sec-head"><div class="eyebrow">13 situations in one organisation</div><h2>Scenario groups</h2><p>Each group is a different real-world case. All were loaded through the API (CSV imports, single updates) and scheduled for the week from ${esc(D.weekFrom)} by background jobs.</p></div>
+    <div class="tbl"><table><thead><tr><th>Group</th><th class="n">People</th><th>Schedule</th><th>One-at-a-time attempts</th><th class="n">Build time</th><th class="n">Covered</th><th class="n">Shifts</th><th class="n">No shift</th><th class="n">Rule breaks</th></tr></thead><tbody>
+    ${G.map((g) => { const s = g.schedule, v = g.validate; const st = s?.status ?? '—'; return `<tr><td><b>${g.key} · ${esc(g.name)}</b><span class="sub">${esc(g.what)}</span></td><td class="n">${n(g.size)}</td><td><span class="${st === 'DONE' ? 'ok' : 'bad'}">${esc(st)}</span>${s?.solver ? `<span class="sub">${esc(s.solver)}${s.backend ? ' · ' + esc(s.backend) : ''}${s.parts ? ' · ' + esc(s.parts) + ' parts' : ''}</span>` : ''}${s?.error ? `<span class="sub">${esc(String(s.error).slice(0, 160))}</span>` : ''}</td><td style="font-size:12.5px">${(g.tries ?? []).map((t) => `<span class="${t.status === 'DONE' ? 'ok' : 'bad'}">${t.whole ? 'whole' : 'in parts'}: ${t.status === 'DONE' ? 'built' : t.crashes ? 'engine crashed' : 'failed'}</span>`).join('<br>') || '—'}</td><td class="n">${s?.wallSec != null ? sec(s.wallSec * 1000) : '—'}</td><td class="n">${s?.coverage != null ? s.coverage + '%' : '—'}</td><td class="n">${n(v?.shifts ?? s?.shifts)}</td><td class="n">${v ? n(v.withoutShifts) : '—'}</td><td class="n">${v?.total != null ? `<span class="${v.total ? 'bad' : 'ok'}">${n(v.total)}</span>` : '—'}</td></tr>`; }).join('')}
+    </tbody></table></div><p class="note">"Covered" is the share of required staff-hours the schedule meets (from the schedule's own statistics). "Rule breaks" are counted by an independent checker: overlaps, rest, weekly hours and days, days in a row, leave, unavailable hours, weekends and night shifts per person.</p></section>`));
+
+  const pr = D.parallelRun;
+  if (pr) app.append($(`<section id="parallel"><div class="sec-head"><div class="eyebrow">First attempt · ${esc(pr.started)}</div><h2>All groups at once</h2><p>${esc(pr.note)} Every build failed; the gateway answered nobody for most of the 42 minutes.</p></div>
+    <div class="tbl"><table><thead><tr><th>Group</th><th>Result</th><th class="n">Ran for</th><th>Why</th></tr></thead><tbody>
+    ${pr.jobs.map((j) => `<tr><td class="mono">${j.key}</td><td><span class="bad">${j.status}</span></td><td class="n">${j.minutes} min</td><td>${esc(j.why)}</td></tr>`).join('')}
+    </tbody></table></div><p class="note">The table above shows the second pass: one group at a time, first as the gateway chose (in parts for large groups), then solved whole where the engine accepts the size (≤ 300,000 candidate shifts).</p></section>`));
+
+  const vrows = G.filter((g) => g.validate && !g.validate.error);
+  const keys = ['overlap', 'rest', 'weeklyMax', 'daysPerWeek', 'consecutive', 'onLeave', 'unavailable', 'weekend', 'night', 'length', 'outsideGroup'];
+  const labels = { overlap: 'Double-booked', rest: 'Rest < 11 h', weeklyMax: 'Over max hours', daysPerWeek: 'Too many days', consecutive: 'Days in a row', onLeave: 'On approved leave', unavailable: 'In unavailable hours', weekend: 'Weekend (not allowed)', night: 'Night without consent', length: 'Odd shift length', outsideGroup: 'Not in group' };
+  app.append($(`<section id="rules"><div class="sec-head"><div class="eyebrow">Independent re-check</div><h2>Schedule rules, person by person</h2></div>
+    <div class="tbl"><table><thead><tr><th>Group</th>${keys.map((k) => `<th class="n">${labels[k]}</th>`).join('')}<th class="n">Avg h FT / PT</th></tr></thead><tbody>
+    ${vrows.map((g) => `<tr><td class="mono">${g.key}</td>${keys.map((k) => { const c = g.validate.counts?.[k] ?? 0; return `<td class="n">${c ? `<span class="bad">${n(c)}</span>` : '0'}</td>`; }).join('')}<td class="n">${g.validate.ft ?? '—'} / ${g.validate.pt ?? '—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${vrows.filter((g) => g.validate.total).map((g) => `<p class="note"><b>${g.key}</b> examples: ${esc(Object.entries(g.validate.examples).map(([k, a]) => `${labels[k]}: ${a.join('; ')}`).join(' · '))}</p>`).join('')}
+    <p class="note">Context: S06 has ${n(G.find((g) => g.key === 'S06')?.validate?.leavePeople)} people on approved leave and ${n(G.find((g) => g.key === 'S06')?.validate?.unavailablePeople)} with unavailable mornings; S02 has ${n(G.find((g) => g.key === 'S02')?.validate?.nightConsent)} people with night consent; S08 has ${n(G.find((g) => g.key === 'S08')?.validate?.noWeekendPeople)} people who may not work weekends.</p></section>`));
+
+  app.append($(`<section id="forecast"><div class="sec-head"><div class="eyebrow">Every model the engine offers</div><h2>Forecasting</h2><p>History: 12 weeks of 15-minute intervals per queue (with gaps in S08, outlier days in S09, intermittent volume in S04). Each forecast was created, then submitted, approved and published.</p></div>
+    <div class="tbl"><table><thead><tr><th>Group</th><th>Model</th><th class="n">Create</th><th class="n">Dashboard</th><th class="n">Leaderboard</th><th class="n">Scenarios</th><th class="n">Accuracy</th><th class="n">History quality</th><th>Notes</th></tr></thead><tbody>
+    ${G.map((g) => { const f = g.forecast; if (!f) return `<tr><td class="mono">${g.key}</td><td colspan="8">not run</td></tr>`; const c = (x) => (x ? `<span class="${x.ok ? '' : 'bad'}">${sec(x.ms)}</span>` : '—'); return `<tr><td class="mono">${g.key}</td><td class="mono">${esc(g.model)}</td><td class="n">${f.error ? '<span class="bad">failed</span>' : sec(f.createMs)}</td><td class="n">${c(f.dashboard)}</td><td class="n">${c(f.leaderboard)}</td><td class="n">${c(f.scenarios)}</td><td class="n">${c(f.accuracy)}</td><td class="n">${c(f.historyQuality)}</td><td style="font-size:12.5px">${esc([f.error, f.adjust && `adjustment +20%: ${f.adjust}`, f.long && `365-day long-term: ${f.long} (${sec(f.longMs)})`].filter(Boolean).join(' · ') || '')}</td></tr>`; }).join('')}
+    </tbody></table></div></section>`));
+
+  const b = D.boundary, r = D.rotation, pd = D.probeDuring;
+  app.append($(`<section id="special"><div class="sec-head"><div class="eyebrow">Edges</div><h2>Limits, rotations and load</h2></div>
+    <div class="tbl"><table><tbody>
+      <tr><td><b>Candidate-limit boundary</b><span class="sub">S13: a template with every 15-minute start and every length from 4 to 12 h for 3,000 people</span></td><td>${b ? esc(b.status === 201 ? `Built anyway (${JSON.stringify(b.stats ?? {}).slice(0, 160)})` : b.status ? `${b.status}: ${b.message}` : `No answer: the connection dropped after ${sec(b.ms)} (${b.message})`) : '—'}${b ? `<span class="sub">answered in ${sec(b.ms)} · engine afterwards: ${esc(JSON.stringify(b.healthAfter?.engine ?? b.healthAfter))}</span>` : ''}</td></tr>
+      <tr><td><b>Rotation 4-on-4-off</b><span class="sub">S07: 2 crews, 12 h days, materialized 4 weeks</span></td><td>${r ? esc(r.error ?? `members ${r.members} in ${sec(r.membersMs)}; materialize ${String(r.materialize).slice(0, 200)} in ${sec(r.materializeMs)}`) : '—'}</td></tr>
+      <tr><td><b>API while schedules were building</b><span class="sub">/health and GET /config/groups every 3 s</span></td><td>${pd ? `${n(pd.samples)} samples · worst ${sec(pd.worstGroupsMs)} (health ${sec(pd.worstHealthMs)}) · ${n(pd.slowOver2s)} slower than 2 s · ${n(pd.failures)} failed` : '—'}</td></tr>
+      <tr><td><b>Engine</b><span class="sub">run under a restart loop for this test</span></td><td>${D.engine.starts} start(s), ${D.engine.crashes} crash(es)<span class="sub mono">${esc(D.engine.lines.join(' | '))}</span></td></tr>
+    </tbody></table></div></section>`));
+
+  const it = D.intraday, po = D.portal;
+  app.append($(`<section id="product"><div class="sec-head"><div class="eyebrow">The rest of the product with 50,000 people in it</div><h2>Screens, API and portal</h2></div>
+    <div class="two">
+      <div class="tbl"><table><thead><tr><th>API read</th><th class="n">Time</th><th class="n">Size</th><th class="n">Rows</th></tr></thead><tbody>
+      ${D.api.map((a) => `<tr><td>${esc(a.name)}${a.status !== 200 ? ` <span class="bad">${a.status}</span>` : ''}</td><td class="n">${sec(a.ms)}</td><td class="n">${n(a.kb)} kB</td><td class="n">${n(a.rows)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="tbl"><table><thead><tr><th>Admin screen (Chrome)</th><th class="n">Ready</th><th class="n">JS heap</th><th>Result</th></tr></thead><tbody>
+      ${D.ui.map((u) => `<tr><td>${esc(u.name)}</td><td class="n">${sec(u.ms)}</td><td class="n">${n(u.heapMb)} MB</td><td>${u.crashed ? '<span class="bad">crashed</span>' : u.errors.length ? `<span class="warn">${esc(u.errors[0])}</span>` : '<span class="ok">OK</span>'}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>
+    <div class="tbl"><table><tbody>
+      <tr><td><b>Live agent states</b><span class="sub">every S01 agent reports a state</span></td><td>${it ? `${n(it.people)} people in ${sec(it.totalMs)} (${it.batches.map((x) => `${n(x.accepted)}/${n(x.n)} in ${sec(x.ms)}`).join(', ')}); a batch of 2,001 → ${it.over2000.status} ${esc(it.over2000.msg ?? '')}; adherence afterwards ${sec(it.adherenceAfter.ms)}` : '—'}</td></tr>
+      <tr><td><b>Employee portal</b><span class="sub">S01-00001, one of 6,000 in their group</span></td><td>${po ? `sign-in to Home ${sec(po.uiHomeMs)} (${po.uiHomeOk ? 'OK' : 'failed'}) · ${po.portalApi.map((x) => `${x.p.replace('/me/', '')} ${sec(x.ms)}`).join(', ')} · ${n(po.shiftsThisPeriod)} shifts visible: ${esc(po.sampleShifts.join('; '))}` : '—'}</td></tr>
+    </tbody></table></div></section>`));
+
+  app.append($(`<section id="defects"><div class="sec-head"><div class="eyebrow">${D.defects.length} found at scale</div><h2>Defects</h2><p>Numbered after the release-gate list (DEF-01 to DEF-28). Also in <code>qa/reports/scale/scale-defects.csv</code>.</p></div>
+    <div class="defects">${D.defects.map((d) => `<details class="d ${d.sev}"><summary><span class="mono">${d.id}</span>${sev(d.sev)}<span style="font-weight:600;min-width:0">${esc(d.title)}</span><span class="area">${esc(d.area)}</span></summary><dl class="dl"><dt>Steps</dt><dd>${esc(d.steps)}</dd><dt>Expected</dt><dd>${esc(d.expected)}</dd><dt>Actual</dt><dd>${esc(d.actual)}</dd><dt>Evidence</dt><dd>${esc(d.evidence)}</dd><dt>Fix</dt><dd>${esc(d.fix)}</dd></dl></details>`).join('')}</div></section>`));
+  app.append($(`<section><div class="sec-head"><div class="eyebrow">Keep these</div><h2>What held up</h2></div><ul class="list">${D.strengths.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></section>`));
+  app.append($(`<section><div class="sec-head"><div class="eyebrow">Reproduce</div><h2>Method and limits</h2></div>
+<pre>$env:QA_ADMIN_PASSWORD='…'                 # test stack only: adds 50,000 people
+node qa/scale/scale-test.mjs setup         # groups, queues, 12 weeks of history, people, leave, availability
+node qa/scale/scale-test.mjs forecast      # one model per group, publish, long-term + adjustment
+node qa/scale/scale-test.mjs schedule      # rotation, limit check, background schedule jobs
+node qa/scale/validate.mjs                 # independent rule check
+node qa/scale/probe-50k.mjs                # API, live states, admin screens, portal
+node qa/scale/build-scale-report.mjs</pre>
+    <ul class="list"><li>One laptop runs everything (database, gateway, one engine, both web apps, Chrome), so times are a floor, not a server benchmark.</li><li>One week is solved per group (S10: 4 weeks solved + 9 repeated). Demand and people are synthetic; real availability patterns make the model harder.</li><li>Coverage is what the solver reached within its 90-second limit (feasible, not proven optimal).</li></ul></section>`));
+})();
+</script>

@@ -126,6 +126,7 @@ def staff_intervals(req):
 
     out = []
     async_days = defaultdict(float)  # (channel, day) -> workload seconds
+    live_slots = {i.slot for i in req.inputs if i.channel in ("voice", "chat") and i.volume > 0}   # when the live queues have contacts: people are in the building then
     blend = defaultdict(lambda: [0.0, 0.0])  # (day, slot) -> [traffic in erlangs, contacts] for cross-skilled voice + chat
     blend_params = params.get("voice") or params.get("chat")
     for (ch, day, slot), (vol, work) in pooled.items():
@@ -173,6 +174,14 @@ def staff_intervals(req):
     for ch, days in by_channel.items():  # email / back office: spread each day's workload over opening hours
         p = params.get(ch, default)
         open_s, close_s = p.open_slot, p.close_slot or (24 * 60 // interval_min)
+        per_hour = 60 // interval_min
+        if (close_s - open_s) > 16 * per_hour:
+            # an email or back-office queue that is "open" round the clock is not worked round the clock: its backlog is cleared while people are working, i.e. when the live
+            # queues of the group have contacts, or in ordinary daytime hours when there are none. (A queue given shorter opening hours keeps them exactly.)
+            lo, hi = (min(live_slots), max(live_slots) + 1) if live_slots else (8 * per_hour, 20 * per_hour)
+            open_s, close_s = max(open_s, lo), min(close_s, hi)
+            if close_s <= open_s:
+                open_s, close_s = p.open_slot, p.close_slot or (24 * 60 // interval_min)
         cap = p.occupancy_cap if 0 < p.occupancy_cap <= 1 else 0.85
         slots = max(close_s - open_s, 1)
         day_capacity_sec = slots * interval_sec * cap

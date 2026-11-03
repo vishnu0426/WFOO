@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { DaySummary, RequestPrefill } from '../types';
 import { useLoad, Card, Busy, Banner, Btn, Modal, Pill, hm, dayLabel, todayIso, addDays, contrastText } from '../ui';
 
-const mondayOf = (iso: string) => { const d = new Date(`${iso}T00:00:00Z`); const dow = (d.getUTCDay() + 6) % 7; return addDays(iso, -dow); };
+/** First day of the pay week `iso` falls in. weekStart: Monday 0 ... Sunday 6, the day this person's pay week begins on. */
+const weekFloor = (iso: string, weekStart: number) => { const d = new Date(`${iso}T00:00:00Z`); const dow = (d.getUTCDay() + 6) % 7; return addDays(iso, -((dow - weekStart + 7) % 7)); };
 const weekday = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short' });
 const dayNum = (iso: string) => new Date(`${iso}T00:00:00`).getDate();
 const fullDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
@@ -32,7 +33,7 @@ const shiftProgress = (d: DaySummary, now: Date): number | null => {
 const DayColumn: React.FC<{ d: DaySummary; isToday: boolean; progress: number | null; onClick: () => void }> = ({ d, isToday, progress, onClick }) => (
   <button onClick={onClick} className={`text-left rounded-lg border bg-white flex flex-col min-h-37.5 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer ${isToday ? 'border-accent ring-1 ring-accent' : 'border-[#E5E5E0]'}`}>
     <div className={`px-2.5 py-2 text-center border-b ${isToday ? 'bg-accent-bg border-accent' : 'border-[#E5E5E0]'}`}>
-      <div className={`text-[10px] font-semibold uppercase tracking-wider ${isToday ? 'text-accent' : 'text-[#737373]'}`}>{weekday(d.day)}</div>
+      <div className={`text-[10px] font-semibold uppercase tracking-wider ${isToday ? 'text-accent' : 'text-[#6B6B6B]'}`}>{weekday(d.day)}</div>
       <div className={`text-[15px] font-bold ${isToday ? 'text-accent' : 'text-[#171717]'}`}>{dayNum(d.day)}</div>
     </div>
     <div className="p-2 flex-1 flex flex-col gap-1.5">
@@ -53,7 +54,7 @@ const DayColumn: React.FC<{ d: DaySummary; isToday: boolean; progress: number | 
             )}
           </div>
           {progress !== null && <div className="text-[10px] font-semibold text-accent px-0.5">In progress</div>}
-          {d.shift.template && <div className="text-[10px] text-[#737373] truncate px-0.5">{d.shift.template}</div>}
+          {d.shift.template && <div className="text-[10px] text-[#6B6B6B] truncate px-0.5">{d.shift.template}</div>}
           {d.shift.activities.length > 0 && (
             <div className="flex flex-wrap gap-1 px-0.5">
               {d.shift.activities.map((a, i) => (
@@ -64,7 +65,7 @@ const DayColumn: React.FC<{ d: DaySummary; isToday: boolean; progress: number | 
           {d.swap && <Pill tone="info">{d.swap.kind === 'SWAP' ? 'Swap pending' : 'Giveaway pending'}</Pill>}
         </>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-center text-[11px] text-[#A3A3A3] px-1">{d.published ? 'Rest day' : 'Not published'}</div>
+        <div className="flex-1 flex items-center justify-center text-center text-[11px] text-[#6B6B6B] px-1">{d.published ? 'Rest day' : 'Not published'}</div>
       )}
     </div>
   </button>
@@ -75,7 +76,7 @@ const MonthCell: React.FC<{ d: DaySummary; isToday: boolean; inMonth: boolean; o
     onClick={onClick}
     className={`text-left rounded-md border p-1.5 min-h-20 flex flex-col gap-1 hover:shadow-sm transition-shadow ${isToday ? 'border-accent ring-1 ring-accent' : 'border-[#E5E5E0]'} ${inMonth ? 'bg-white' : 'bg-[#FAFAF8]'}`}
   >
-    <div className={`text-[11px] font-semibold ${isToday ? 'text-accent' : inMonth ? 'text-[#171717]' : 'text-[#A3A3A3]'}`}>{dayNum(d.day)}</div>
+    <div className={`text-[11px] font-semibold ${isToday ? 'text-accent' : inMonth ? 'text-[#171717]' : 'text-[#6B6B6B]'}`}>{dayNum(d.day)}</div>
     {d.timeOff ? (
       <span className="text-[9px] font-semibold px-1 py-0.5 rounded truncate" style={{ backgroundColor: 'var(--color-accent-bg)', color: 'var(--color-accent-dark)' }}>
         {titleCase(d.timeOff.type.replace(/_/g, ' '))}
@@ -83,7 +84,7 @@ const MonthCell: React.FC<{ d: DaySummary; isToday: boolean; inMonth: boolean; o
     ) : d.shift ? (
       <span className="text-[9px] font-semibold px-1 py-0.5 rounded truncate" style={{ backgroundColor: d.shift.color, color: contrastText(d.shift.color) }}>{hm(d.shift.startTime)}–{hm(d.shift.endTime)}</span>
     ) : inMonth && d.published ? (
-      <span className="text-[9px] text-[#A3A3A3]">Rest</span>
+      <span className="text-[9px] text-[#6B6B6B]">Rest</span>
     ) : null}
   </button>
 );
@@ -94,7 +95,7 @@ const DayDetail: React.FC<{ d: DaySummary; onClose: () => void; onRequestAction:
       {d.timeOff ? (
         <div className="rounded-md p-3" style={{ backgroundColor: 'var(--color-accent-bg)' }}>
           <div className="text-[14px] font-semibold text-accent-dark">{titleCase(d.timeOff.type.replace(/_/g, ' '))}</div>
-          <div className="text-[12px] text-[#737373] mt-0.5">{titleCase(d.timeOff.status)}</div>
+          <div className="text-[12px] text-[#6B6B6B] mt-0.5">{titleCase(d.timeOff.status)}</div>
         </div>
       ) : d.shift ? (
         <>
@@ -104,12 +105,12 @@ const DayDetail: React.FC<{ d: DaySummary; onClose: () => void; onRequestAction:
           </div>
           {d.shift.activities.length > 0 && (
             <div className="space-y-1.5">
-              <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Breakdown</div>
+              <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider">Breakdown</div>
               {d.shift.activities.map((a, i) => (
                 <div key={i} className="flex items-center gap-2 text-[13px] text-[#171717]">
                   <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: a.color }} />
                   <span className="font-medium">{titleCase(a.type)}</span>
-                  <span className="text-[#737373] ml-auto">{hm(a.startTime)}–{hm(a.endTime)}</span>
+                  <span className="text-[#6B6B6B] ml-auto">{hm(a.startTime)}–{hm(a.endTime)}</span>
                 </div>
               ))}
             </div>
@@ -117,7 +118,7 @@ const DayDetail: React.FC<{ d: DaySummary; onClose: () => void; onRequestAction:
           {d.swap && <Banner kind="warn">{d.swap.kind === 'SWAP' ? 'Swap' : 'Giveaway'} request {d.swap.status.toLowerCase().replace(/_/g, ' ')} for this shift.</Banner>}
         </>
       ) : (
-        <div className="text-[13px] text-[#737373] py-1">{d.published ? 'Rest day — nothing scheduled.' : 'Schedule not published yet for this day.'}</div>
+        <div className="text-[13px] text-[#6B6B6B] py-1">{d.published ? 'Rest day — nothing scheduled.' : 'Schedule not published yet for this day.'}</div>
       )}
 
       {(d.shift || !d.timeOff) && (
@@ -141,6 +142,8 @@ export const Schedule: React.FC<{ onRequestAction: (p: RequestPrefill) => void }
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60_000); return () => clearInterval(t); }, []);
 
+  const home = useLoad<{ payWeekStart: number }>('/me/home', []);
+  const mondayOf = (iso: string) => weekFloor(iso, home.data?.payWeekStart ?? 0);   // the week starts on the pay week's first day, not always Monday
   const monday = mondayOf(anchor);
   const sunday = addDays(monday, 6);
   const gridStart = view === 'week' ? monday : mondayOf(startOfMonth(anchor));
@@ -184,8 +187,8 @@ export const Schedule: React.FC<{ onRequestAction: (p: RequestPrefill) => void }
         <div className="flex items-center gap-3">
           <div className="text-[13px] font-semibold text-accent">{totalHours.toFixed(1)}h scheduled</div>
           <div className="flex gap-1 bg-[#F0F0EC] rounded-md p-1">
-            <button onClick={() => setView('week')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'week' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>Week</button>
-            <button onClick={() => setView('month')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'month' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>Month</button>
+            <button onClick={() => setView('week')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'week' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>Week</button>
+            <button onClick={() => setView('month')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'month' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>Month</button>
           </div>
         </div>
       </div>

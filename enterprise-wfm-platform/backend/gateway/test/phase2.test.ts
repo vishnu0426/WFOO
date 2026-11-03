@@ -97,7 +97,7 @@ describe('workforce and scheduling', () => {
     const c = await call(admin, 'POST', '/workforce/employees', { employeeNumber: `S${RUN}`, firstName: 'Solo', lastName: 'Person', teamId: ctx.team.id, primaryGroupId: ctx.group.id, weeklyContractHours: 30, maxWeeklyHours: 36 });
     assert.equal(c.status, 201, c.text); assert.deepEqual(c.json.eligibleGroupIds, [ctx.group.id], 'the primary group is always eligible');
     assert.equal((await call(admin, 'POST', '/workforce/employees', { employeeNumber: `S${RUN}`, firstName: 'Dup', lastName: 'Person' })).status, 409, 'employee numbers are unique');
-    const u = await call(admin, 'PUT', `/workforce/employees/${c.json.id}`, { status: 'LEAVE', maxConsecutiveDays: 4 });
+    const u = await call(admin, 'PUT', `/workforce/employees/${c.json.id}`, { reason: 'Test change', status: 'LEAVE', maxConsecutiveDays: 4 });
     assert.equal(u.status, 200, u.text); assert.equal(u.json.status, 'LEAVE'); assert.equal(u.json.version, 2);
     assert.equal((await call(admin, 'PUT', `/workforce/employees/${c.json.id}/skills`, { skills: [{ skillId: ctx.skill.id, proficiency: 4 }] })).json.skills[0].proficiency, 4);
     assert.equal((await call(admin, 'DELETE', `/workforce/employees/${c.json.id}`)).status, 200);
@@ -106,7 +106,7 @@ describe('workforce and scheduling', () => {
 
   it('validates employee rules and RBAC', async () => {
     const e = ctx.emps[0];
-    assert.equal((await call(admin, 'PUT', `/workforce/employees/${e.id}`, { weeklyContractHours: 50, maxWeeklyHours: 40 })).status, 400, 'contract above maximum');
+    assert.equal((await call(admin, 'PUT', `/workforce/employees/${e.id}`, { reason: 'Test change', weeklyContractHours: 50, maxWeeklyHours: 40 })).status, 400, 'contract above maximum');
     const an = await call(admin, 'POST', '/users', { username: `an${RUN}`, displayName: 'An', role: 'ANALYST', password: 'Passw0rd!Passw0rd' });
     assert.ok([201, 409].includes(an.status));
     const tok = (await call(null, 'POST', '/auth/login', { username: `an${RUN}`, password: 'Passw0rd!Passw0rd', tenant: TENANT })).json.token;
@@ -137,7 +137,7 @@ describe('workforce and scheduling', () => {
     const g2 = await call(admin, 'POST', '/config/groups', { name: `Empty ${RUN}` });
     assert.equal((await call(admin, 'POST', '/scheduling/versions', { groupId: g2.json.id, from: ctx.from })).status, 400);
 
-    const r = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: ctx.from, weeks: 1, timeLimitSec: 45 });
+    const r = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: ctx.from, weeks: 1, timeLimitSec: 45, templateIds: ctx.tpl.map((t: any) => t.id) });   // only this suite's templates: other suites leave theirs in the same organisation
     assert.equal(r.status, 201, r.text); ctx.v1 = r.json;
     assert.equal(r.json.status, 'DRAFT'); assert.equal(r.json.seq, 1);
     assert.ok(['OPTIMAL', 'FEASIBLE'].includes(r.json.stats.solver.status), r.json.stats.solver.status);

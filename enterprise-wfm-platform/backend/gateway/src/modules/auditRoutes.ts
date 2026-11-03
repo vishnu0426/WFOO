@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { withTenant } from '../db.ts';
 import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
-import { isoDay, parse } from '../http.ts';
+import { isoDay, parse, safeCsvCell } from '../http.ts';
 
 export const auditRoutes = Router();
 
@@ -44,7 +44,7 @@ auditRoutes.get('/audit/summary', requires('audit:read'), async (req, res) => {
   res.json(out);
 });
 
-const csvCell = (v: unknown) => { const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const csvCell = safeCsvCell;
 
 /** Compliance export of the filtered ledger (up to 20,000 rows). Exporting is itself recorded. */
 auditRoutes.get('/audit/export.csv', requires('audit:read'), async (req, res) => {

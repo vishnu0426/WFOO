@@ -1,0 +1,17 @@
+import pg from 'pg';
+const B = 'http://localhost:4001/api/v1';
+const call = async (t, m, p, b) => { const r = await fetch(B + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return r.json(); };
+const tok = (await call(null, 'POST', '/auth/login', { username: 'admin', password: 'Feed-Test-9xQ!', tenant: 'ORG' })).token;
+const tag = Date.now().toString(36);
+const g = await call(tok, 'POST', '/config/groups', { name: 'HQ big ' + tag, serviceLevelGoal: 80, serviceLevelThresholdSec: 20, shrinkagePercent: 25, targetOccupancy: 88 });
+const qs = []; for (let i = 0; i < 100; i++) qs.push((await call(tok, 'POST', '/config/queues', { name: `HQ q${i} ${tag}`, channel: 'VOICE', wfmGroupId: g.id, ahtDefault: 300 })).id);
+const c = new pg.Client({ connectionString: process.env.U, options: '-c search_path=wfm,public' }); await c.connect();
+const t = (await c.query('select id from tenants limit 1')).rows[0].id;
+const t0 = Date.now();
+for (const q of qs) await c.query(`insert into interval_history (tenant_id,queue_id,day,slot,starts_at,volume,aht_sec,abandoned) select $1,$2,(current_date-d),s,now(),(5+(s%24)*3+(d%7)),250+(s%40)*2,(s%9=0)::int from generate_series(1,400) d, generate_series(0,95) s`, [t, q]);
+console.log('GROUP', g.id, 'rows', (await c.query('select count(*)::int n from interval_history where queue_id=any($1)', [qs])).rows[0].n, 'built in', Date.now() - t0, 'ms');
+const t1 = Date.now();
+const r = await fetch(B + '/forecast/history-quality?groupId=' + g.id, { headers: { Authorization: 'Bearer ' + tok } });
+const body = await r.text();
+console.log('history-quality', r.status, Date.now() - t1, 'ms', Math.round(body.length / 1024), 'KB');
+await c.end();

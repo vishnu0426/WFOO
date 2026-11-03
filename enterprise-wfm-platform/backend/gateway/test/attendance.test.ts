@@ -32,7 +32,7 @@ describe('time & attendance', () => {
     const lines = ['employee_number,first_name,last_name,team,employment_type,weekly_hours', `AT${RUN},Att,Endance,Att team ${RUN},FULL_TIME,40`];
     const imp = await call(admin, 'POST', '/workforce/employees/import', { csv: lines.join('\n'), dryRun: false });
     assert.equal(imp.json.committed, true, imp.text);
-    ctx.emp = (await call(admin, 'GET', '/workforce/employees')).json.find((e: any) => e.employeeNumber === `AT${RUN}`);
+    ctx.emp = (await call(admin, 'GET', `/workforce/employees?q=AT${RUN}`)).json.find((e: any) => e.employeeNumber === `AT${RUN}`);
     assert.ok(ctx.emp);
     ctx.monday = mondayOnOrAfter(new Date());
   });

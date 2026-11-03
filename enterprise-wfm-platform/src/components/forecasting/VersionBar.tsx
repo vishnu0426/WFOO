@@ -73,15 +73,15 @@ export const VersionBar: React.FC<{ flat?: boolean }> = ({ flat = false }) => {
               return (
                 <React.Fragment key={s}>
                   <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border ${
-                    done ? 'bg-[#EAF5EF] text-[#2F7D5A] border-[#2F7D5A]/20' : now ? 'bg-[#171717] text-white border-[#171717]' : 'bg-white text-[#737373] border-[#E5E5E0]'}`}>
+                    done ? 'bg-[#EAF5EF] text-[#2A7553] border-[#2F7D5A]/20' : now ? 'bg-[#171717] text-white border-[#171717]' : 'bg-white text-[#6B6B6B] border-[#E5E5E0]'}`}>
                     {done && <CheckCircle2 className="w-3.5 h-3.5" />}{i + 1} · {STATUS_LABEL[s]}
                   </span>
-                  {i < STATUS_FLOW.length - 1 && <ChevronRight className="w-3.5 h-3.5 text-[#A3A3A3]" />}
+                  {i < STATUS_FLOW.length - 1 && <ChevronRight className="w-3.5 h-3.5 text-[#6B6B6B]" />}
                 </React.Fragment>
               );
             })}
             {st === 'ARCHIVED' && <Pill>Archived: a newer forecast was published</Pill>}
-            <span className="text-[11px] text-[#737373] ml-2">
+            <span className="text-[11px] text-[#6B6B6B] ml-2">
               {dayYear(version.fromDay)} → {dayYear(version.toDay)} · created {when(version.createdAt)}{version.createdBy ? ` by ${version.createdBy}` : ''}
               {version.publishedAt ? ` · published ${when(version.publishedAt)}` : ''}
             </span>
@@ -90,17 +90,17 @@ export const VersionBar: React.FC<{ flat?: boolean }> = ({ flat = false }) => {
           <div className="flex flex-wrap items-center gap-2">
             {st === 'DRAFT' && (<>
               {can('forecast:submit') && <Btn variant="primary" disabled={busy} onClick={() => step('submit', 'Submitted for approval. It is now locked: approve it, or return it to draft.')}>Submit for approval</Btn>}
-              <span className="text-[11px] text-[#737373]">Adjust it first under Adjustments; it locks once submitted.</span>
+              <span className="text-[11px] text-[#6B6B6B]">Adjust it first under Adjustments; it locks once submitted.</span>
             </>)}
             {st === 'SUBMITTED' && (<>
               {can('forecast:approve') && <Btn variant="primary" disabled={busy} onClick={() => step('approve', 'Approved. Publish it to drive the schedule.')}>Approve</Btn>}
               {(can('forecast:approve') || can('forecast:submit')) && <Btn disabled={busy} onClick={() => step('reject', 'Returned to draft.', 'Why is it being returned to draft?')}>Return to draft</Btn>}
-              {version.submittedBy && <span className="text-[11px] text-[#737373]">Submitted by {version.submittedBy}</span>}
+              {version.submittedBy && <span className="text-[11px] text-[#6B6B6B]">Submitted by {version.submittedBy}</span>}
             </>)}
             {st === 'APPROVED' && (<>
               {can('forecast:publish') && <Btn variant="success" disabled={busy} onClick={() => step('publish', 'Published. Staffing coverage and the auto-scheduler now use this forecast.')}>Publish</Btn>}
               {(can('forecast:approve') || can('forecast:submit')) && <Btn disabled={busy} onClick={() => step('reject', 'Returned to draft.', 'Why is it being returned to draft?')}>Return to draft</Btn>}
-              {version.approvedBy && <span className="text-[11px] text-[#737373]">Approved by {version.approvedBy}</span>}
+              {version.approvedBy && <span className="text-[11px] text-[#6B6B6B]">Approved by {version.approvedBy}</span>}
             </>)}
             {st === 'PUBLISHED' && <Pill tone="good">Live: this forecast drives the schedule</Pill>}
           </div>

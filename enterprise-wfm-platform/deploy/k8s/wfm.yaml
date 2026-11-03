@@ -1,0 +1,135 @@
+# AgnoWFM on Kubernetes: scalable web gateways, one jobs gateway, and engines that scale with the queue of schedule builds.
+# NOT run against a cluster by the authors: check the names, the Prometheus address and the secret before applying. Needs the metrics-server (CPU autoscaling),
+# a Prometheus that scrapes the pods below, and KEDA for the engine autoscaler. Postgres, Redis and NATS are expected to exist already (see the Secret).
+#
+#   kubectl create namespace wfm
+#   kubectl -n wfm create secret generic wfm-secrets --from-env-file=backend/.env   # DATABASE_URL, JWT_SECRET, REDIS_URL, NATS_URL, SECRETS_KEY, ...
+#   kubectl -n wfm apply -f deploy/k8s/wfm.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: wfm-config, namespace: wfm }
+data:
+  PORT: "4000"
+  ENGINE_DISCOVER: "wfm-engine:50051"       # engines are found by name, so the autoscaler can add and remove them
+  GATEWAY_MAX_REPLICAS: "10"                # the most web gateways the autoscaler may run: the database connections per process are worked out from this
+  METRICS_TOKEN: ""                         # set to require "Authorization: Bearer <token>" at /metrics (otherwise only private-network callers are answered)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wfm-gateway-web, namespace: wfm }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: wfm-gateway-web } }
+  template:
+    metadata:
+      labels: { app: wfm-gateway-web }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "4000", prometheus.io/path: "/metrics" }
+    spec:
+      containers:
+        - name: gateway
+          image: wfm-gateway:latest
+          ports: [{ containerPort: 4000 }]
+          envFrom: [{ configMapRef: { name: wfm-config } }, { secretRef: { name: wfm-secrets } }]
+          env: [{ name: GATEWAY_ROLE, value: web }]
+          resources: { requests: { cpu: "500m", memory: 1Gi }, limits: { memory: 2Gi } }
+          readinessProbe: { httpGet: { path: /health, port: 4000 }, periodSeconds: 10, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /health, port: 4000 }, initialDelaySeconds: 60, periodSeconds: 20, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: wfm-gateway, namespace: wfm }
+spec: { selector: { app: wfm-gateway-web }, ports: [{ port: 4000, targetPort: 4000 }] }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: wfm-gateway-web, namespace: wfm }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: wfm-gateway-web }
+  minReplicas: 2
+  maxReplicas: 10                           # keep equal to GATEWAY_MAX_REPLICAS above
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 30 }
+    scaleDown: { stabilizationWindowSeconds: 300 }
+---
+# exactly one: it runs the schedule builds, webhooks, reports, connector pulls and the adherence watcher
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wfm-gateway-jobs, namespace: wfm }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: wfm-gateway-jobs } }
+  template:
+    metadata:
+      labels: { app: wfm-gateway-jobs }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "4000", prometheus.io/path: "/metrics" }
+    spec:
+      containers:
+        - name: gateway
+          image: wfm-gateway:latest
+          ports: [{ containerPort: 4000 }]
+          envFrom: [{ configMapRef: { name: wfm-config } }, { secretRef: { name: wfm-secrets } }]
+          env: [{ name: GATEWAY_ROLE, value: jobs }]
+          resources: { requests: { cpu: "1", memory: 4Gi }, limits: { memory: 8Gi } }     # the entry script sets the heap to 75% of the limit
+          readinessProbe: { httpGet: { path: /health, port: 4000 }, periodSeconds: 10 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wfm-engine, namespace: wfm }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: wfm-engine } }
+  template:
+    metadata:
+      labels: { app: wfm-engine }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9109", prometheus.io/path: "/metrics" }
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: engine
+          image: wfm-engine:latest
+          ports: [{ containerPort: 50051 }, { containerPort: 9109 }]
+          env:
+            - { name: ENGINE_ADDR, value: "0.0.0.0:50051" }            # reachable from the gateways; protected by the NetworkPolicy below (the engine has no login of its own)
+            - { name: ENGINE_METRICS_HOST, value: "0.0.0.0" }
+          # ENGINE_MAX_SOLVES and the warm solver processes are worked out from the CPU and memory limits below; set them only to override
+          resources: { requests: { cpu: "4", memory: 16Gi }, limits: { cpu: "8", memory: 32Gi } }
+          readinessProbe: { tcpSocket: { port: 50051 }, initialDelaySeconds: 30, periodSeconds: 10 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: wfm-engine, namespace: wfm }
+spec: { clusterIP: None, selector: { app: wfm-engine }, ports: [{ name: grpc, port: 50051 }, { name: metrics, port: 9109 }] }   # headless: the name resolves to every engine pod
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: wfm-engine-only-from-gateways, namespace: wfm }
+spec:
+  podSelector: { matchLabels: { app: wfm-engine } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchExpressions: [{ key: app, operator: In, values: [wfm-gateway-web, wfm-gateway-jobs] }] }
+      ports: [{ port: 50051 }]
+    - from: [{ namespaceSelector: {} }]                                  # the Prometheus that scrapes metrics: narrow this to its namespace
+      ports: [{ port: 9109 }]
+---
+# Engines follow the work: add one for every 2 builds waiting (queued builds + solves waiting for a slot), down to 2 when it is quiet.
+# Needs KEDA (https://keda.sh) and the address of your Prometheus.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: wfm-engine, namespace: wfm }
+spec:
+  scaleTargetRef: { name: wfm-engine }
+  minReplicaCount: 2
+  maxReplicaCount: 12
+  cooldownPeriod: 600                        # a build that is running must not lose its engine because the queue just emptied
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: max(wfm_schedule_jobs{state="queued"}) + sum(wfm_engine_solves_waiting)
+        threshold: "2"

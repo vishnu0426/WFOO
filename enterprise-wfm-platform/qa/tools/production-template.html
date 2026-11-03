@@ -1,0 +1,158 @@
+<title>Production Readiness Test</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--__FONTS__-->
+<!--__STYLE__-->
+<style>
+/* Additions for the consolidated report: two verdict tracks side by side, run-1 vs run-2 cells. Uses the release-gate tokens only. */
+.tracks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+.track { background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; gap: 10px; align-content: start; min-width: 0 }
+.track .vrow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline }
+.vtag { font: 800 20px/1 var(--display); font-stretch: 80%; letter-spacing: .02em }
+.vtag.v-GO { color: var(--pass) } .vtag.v-CONDITIONAL { color: var(--high) } .vtag.v-NO-GO, .vtag.v-NOT { color: var(--crit) }
+.was { color: var(--ink-3); font-size: 12.5px }
+.was s { color: var(--ink-3) }
+.track p { font-size: 13.5px; color: var(--ink-2) }
+.trk { font: 600 11px/1 var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap }
+.arrow { color: var(--ink-3); padding: 0 4px }
+td .sub { display: block; color: var(--ink-3); font-size: 12px; margin-top: 2px; max-width: 46ch; overflow-wrap: anywhere }
+.cmp td:nth-child(2) { color: var(--ink-2) }
+@media (max-width: 760px) { .tracks { grid-template-columns: 1fr } }
+</style>
+
+<div class="wrap" id="app">
+  <noscript>This report needs JavaScript to render its tables.</noscript>
+</div>
+
+<script id="report-data" type="application/json">/*__DATA__*/null</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('report-data').textContent.replace('/*__DATA__*/', ''));
+  const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const n = (x) => (x == null || Number.isNaN(Number(x)) ? '—' : Number(x).toLocaleString('en-GB'));
+  const ms = (x) => (x == null ? '—' : x >= 1000 ? `${n(Math.round(x / 100) / 10)} s` : `${x} ms`);
+  const sec = (x) => (x == null ? '—' : x >= 90 ? `${Math.round(x / 6) / 10} min` : `${x} s`);
+  const sev = (s) => `<span class="sev s-${s}"><i></i>${s}</span>`;
+  const rtCls = (s) => 'rt-' + String(s ?? '').split(' ')[0];
+  const rt = (d) => d.retest ? `<span class="rt ${rtCls(d.retest.status)}">${esc(d.retest.status)}</span>` : '<span class="note">—</span>';
+  const vword = (v) => (v === 'CONDITIONAL' ? 'CONDITIONAL GO' : v);
+  const vcls = (v) => 'v-' + String(v).split(' ')[0];
+  const sevs = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+  const isOpen = (d) => d.retest?.status !== 'Fixed';
+  const app = document.getElementById('app');
+  const S = D.scale, P2 = S.parallel.run2 ?? {}, G = D.gate, C = G.counts;
+
+  app.append($(`<header class="top">
+    <div style="display:grid;gap:10px;min-width:0">
+      <div class="eyebrow">Enterprise WFM Platform · release gate + 50,000-person scale</div>
+      <h1>Production Readiness Test</h1>
+      <div class="meta"><span>Re-test, 1–2 November 2026</span><span>Admin :3000 · Portal :3001 · Gateway :4000 · Engine :50051</span><span>Branch <code>qa/production-readiness</code></span></div>
+    </div>
+    <div class="stamp ${D.verdict === 'GO' ? 'go' : D.verdict === 'CONDITIONAL' ? 'cond' : ''}" role="img" aria-label="Overall verdict ${esc(vword(D.verdict))}"><span>Overall verdict</span><b>${esc(vword(D.verdict))}</b></div>
+  </header>`));
+
+  app.append($(`<section aria-label="Summary" style="gap:18px">
+    <p class="lede">${esc(D.verdictLine)}</p>
+    <div class="sevrow">${sevs.map((s) => `<span class="sev s-${s}"><i></i>${D.openBySev[s]} ${s.toLowerCase()} open</span>`).join('')}</div>
+    <div class="tracks">${D.tracks.map((t) => `<div class="track">
+      <div class="eyebrow">${esc(t.name)}</div>
+      <div class="vrow"><span class="vtag ${vcls(t.verdict)}">${esc(vword(t.verdict))}</span><span class="was">first run: <s>${esc(vword(t.previous))}</s></span></div>
+      <p>${esc(t.line)}</p>
+      <div class="sevrow">${['Fixed', 'Partly fixed', 'Still open', 'Still applies', 'New'].filter((k) => t.retest[k]).map((k) => `<span class="rt ${rtCls(k)}">${t.retest[k]} ${k.toLowerCase()}</span>`).join('')}</div>
+    </div>`).join('')}</div>
+    <div class="figs">
+      <div class="fig"><span class="eyebrow">Employees</span><b class="num">${n(S.total)}</b><small>in ${S.groups.length} WFM groups, one organisation</small></div>
+      <div class="fig"><span class="eyebrow">Schedules built</span><b class="num">${S.built.run2}/13</b><small>first run ${S.built.run1}/13</small></div>
+      <div class="fig"><span class="eyebrow">Engine crashes</span><b class="num">${n(S.engine.run2Crashes)}</b><small>first run ${n(S.engine.run1Crashes)}</small></div>
+      <div class="fig"><span class="eyebrow">Shifts re-checked</span><b class="num">${n(S.shiftsChecked)}</b><small>${n(S.ruleBreaks)} rule breaks</small></div>
+      <div class="fig"><span class="eyebrow">Playwright suite</span><b class="num">${G.suite.passed}/${G.suite.total}</b><small>release-gate tests passed</small></div>
+    </div>
+    <nav class="toc" aria-label="Sections"><a href="#blocking">Still blocking</a><a href="#scale">50k scale</a><a href="#groups">Per group</a><a href="#load">Screens and API at 50k</a><a href="#gate">Release gate</a><a href="#defects">All defects</a><a href="#strengths">What works</a><a href="#method">Method</a></nav>
+  </section>`));
+
+  app.append($(`<section id="blocking"><div class="sec-head"><div class="eyebrow">Gate</div><h2>Still blocking launch</h2><p>Critical and high defects from either track that are not yet fixed.</p></div>
+    ${D.blocking.length ? `<div class="mustfix">${D.blocking.map((d) => `<div class="mf"><span class="mono">${d.id}</span>${sev(d.sev)}<div style="min-width:0"><div class="t">${esc(d.title)} <span class="rt ${rtCls(d.status)}">${esc(d.status ?? 'Open')}</span></div><div class="a"><span class="trk">${esc(d.track)}</span> · ${esc(d.fix)}</div></div></div>`).join('')}</div>` : '<p>Nothing is blocking.</p>'}
+  </section>`));
+
+  const brow = S.boundary.run2 ?? {};
+  app.append($(`<section id="scale"><div class="sec-head"><div class="eyebrow">Run 2 against run 1 · same data, same machine</div><h2>50,000-person scale</h2>
+      <p>${n(S.total)} employees, 13 groups that each model a different real situation (24x7 nights, part-timers, multi-skill, leave, rotations, other time zone, a 13-week plan, over- and under-staffing). Schedule week from ${esc(S.weekFrom)}. The forecasts and people from the first run were reused; only the code changed.</p></div>
+    <div class="tbl"><table class="cmp"><thead><tr><th>Measure</th><th>Run 1 · 31 Oct</th><th>Run 2 · 1 Nov</th></tr></thead><tbody>
+      <tr><td><b>All builds started together</b></td><td>${S.parallel.run1.built} of ${S.parallel.run1.of} built</td><td>${S.parallel.built} of ${S.parallel.queued?.queued ?? '—'} built</td></tr>
+      <tr><td><b>Builds running at once</b> <span class="sub">The limit is 2</span></td><td>up to 10</td><td>${n(P2.maxRunning)}</td></tr>
+      <tr><td><b>Gateway while building</b> <span class="sub">Health check every 3 s</span></td><td>no answer for most of 42 min</td><td>${P2.samples ? `p50 ${ms(P2.healthP50)}, p95 ${ms(P2.healthP95)}, worst ${ms(P2.worstHealthMs)} · ${P2.failures} failed of ${P2.samples} over ${P2.minutes} min` : '—'}</td></tr>
+      <tr><td><b>Schedules built</b> <span class="sub">Any way: together, then one at a time</span></td><td>${S.built.run1} of 13</td><td>${S.built.run2} of 13</td></tr>
+      <tr><td><b>Engine crashes</b></td><td>${n(S.engine.run1Crashes)}</td><td>${n(S.engine.run2Crashes)}</td></tr>
+      <tr><td><b>Over-limit request</b> <span class="sub">Every 15-minute start and length for 3,000 people</span></td><td>ran 8.5 min, then the connection dropped</td><td>${esc(D.boundaryLine ?? '') || esc(brow['direct build'] ? `${brow['direct build'].status} after ${ms(brow['direct build'].ms)}` : '—')}</td></tr>
+      <tr><td><b>Independent rule check</b></td><td>250,495 shifts, 0 rule breaks</td><td>${n(S.shiftsChecked)} shifts in ${S.validated} groups, ${n(S.ruleBreaks)} rule breaks</td></tr>
+    </tbody></table></div>
+    ${S.caps.length ? `<h3>Organisations above 2,000 people</h3><div class="tbl"><table class="cmp"><thead><tr><th>Check</th><th>Run 1</th><th>Run 2</th></tr></thead><tbody>${S.caps.map((c) => `<tr><td><b>${esc(c.check)}</b></td><td>${esc(c.run1)}</td><td>${esc(c.run2)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+  </section>`));
+
+  app.append($(`<section id="groups"><div class="sec-head"><div class="eyebrow">13 scenario groups</div><h2>Per group</h2><p>"Covered" is the share of required staff-hours the schedule meets. "Rule breaks" are counted by an independent checker that re-reads every shift against each person's own rules.</p></div>
+    <div class="tbl"><table><thead><tr><th>Group</th><th class="n">People</th><th>Run 1</th><th>Run 2 · all at once</th><th>Run 2 · result</th><th class="n">Covered</th><th class="n">Shifts</th><th class="n">Rule breaks</th></tr></thead><tbody>
+    ${S.groups.map((g) => `<tr><td style="min-width:200px"><b>${g.key} · ${esc(g.name)}</b><span class="sub">${esc(g.what)}</span></td><td class="n">${n(g.size)}</td>
+      <td>${g.run1.status === 'DONE' ? `<span class="ok">Built</span><span class="sub">${g.run1.coverage}% · ${esc(g.run1.how)}</span>` : `<span class="bad">Failed</span><span class="sub">${esc(g.run1.how)}</span>`}</td>
+      <td>${g.run2.parallel ? `<span class="${g.run2.parallel.status === 'DONE' ? 'ok' : 'bad'}">${g.run2.parallel.status === 'DONE' ? 'Built' : esc(g.run2.parallel.status)}</span><span class="sub">${sec(g.run2.parallel.wallSec)}${g.run2.parallel.error ? ' · ' + esc(String(g.run2.parallel.error).slice(0, 140)) : ''}</span>` : '—'}</td>
+      <td>${g.run2.status === 'DONE' ? `<span class="ok">Built</span><span class="sub">${esc(g.run2.via)} · ${esc(g.run2.backend ?? '')}${g.run2.parts ? ` · ${g.run2.parts.length} parts` : ''}</span>` : `<span class="bad">${esc(g.run2.status)}</span><span class="sub">${esc(String(g.run2.error ?? '').slice(0, 160))}</span>`}</td>
+      <td class="n">${g.run2.coverage == null ? '—' : g.run2.coverage + '%'}</td><td class="n">${n(g.run2.shifts)}</td><td class="n">${g.validate?.error ? 'not checked' : n(g.validate?.total)}</td></tr>`).join('')}
+    </tbody></table></div></section>`));
+
+  const a1 = Object.fromEntries(S.api.run1.map((r) => [r.name, r])), u1 = Object.fromEntries(S.ui.run1.map((r) => [r.name, r]));
+  const pr = S.portal.run2;
+  app.append($(`<section id="load"><div class="sec-head"><div class="eyebrow">With 50,000 people in the database</div><h2>Screens and API at 50k</h2><p>Measured after the builds finished, on Vite dev servers.</p></div>
+    <div class="two">
+      <div class="tbl"><table><thead><tr><th>API read</th><th class="n">Run 1</th><th class="n">Run 2</th><th class="n">Size</th><th class="n">Rows</th></tr></thead><tbody>
+        ${S.api.run2.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${ms(a1[r.name]?.ms)}</td><td class="n">${r.status === 200 ? '' : `<span class="bad">${r.status}</span> `}${ms(r.ms)}</td><td class="n">${n(r.kb)} kB</td><td class="n">${n(r.rows)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="tbl"><table><thead><tr><th>Admin screen</th><th class="n">Run 1</th><th class="n">Run 2</th><th class="n">Memory</th><th>Problems</th></tr></thead><tbody>
+        ${S.ui.run2.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${ms(u1[r.name]?.ms)}</td><td class="n">${ms(r.ms)}</td><td class="n">${r.heapMb} MB</td><td>${r.crashed ? '<span class="bad">crashed</span>' : r.errors.length ? esc(r.errors.join('; ').slice(0, 120)) : 'none'}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>
+    ${pr ? `<p class="note">Employee portal for one of the 50,000 (an S01 agent): home in ${ms(pr.uiHomeMs)} (${pr.uiHomeOk ? 'ok' : 'failed'}); ${pr.portalApi.map((p) => `<code>${esc(p.p)}</code> ${p.status} ${ms(p.ms)}`).join(', ')}; ${pr.shiftsThisPeriod} shifts visible this period.</p>` : ''}
+  </section>`));
+
+  app.append($(`<section id="gate"><div class="sec-head"><div class="eyebrow">Admin app, portal and API · re-test</div><h2>Release gate</h2><p>${esc(D.tracks[0].line)}</p></div>
+    <div class="figs">
+      <div class="fig"><span class="eyebrow">Functional</span><b class="num">${C.functionalPass}/${C.functionalChecks}</b><small>API checks across modules</small></div>
+      <div class="fig"><span class="eyebrow">UI journeys</span><b class="num">${C.uiPass}/${C.uiChecks}</b><small>admin + portal in Chrome</small></div>
+      <div class="fig"><span class="eyebrow">Security</span><b class="num">${C.securityPass}/${C.securityTests}</b><small>attack tests passed</small></div>
+      <div class="fig"><span class="eyebrow">Access checks</span><b class="num">${n(C.rbacChecks)}</b><small>role × route · 0 leaks</small></div>
+      <div class="fig"><span class="eyebrow">Screens</span><b class="num">${C.adminScreens + C.portalSections}</b><small>crawled with a11y scan</small></div>
+    </div>
+    <div class="two">
+      <div class="tbl"><table><thead><tr><th>Module</th><th class="n">Screens</th><th class="n">Crashes</th><th class="n">Avg load</th></tr></thead><tbody>
+        ${G.modules.map((m) => `<tr><td><b>${esc(m.name)}</b></td><td class="n">${m.screens}</td><td class="n">${m.crashes}</td><td class="n">${ms(m.avgLoadMs)}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="tbl"><table><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>
+        ${G.staticChecks.map((s) => `<tr><td>${esc(s.name)}</td><td><span class="${s.ok ? 'ok' : 'bad'}">${s.ok ? 'Pass' : 'Fail'}</span> <span class="note">${esc(s.detail)}</span></td></tr>`).join('')}
+        ${G.security.filter((s) => !s.pass).map((s) => `<tr><td class="mono">${s.id}</td><td><span class="bad">Fail</span> <span class="note">${esc(s.title)}</span></td></tr>`).join('')}
+      </tbody></table></div>
+    </div>
+  </section>`));
+
+  const tracks = ['Release gate', '50k scale'];
+  app.append($(`<section id="defects"><div class="sec-head"><div class="eyebrow">${D.defects.length} across both tracks</div><h2>All defects</h2><p>Open a defect for steps, expected and actual results, the re-test note and the fix. The same list is in <code>qa/reports/production-readiness/defects.csv</code>.</p></div>
+    <div class="filters" role="group" aria-label="Filter defects">
+      <button class="chip" aria-pressed="true" data-f="all" id="f-all">All</button>
+      <button class="chip" aria-pressed="false" data-f="open" id="f-open">Not fixed</button>
+      ${tracks.map((t, i) => `<button class="chip" aria-pressed="false" data-f="t:${t}" id="f-t${i}">${t}</button>`).join('')}
+      ${sevs.map((s) => `<button class="chip" aria-pressed="false" data-f="s:${s}" id="f-${s}">${s}</button>`).join('')}
+    </div>
+    <div class="defects" id="dlist">${D.defects.map((d) => `<details class="d ${d.sev}" data-sev="${d.sev}" data-track="${esc(d.track)}" data-open="${isOpen(d)}"><summary><span class="mono">${d.id}</span>${sev(d.sev)}<span style="min-width:0"><b>${esc(d.title)}</b> ${rt(d)}</span><span class="area">${esc(d.track)}</span></summary>
+      <dl class="dl">${d.retest ? `<dt>Re-test</dt><dd>${esc(d.retest.note)}</dd>` : ''}<dt>Area</dt><dd>${esc(d.area)}</dd><dt>Steps</dt><dd>${esc(d.steps)}</dd><dt>Expected</dt><dd>${esc(d.expected)}</dd><dt>Actual</dt><dd>${esc(d.actual)}</dd><dt>Evidence</dt><dd>${esc(d.evidence)}</dd><dt>Fix</dt><dd>${esc(d.fix)}</dd></dl></details>`).join('')}</div>
+  </section>`));
+
+  app.append($(`<section id="strengths"><div class="sec-head"><div class="eyebrow">Confirmed by test</div><h2>What works well</h2></div><ul class="list">${D.strengths.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></section>`));
+  app.append($(`<section id="method"><div class="sec-head"><div class="eyebrow">How this was tested</div><h2>Method and limits</h2></div><ul class="list">${(D.method ?? []).map((s) => `<li>${esc(s)}</li>`).join('')}</ul></section>`));
+
+  const chips = [...document.querySelectorAll('.chip')];
+  chips.forEach((c) => c.addEventListener('click', () => {
+    chips.forEach((x) => x.setAttribute('aria-pressed', String(x === c)));
+    const f = c.dataset.f;
+    document.querySelectorAll('#dlist details').forEach((d) => {
+      d.hidden = !(f === 'all' || (f === 'open' && d.dataset.open === 'true') || (f.startsWith('t:') && d.dataset.track === f.slice(2)) || (f.startsWith('s:') && d.dataset.sev === f.slice(2)));
+    });
+  }));
+})();
+</script>

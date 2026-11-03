@@ -17,7 +17,11 @@ import { audit } from '../audit.ts';
 import { HttpError, bad, conflict, notFound, parse } from '../http.ts';
 import { dropCache, publish } from '../infra.ts';
 import { learnFromNewData } from './forecast/learning.ts';
-import { TEMPLATE_CSV, normalise, parseCsv, type DateFormat, type QueueRef } from './csv.ts';
+import { maxGapMin } from './integrations/schedule.ts';
+import { presetById } from './integrations/presets.ts';
+import { pullSupport } from './integrations/pullRules.ts';
+import { feedState, isOpenAt, nextStep, sourceKind, openMinutesBetween, type FeedState, type Window } from './feedHealth.ts';
+import { TEMPLATE_CSV, detectFormat, normalise, parseCsv, type DateFormat, type QueueRef } from './csv.ts';
 
 export const ingestion = Router();
 
@@ -57,7 +61,7 @@ export async function stageImport(p: Principal, req: import('express').Request |
 
   const job = await withTenant(p.tenantId, async (tx) => {
     await tx.exec("SET LOCAL statement_timeout = '240s'");   // a stuck query fails with an error instead of leaving the screen loading forever
-    const queues = await tx.q<QueueRef>('SELECT id, name, code, aht_default FROM queues WHERE tenant_id = :t');
+    const queues = await tx.q<QueueRef>('SELECT id, name, code, aht_default, aliases FROM queues WHERE tenant_id = :t');
     const norm = normalise(matrix, { queue: b.queueId, intervalMin: b.intervalMinutes, dateFormat: b.dateFormat as DateFormat, queues });
     const j = await tx.one<any>(
       `INSERT INTO import_jobs (tenant_id, data_type, file_name, file_size_kb, status, total_records, options, created_by)
@@ -111,6 +115,16 @@ export async function stageImport(p: Principal, req: import('express').Request |
 ingestion.post('/imports', requires('data:import'), async (req, res) => {
   const p = me(req), b = parse(Upload, req.body);
   res.status(201).json(await stageImport(p, req, b));
+});
+
+/** Reads the start of a file and says what its settings probably are, so the upload screen can pre-fill them. Writes nothing. */
+const Detect = z.object({ fileName: z.string().min(1).max(200), sample: z.string().min(1).max(1024 * 1024) });
+ingestion.post('/imports/detect', requires('data:import'), async (req, res) => {
+  const p = me(req), b = parse(Detect, req.body);
+  const matrix = parseCsv(b.sample);
+  if (matrix.length < 2) throw bad('The file has a header but no data rows');
+  const queues = await withTenant(p.tenantId, (tx) => tx.q<QueueRef>('SELECT id, name, code, aht_default, aliases FROM queues WHERE tenant_id = :t'));
+  res.json(detectFormat(matrix, b.fileName, queues));
 });
 
 /** Flags suspicious rows (kept importable) and records one issue per finding. */
@@ -228,7 +242,7 @@ ingestion.post('/imports/:id/commit', requires('data:import'), async (req, res) 
     await audit(tx, p, req, { action: 'IMPORT', entityType: 'IMPORT_JOB', entityId: id, entityName: j.fileName, reason: 'Committed to live history', after: { created: c.created, updated: c.updated, skipped: c.skipped, status } });
     return tx.one<any>('SELECT * FROM import_jobs WHERE tenant_id = :t AND id = $1', [id]);
   });
-  await dropCache(p.tenantId, 'holdout:*');
+  await dropCache(p.tenantId, 'holdout:*'); await dropCache(p.tenantId, 'aht:*');
   publish(p.tenantId, ['data', 'imported'], { jobId: id, by: p.name });
   learnFromNewData(p.tenantId);
   res.json(jobDto(out));
@@ -256,7 +270,7 @@ ingestion.post('/imports/:id/rollback', requires('data:rollback'), async (req, r
     await audit(tx, p, req, { action: 'ROLLBACK', entityType: 'IMPORT_JOB', entityId: id, entityName: j.fileName, reason, diffSummary: `${removed} intervals removed, ${restored} restored` });
     return tx.one<any>('SELECT * FROM import_jobs WHERE tenant_id = :t AND id = $1', [id]);
   });
-  await dropCache(p.tenantId, 'holdout:*');
+  await dropCache(p.tenantId, 'holdout:*'); await dropCache(p.tenantId, 'aht:*');
   res.json(jobDto(out));
 });
 
@@ -264,19 +278,20 @@ ingestion.post('/imports/:id/rollback', requires('data:rollback'), async (req, r
 
 ingestion.get('/coverage', requires('data:read'), async (req, res) => {
   res.json(await withTenant(me(req).tenantId, (tx) => tx.q(
-    `SELECT q.id AS queue_id, q.name, q.channel, min(h.day)::text AS first_day, max(h.day)::text AS last_day, count(DISTINCT h.day)::int AS days, count(h.*)::int AS intervals,
-            greatest(0, count(DISTINCT h.day) * 96 - count(h.*))::int AS missing_intervals,
+    // from the daily rollup (one row per queue per day, kept exact by triggers on interval_history), not from every interval row
+    `SELECT q.id AS queue_id, q.name, q.channel, min(h.day)::text AS first_day, max(h.day)::text AS last_day, count(h.day)::int AS days, coalesce(sum(h.intervals), 0)::int AS intervals,
+            greatest(0, count(h.day) * 96 - coalesce(sum(h.intervals), 0))::int AS missing_intervals,
             coalesce(sum(h.volume) FILTER (WHERE h.day = current_date), 0)::int AS volume_today
-     FROM queues q LEFT JOIN interval_history h ON h.queue_id = q.id WHERE q.tenant_id = :t GROUP BY q.id ORDER BY q.name`)));
+     FROM queues q LEFT JOIN interval_daily h ON h.queue_id = q.id WHERE q.tenant_id = :t GROUP BY q.id ORDER BY q.name`)));
 });
 
 ingestion.get('/quality', requires('data:read'), async (req, res) => {
   const out = await withTenant(me(req).tenantId, async (tx) => {
     const live: any[] = [];
     const cov = await tx.q<any>(
-      `SELECT q.id, q.name, max(h.day)::text AS last_day, (current_date - max(h.day))::int AS stale_days, count(DISTINCT h.day)::int AS days,
-              greatest(0, count(DISTINCT h.day) * 96 - count(h.*))::int AS missing
-       FROM queues q LEFT JOIN interval_history h ON h.queue_id = q.id WHERE q.tenant_id = :t GROUP BY q.id, q.name`);
+      `SELECT q.id, q.name, max(h.day)::text AS last_day, (current_date - max(h.day))::int AS stale_days, count(h.day)::int AS days,
+              greatest(0, count(h.day) * 96 - coalesce(sum(h.intervals), 0))::int AS missing
+       FROM queues q LEFT JOIN interval_daily h ON h.queue_id = q.id WHERE q.tenant_id = :t GROUP BY q.id, q.name`);
     for (const c of cov) {
       if (c.days === 0) live.push({ id: `nohist-${c.id}`, severity: 'WARNING', category: 'FORECAST', entityId: c.id, entityName: c.name, issue: 'No interval history', impactDescription: 'A forecast cannot be created for this queue.', suggestedRemediation: 'Import history or connect the live feed.', createdAt: new Date().toISOString() });
       else {
@@ -284,6 +299,8 @@ ingestion.get('/quality', requires('data:read'), async (req, res) => {
         if (c.missing > 0) live.push({ id: `gaps-${c.id}`, severity: 'INFO', category: 'FORECAST', entityId: c.id, entityName: c.name, issue: `${c.missing.toLocaleString()} intervals missing inside the history`, impactDescription: 'Gaps are filled with the same-weekday baseline.', suggestedRemediation: 'Re-export the missing intervals.', createdAt: new Date().toISOString() });
       }
     }
+    const clock = await feedClock(tx);
+    if (clock.lastAcceptedAt && clock.directSilentOpenMin > clock.lateAfterMin) live.push({ id: 'feed-late', severity: 'WARNING', category: 'FEED', entityId: 'direct-feed', entityName: 'Direct feed', issue: `No data for ${Math.round(clock.directSilentOpenMin)} minutes while the queues were open`, impactDescription: 'Live coverage and the accuracy checks are working from older numbers.', suggestedRemediation: 'Check that the phone system is still sending. See Data Management › Data Feeds.', createdAt: new Date().toISOString() });
     const stored = await tx.q<any>(`SELECT id, severity, category, entity_id, entity_name, issue, impact AS impact_description, remediation AS suggested_remediation, created_at FROM data_quality_issues WHERE tenant_id = :t ORDER BY created_at DESC LIMIT 100`);
     return [...live, ...stored];
   });
@@ -305,7 +322,11 @@ const LiveRow = z.object({
 });
 export const LiveRows = z.object({ rows: z.array(LiveRow).min(1).max(5000) });
 
-export async function ingestLive(tenantId: string, input: z.infer<typeof LiveRows>['rows']): Promise<{ accepted: number; errors: { index: number; message: string }[] }> {
+export type FeedSource = 'API' | 'NATS';
+
+/** `record: false` is for connectors, which keep their own run history instead of counting as the direct feed.
+ * `dryRun` checks the rows exactly as a real message would be checked, but saves nothing and leaves no receipt (the "send a test row" button). */
+export async function ingestLive(tenantId: string, input: z.infer<typeof LiveRows>['rows'], opts: { source?: FeedSource; dryRun?: boolean; record?: boolean } = {}): Promise<{ accepted: number; errors: { index: number; message: string }[] }> {
   return withTenant(tenantId, async (tx) => {
     const queues = await tx.q<QueueRef>('SELECT id, name, code, aht_default FROM queues WHERE tenant_id = :t');
     const errors: { index: number; message: string }[] = [];
@@ -318,7 +339,13 @@ export async function ingestLive(tenantId: string, input: z.infer<typeof LiveRow
       if (slot === undefined || slot < 0 || slot > 95) return errors.push({ index, message: 'Give a slot (0-95) or a time like 09:15' });
       rows.push({ queueId: ref.id, day: r.day, slot, volume: r.volume, aht: Math.round(r.ahtSec ?? ref.ahtDefault), ab: r.abandoned ?? 0 });
     });
-    if (rows.length) {
+    if (!opts.dryRun && opts.record !== false) {
+      await tx.exec(
+        `INSERT INTO feed_receipts (tenant_id, source, rows_received, rows_accepted, rows_rejected, errors) VALUES (:t, $1, $2, $3, $4, $5)`,
+        [opts.source ?? 'API', input.length, rows.length, errors.length, JSON.stringify(errors.slice(0, 50).map((e) => ({ index: e.index, queue: input[e.index]?.queue ?? input[e.index]?.queueId ?? '', message: e.message })))]);
+      await tx.exec(`DELETE FROM feed_receipts WHERE tenant_id = :t AND received_at < now() - interval '30 days'`);
+    }
+    if (rows.length && !opts.dryRun) {
       const tz = await tenantTz(tx);
       await tx.exec(
         `INSERT INTO interval_history (tenant_id, queue_id, day, slot, starts_at, volume, aht_sec, abandoned, source)
@@ -331,9 +358,97 @@ export async function ingestLive(tenantId: string, input: z.infer<typeof LiveRow
   });
 }
 
+/** A message that could not even be read (wrong shape) still leaves a receipt, so it shows up as a rejection instead of vanishing. */
+export async function recordFeedRejection(tenantId: string, source: FeedSource, message: string) {
+  await withTenant(tenantId, (tx) => tx.exec(
+    `INSERT INTO feed_receipts (tenant_id, source, rows_received, rows_accepted, rows_rejected, errors) VALUES (:t, $1, 1, 0, 1, $2)`,
+    [source, JSON.stringify([{ index: 0, queue: '', message }])]));
+}
+
 ingestion.post('/ingest', requires('data:import'), async (req, res) => {
   const p = me(req), b = parse(LiveRows, req.body);
-  const r = await ingestLive(p.tenantId, b.rows);
+  const r = await ingestLive(p.tenantId, b.rows, { source: 'API' });
   if (r.accepted) { await dropCache(p.tenantId, 'holdout:*'); publish(p.tenantId, ['data', 'actuals'], { accepted: r.accepted }); learnFromNewData(p.tenantId); }
   res.json(r);
+});
+
+// ---------------------------------------------------------------- feed health
+
+/** Checks a message the way the live feed would, without saving anything. Lets whoever sets up the phone system confirm their message is right. */
+ingestion.post('/ingest/check', requires('data:import'), async (req, res) => {
+  const p = me(req), b = parse(LiveRows, req.body);
+  res.json(await ingestLive(p.tenantId, b.rows, { dryRun: true }));
+});
+
+const FeedSettings = z.object({ lateAfterMin: z.number().int().min(5).max(1440) });
+ingestion.put('/ingest/settings', requires('data:import'), async (req, res) => {
+  const p = me(req), b = parse(FeedSettings, req.body);
+  await withTenant(p.tenantId, (tx) => tx.exec(
+    `INSERT INTO feed_settings (tenant_id, late_after_min, updated_by) VALUES (:t, $1, $2)
+     ON CONFLICT (tenant_id) DO UPDATE SET late_after_min = $1, updated_by = $2, updated_at = now()`, [b.lateAfterMin, p.name]));
+  res.json({ lateAfterMin: b.lateAfterMin });
+});
+
+/** How long the feed has been silent, counted only while queues were open, plus whether they are open right now. Shared by the status page and Data Quality. */
+async function feedClock(tx: Tx, groupId: string | null = null) {
+  const lateAfterMin = (await tx.one<{ lateAfterMin: number }>('SELECT late_after_min FROM feed_settings WHERE tenant_id = :t'))?.lateAfterMin ?? 30;
+  const tz = await tenantTz(tx);
+  const windows = await tx.q<Window>('SELECT open_slot AS open, close_slot AS close FROM queues WHERE tenant_id = :t AND ($1::uuid IS NULL OR wfm_group_id = $1)', [groupId]);
+  const last = await tx.one<{ at: Date | null }>(`SELECT max(received_at) FILTER (WHERE rows_accepted > 0) AS at FROM feed_receipts WHERE tenant_id = :t`);
+  const now = new Date();
+  return {
+    lateAfterMin, tz, windows, now, lastAcceptedAt: last?.at ?? null, closedNow: !isOpenAt(now, tz, windows),
+    directSilentOpenMin: last?.at ? openMinutesBetween(new Date(last.at), now, tz, windows, lateAfterMin) : 0,
+  };
+}
+
+ingestion.get('/ingest/status', requires('data:read'), async (req, res) => {
+  res.json(await withTenant(me(req).tenantId, async (tx) => {
+    const clock = await feedClock(tx);
+    const { lateAfterMin } = clock;
+    const d = await tx.one<any>(
+      `SELECT count(*)::int AS receipts, max(received_at) AS last_attempt_at, max(received_at) FILTER (WHERE rows_accepted > 0) AS last_received_at,
+              coalesce(sum(rows_received) FILTER (WHERE received_at > now() - interval '24 hours'), 0)::int AS received_24h,
+              coalesce(sum(rows_rejected) FILTER (WHERE received_at > now() - interval '24 hours'), 0)::int AS rejected_24h,
+              coalesce(sum(rows_accepted) FILTER (WHERE received_at > now() - interval '24 hours'), 0)::int AS accepted_24h
+       FROM feed_receipts WHERE tenant_id = :t`);
+    const direct = {
+      state: feedState({ everReceived: d!.receipts > 0, minutesSilent: d!.lastReceivedAt ? clock.directSilentOpenMin : null, lateAfterMin, received24h: d!.received24h, rejected24h: d!.rejected24h, closedNow: clock.closedNow }),
+      lastReceivedAt: d!.lastReceivedAt, lastAttemptAt: d!.lastAttemptAt, accepted24h: d!.accepted24h, rejected24h: d!.rejected24h,
+    };
+    const conns = await tx.q<any>(
+      `SELECT c.id, c.name, c.category, c.method, c.preset, c.status, c.backfill_status, c.config, c.wfm_group_id, c.schedule_min, c.schedule_at, c.schedule_days, c.next_run_at, c.last_received_at, c.last_error,
+              r.started_at AS last_run_at, r.status AS last_run_status, r.message AS last_run_message,
+              (SELECT max(started_at) FROM integration_runs x WHERE x.connector_id = c.id AND x.status <> 'FAILED') AS last_ok_run_at,
+              (SELECT count(*)::int FROM integration_files f WHERE f.connector_id = c.id AND f.status = 'NEEDS_ATTENTION') AS files_need_attention
+       FROM integration_connectors c
+       LEFT JOIN LATERAL (SELECT started_at, status, message FROM integration_runs x WHERE x.connector_id = c.id ORDER BY started_at DESC LIMIT 1) r ON true
+       WHERE c.tenant_id = :t ORDER BY c.name`);
+    const connectors = [];
+    for (const c of conns.filter((x) => presetById(x.preset)?.writesTo === 'interval_history')) {   // this page is about forecast history only: agent state, HR and CRM connectors live in Integration Station
+      const scheduled = c.scheduleMin !== null;
+      let state: FeedState;
+      if (c.status === 'DRAFT') state = 'NOT_SET_UP';
+      else if (c.status === 'PAUSED') state = 'PAUSED';
+      else if (c.status === 'ERROR' || c.lastRunStatus === 'FAILED') state = 'FAILING';
+      else if (scheduled) {
+        // a polled source is judged on its polls: nothing new in a file folder is fine, a missed poll is not
+        const silent = c.lastOkRunAt ? (Date.now() - new Date(c.lastOkRunAt).getTime()) / 60_000 : null;
+        state = feedState({ everReceived: !!c.lastOkRunAt, minutesSilent: silent, lateAfterMin: Math.max(lateAfterMin, 2 * maxGapMin({ everyMin: c.scheduleMin, at: c.scheduleAt ?? null, days: c.scheduleDays ?? null })) });
+      } else {
+        const cc = c.wfmGroupId ? await feedClock(tx, c.wfmGroupId) : clock;
+        const silentOpen = c.lastReceivedAt ? openMinutesBetween(new Date(c.lastReceivedAt), cc.now, cc.tz, cc.windows, lateAfterMin) : null;
+        state = feedState({ everReceived: !!c.lastReceivedAt, minutesSilent: silentOpen, lateAfterMin, closedNow: cc.closedNow });
+      }
+      const kind = sourceKind(c.preset);
+      const canPull = pullSupport(presetById(c.preset), c.config ?? {}).canPull;
+      connectors.push({ id: c.id, name: c.name, kind, status: c.status, backfillStatus: c.backfillStatus,
+        nextStep: nextStep({ kind, status: c.status, backfillStatus: c.backfillStatus, scheduled, canPull, everReceived: !!(c.lastReceivedAt || c.lastRunAt) }), category: c.category, method: c.method, preset: c.preset, lastReceivedAt: c.lastReceivedAt, lastError: c.lastRunStatus === 'FAILED' ? (c.lastRunMessage ?? c.lastError) : c.lastError, state, scheduleMin: c.scheduleMin, scheduleAt: c.scheduleAt ?? null, scheduleDays: c.scheduleDays ?? null, nextRunAt: c.nextRunAt, lastRunAt: c.lastRunAt, lastRunStatus: c.lastRunStatus, filesNeedAttention: c.filesNeedAttention });
+    }
+    const recent = await tx.q<any>(`SELECT received_at, source, rows_received, rows_accepted, rows_rejected FROM feed_receipts WHERE tenant_id = :t ORDER BY received_at DESC LIMIT 10`);
+    const rejects = await tx.q<any>(
+      `SELECT r.received_at, r.source, e->>'queue' AS queue, (e->>'index')::int AS row_index, e->>'message' AS message
+       FROM feed_receipts r CROSS JOIN LATERAL jsonb_array_elements(r.errors) e WHERE r.tenant_id = :t ORDER BY r.received_at DESC, row_index LIMIT 100`);
+    return { lateAfterMin, closedNow: clock.closedNow, timezone: clock.tz, direct, connectors, recent, rejects };
+  }));
 });

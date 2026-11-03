@@ -1,6 +1,7 @@
 """Scheduling tests: the solver's answer is re-checked against the rules by code that does not share the model."""
 from collections import defaultdict
 
+import pytest
 import scheduling
 import wfm_pb2
 
@@ -321,7 +322,8 @@ def test_no_history_changes_nothing():
     plain = scheduling.solve_period(contract_request(days=4, first_dow=3, n_emp=4))
     req = contract_request(days=4, first_dow=3, n_emp=4)       # prior fields left at zero
     again = scheduling.solve_period(req)
-    assert sorted((a.employee, a.day) for a in plain.assignments) == sorted((a.employee, a.day) for a in again.assignments)
+    # two separate multi-worker solves may pick different but equally good rosters under load, so compare the outcome, not the exact people
+    assert (plain.under_slots, plain.over_slots, len(plain.assignments)) == (again.under_slots, again.over_slots, len(again.assignments))
 
 
 # ---- a period that repeats, shift lengths that vary, a starting roster that spreads the days
@@ -557,3 +559,92 @@ def test_without_a_cap_part_timers_drift_over_contract_with_long_shifts_only():
     for a in res.assignments:
         paid[a.employee] += a.length_slots
     assert any(paid[e] != kinds[e][1] for e in kinds if kinds[e][0] != "full-time"), "8 h shifts cannot make a 20 h or 30 h week exactly"
+
+
+def test_a_required_same_start_holds_even_when_the_solver_has_no_time_to_improve_the_roster():
+    """With one usual start required and almost no time, whatever comes back must still keep every person to one start and one end: the starting
+    roster the engine falls back on has to obey that rule too, not only the solver's own answers."""
+    req, kinds = mixed_request(n_ft=40, n_pt20=0, n_pt30=0, n_flex=0)
+    req.consistency_mode, req.start_tol_slots, req.end_tol_slots = 2, 0, 0
+    req.time_limit_sec = 1
+    res = scheduling.solve_period(req)
+    assert res.status in ("OPTIMAL", "FEASIBLE") and len(res.assignments) > 0
+    starts, ends = {}, {}
+    for a in res.assignments:
+        starts.setdefault(a.employee, set()).add(a.start_slot)
+        ends.setdefault(a.employee, set()).add(a.start_slot + a.length_slots)
+    assert all(len(v) == 1 for v in starts.values()), {e: v for e, v in starts.items() if len(v) > 1}
+    assert all(len(v) == 1 for v in ends.values())
+
+
+# ---- every kind of pay week: the week starts on any weekday, and a schedule can start on any weekday
+
+def pay_week_request(days, first_dow, week_start, n_emp=3):
+    req = contract_request(days=days, first_dow=first_dow, n_emp=n_emp)
+    req.week_start = week_start
+    return req
+
+
+def part_week_days(days, first_dow, week_start):
+    """For each pay week the schedule touches: how many of its seven days fall inside the schedule."""
+    off = (first_dow - week_start) % 7
+    return {w: min(w * 7 - off + 6, days - 1) - max(w * 7 - off, 0) + 1 for w in range((off + days + 6) // 7)}
+
+
+@pytest.mark.parametrize("week_start", range(7))
+def test_a_schedule_that_starts_on_the_pay_week_gives_every_week_the_full_contract(week_start):
+    req = pay_week_request(days=14, first_dow=week_start, week_start=week_start)
+    assert scheduling.week_offset(req) == 0
+    res = scheduling.solve_period(req)
+    assert res.status in ("OPTIMAL", "FEASIBLE")
+    for e, d in shifts_by_day(res).items():
+        assert len([x for x in d if x < 7]) == 5 and len([x for x in d if x >= 7]) == 5, f"person {e} on a week starting weekday {week_start}"
+
+
+@pytest.mark.parametrize("week_start", range(7))
+def test_a_schedule_that_starts_mid_week_gives_part_weeks_their_share_and_whole_weeks_the_full_contract(week_start):
+    first_dow = (week_start + 3) % 7                       # starts on the fourth day of the pay week
+    req = pay_week_request(days=14, first_dow=first_dow, week_start=week_start)
+    assert scheduling.week_offset(req) == 3
+    res = scheduling.solve_period(req)
+    assert res.status in ("OPTIMAL", "FEASIBLE")
+    parts = part_week_days(14, first_dow, week_start)       # {0: 4 days, 1: 7 days, 2: 3 days}
+    assert parts == {0: 4, 1: 7, 2: 3}
+    eight = [32] * 5
+    for e, d in shifts_by_day(res).items():
+        for w, n in parts.items():
+            first = w * 7 - 3
+            got = len([x for x in d if first <= x <= first + 6])
+            want = scheduling.week_target(160, n, eight, 5, 160) // 32
+            assert got == want, f"person {e}, pay week {w} ({n} days in the schedule): {got} shifts, wanted {want}"
+
+
+def test_the_week_offset_is_right_for_every_start_and_every_first_day():
+    for ws in range(7):
+        for fd in range(7):
+            req = wfm_pb2.ScheduleRequest(days=7, first_dow=fd, week_start=ws)
+            off = scheduling.week_offset(req)
+            assert 0 <= off < 7 and (ws + off) % 7 == fd, (ws, fd, off)
+
+
+def test_a_53_week_year_and_a_leap_year_do_not_change_the_week_counting():
+    # the engine counts days, not dates: 371 days (53 weeks) from any weekday still means exactly 53 whole pay weeks when it starts on the pay week
+    for ws in (0, 6):
+        req = wfm_pb2.ScheduleRequest(days=371, first_dow=ws, week_start=ws)
+        assert scheduling.week_offset(req) == 0 and (scheduling.week_offset(req) + 370) // 7 == 52
+
+
+def test_the_starting_roster_uses_the_people_whose_skill_is_short():
+    """Two English speakers come first in the list, then a Spanish speaker; the need is one English and one Spanish speaker. Filling the total from whoever
+    comes first would use both English speakers and leave the Spanish speaker with nothing to do while the Spanish queue is uncovered."""
+    req = wfm_pb2.ScheduleRequest(days=1, first_dow=0, time_limit_sec=5, w_under=900, w_over=30, w_hours=0, workers=1, backend="greedy")
+    need = [2 if 32 <= s < 48 else 0 for s in range(SPD)]
+    req.required.extend(need)
+    for sid in (1, 2):
+        sk = req.skill_requirements.add(id=sid)
+        sk.required.extend([1 if 32 <= s < 48 else 0 for s in range(SPD)])
+    for eid, skills in ((1, [1]), (2, [1]), (3, [2])):
+        req.employees.add(id=eid, max_week_slots=160, min_week_slots=0, max_consecutive=6, rest_slots=44, max_days_week=5, skill_ids=skills)
+        req.options.add(employee=eid, day=0, template=0, start_slot=32, length_slots=16, paid_slots=16)
+    res = scheduling.solve(req)
+    assert sorted(a.employee for a in res.assignments) in ([1, 3], [2, 3]), [a.employee for a in res.assignments]

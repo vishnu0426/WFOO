@@ -3,25 +3,62 @@
  * CSV import always starts as a dry run that shows what would be added or changed before anything is saved.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ColDef, GridApi, ICellRendererParams } from 'ag-grid-community';
+import { PersonPicker } from '../common/PersonPicker';
+import { LoginHandover, type Cred } from './LoginHandover';
+import { ColDef, GridApi, ICellRendererParams, IDatasource, IGetRowsParams } from 'ag-grid-community';
 import { Download, Plus, Upload } from 'lucide-react';
 import { downloadXlsx, xlsxToCsv } from '../../services/excel';
-import { api, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, RotationPattern, ShiftConsistency, ShiftTemplate, Skill, slotHHMM, Team, TYPE_LABEL } from '../../services/api';
+import { api, apiPage, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, RotationPattern, ShiftConsistency, ShiftTemplate, Skill, slotHHMM, Team, TYPE_LABEL } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
+import { MultiSelect } from '../common/MultiSelect';
 import { BulkEdit } from './BulkEdit';
 
 type Form = {
   employeeNumber: string; firstName: string; lastName: string; email: string; extension: string; teamId: string; primaryGroupId: string; eligibleGroupIds: string[]; status: EmployeeStatus; employmentType: EmploymentType;
   weeklyContractHours: number; maxWeeklyHours: number; workDaysPerWeek: number; minRestHours: number; maxConsecutiveDays: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; skills: Record<string, number>;
   preferredTemplateId: string; shiftConsistency: ShiftConsistency; fixedStart: string;
+  isSupervisor: boolean; isManager: boolean;
+  reportsTo: string; reason: string; lastDay: string; leaveReason: string;
 };
-const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '', shiftConsistency: 'DEFAULT', fixedStart: '' });
+const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '', shiftConsistency: 'DEFAULT', fixedStart: '', isSupervisor: false, isManager: false, reportsTo: '', reason: '', lastDay: '', leaveReason: '' });
 const fromEmployee = (e: Employee): Form => ({ employeeNumber: e.employeeNumber, firstName: e.firstName, lastName: e.lastName, email: e.email ?? '', extension: e.extension ?? '', teamId: e.teamId ?? '', primaryGroupId: e.primaryGroupId ?? '', eligibleGroupIds: e.eligibleGroupIds, status: e.status, employmentType: e.employmentType,
   weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours, maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
-  skills: Object.fromEntries(e.skills.map((s) => [s.skillId, s.proficiency])), preferredTemplateId: e.preferredTemplateId ?? '', shiftConsistency: e.shiftConsistency ?? 'DEFAULT', fixedStart: e.fixedStartSlot == null ? '' : slotHHMM(e.fixedStartSlot) });
+  skills: Object.fromEntries(e.skills.map((s) => [s.skillId, s.proficiency])), preferredTemplateId: e.preferredTemplateId ?? '', shiftConsistency: e.shiftConsistency ?? 'DEFAULT', fixedStart: e.fixedStartSlot == null ? '' : slotHHMM(e.fixedStartSlot), isSupervisor: !!e.isSupervisor, isManager: !!e.isManager, reportsTo: e.reportsTo ?? '', reason: '', lastDay: e.terminationDate ?? '', leaveReason: e.terminationReason ?? '' });
+
+/** What was changed that needs a reason: everything but contact details, the notes for a leaver and the reason itself. */
+const NO_REASON = new Set(['email', 'extension', 'reason', 'lastDay', 'leaveReason', 'skills']);
+const changedFields = (a: Form | undefined, b: Form) => (a ? (Object.keys(b) as (keyof Form)[]).filter((k) => !NO_REASON.has(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k])) : []);
+
+const leavingState = (e: { form: Form; orig?: Form }) => ({ marking: e.form.status === 'TERMINATED' && e.orig?.status !== 'TERMINATED', planned: !!e.orig?.lastDay && e.orig.status !== 'TERMINATED' });
+
+/** What recording a departure would touch, shown while someone is being marked as leaving. */
+const LeavingBlock: React.FC<{ id: string; form: Form; wasLeaving: boolean; set: <K extends keyof Form>(k: K, v: Form[K]) => void }> = ({ id, form, wasLeaving, set }) => {
+  const impact = useApi<{ futureShifts: number; schedules: number; pendingTimeOff: number; openSwaps: number; reports: number; logins: number; leads: string[]; lastDayHasPassed: boolean }>(form.lastDay ? `/workforce/employees/${id}/departure-impact?lastDay=${form.lastDay}` : null, [form.lastDay]);
+  const i = impact.data;
+  return (
+    <div className="md:col-span-2 xl:col-span-4 rounded-lg border border-[#B7791F]/40 bg-[#FFF5DD]/50 p-3 space-y-2">
+      <div className="text-[13px] font-semibold">{wasLeaving ? 'Leaving' : 'Marking as leaving'}</div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+        <Field label="Last working day" hint="Shifts after this day are removed"><Input type="date" value={form.lastDay} onChange={(e) => set('lastDay', e.target.value)} /></Field>
+        <div className="md:col-span-2"><Field label="Why are they leaving?" hint="Kept in the history"><Input value={form.leaveReason} maxLength={300} onChange={(e) => set('leaveReason', e.target.value)} placeholder="For example: resigned, contract ended" /></Field></div>
+      </div>
+      {form.lastDay && i && (
+        <ul className="text-[12px] list-disc pl-5 space-y-0.5">
+          <li>{i.futureShifts} shift{i.futureShifts === 1 ? '' : 's'} after that day {i.futureShifts === 1 ? 'is' : 'are'} removed{i.schedules ? `, from ${i.schedules} schedule${i.schedules === 1 ? '' : 's'}` : ''}.</li>
+          {i.lastDayHasPassed ? <>
+            <li>They are marked Terminated now, and {i.logins} login{i.logins === 1 ? ' is' : 's are'} switched off.</li>
+            <li>{i.pendingTimeOff + i.openSwaps} waiting request{i.pendingTimeOff + i.openSwaps === 1 ? '' : 's'} (time off and shift changes) {i.pendingTimeOff + i.openSwaps === 1 ? 'is' : 'are'} cancelled.</li>
+            <li>{i.reports} {i.reports === 1 ? 'person who reports' : 'people who report'} to them {i.reports === 1 ? 'is' : 'are'} moved to their manager.</li>
+          </> : <li>They stay active, with their login, until that day. Then they are marked Terminated automatically.</li>}
+          {i.leads.length > 0 && <li className="text-[#BC3F3F] font-semibold">They still lead {i.leads.join(', ')}. Choose someone else first, or this cannot be saved.</li>}
+        </ul>
+      )}
+    </div>
+  );
+};
 /** "08:30" to the 15-minute slot of the day the scheduler uses; null when empty. */
 const slotOfTime = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim()); return m ? Math.min(95, Math.floor((+m[1] * 60 + +m[2]) / 15)) : null; };
 const CONSISTENCY_LABEL: Record<ShiftConsistency, string> = { DEFAULT: 'Follow the company setting', REQUIRE: 'Same start and end every day (required)', PREFER: 'Same start and end every day (preferred)', OFF: 'May vary day to day' };
@@ -58,41 +95,74 @@ export const EmployeesPanel: React.FC = () => {
   const { groups, can, setNotice } = useForecast();
   const [tick, setTick] = useState(0);
   const [q, setQ] = useState('');
-  const [groupId, setGroupId] = useState('');
-  const [status, setStatus] = useState('');
-  const query = `?${new URLSearchParams({ ...(q ? { q } : {}), ...(groupId ? { groupId } : {}), ...(status ? { status } : {}) })}`;
-  const emps = useApi<Employee[]>(`/workforce/employees${query}`, [tick]);
-  const teams = useApi<Team[]>('/workforce/teams');
+  // each filter takes several values; nothing ticked means everyone
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [teamIds, setTeamIds] = useState<string[]>([]);
+  const [statuses, setStatuses] = useState<string[]>([]);
+  const [skillIds, setSkillIds] = useState<string[]>([]);
+  const filterKey = [q, groupIds, teamIds, statuses, skillIds].map(String).join('|');
+  const anyFilter = !!(q || groupIds.length || teamIds.length || statuses.length || skillIds.length);
+  // The grid asks the gateway for one block of people at a time as it scrolls (sorting and the count are done there), so a company of 50,000 never loads at once.
+  const [total, setTotal] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const noOne = total === 0 && !anyFilter;
+  const datasource = useMemo<IDatasource>(() => ({
+    getRows: (p: IGetRowsParams) => {
+      const s = p.sortModel[0];
+      const qs = new URLSearchParams({ limit: String(p.endRow - p.startRow), offset: String(p.startRow), ...(q ? { q } : {}), ...(groupIds.length ? { groupIds: groupIds.join(',') } : {}), ...(teamIds.length ? { teamIds: teamIds.join(',') } : {}), ...(statuses.length ? { statuses: statuses.join(',') } : {}), ...(skillIds.length ? { skillIds: skillIds.join(',') } : {}), ...(s ? { sort: s.colId, dir: s.sort } : {}) });
+      apiPage<Employee>(`/workforce/employees?${qs}`)
+        .then((r) => { setLoadError(''); setTotal(r.total); p.successCallback(r.rows, r.total); })
+        .catch((e: any) => { setLoadError(e.message); p.failCallback(); });
+    },
+  // `tick` makes a new datasource after a save or import, which reloads the grid
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [filterKey, tick]);
+  const teams = useApi<Team[]>('/workforce/teams?fields=pick');
   const skills = useApi<Skill[]>('/workforce/skills');
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
-  const [edit, setEdit] = useState<{ id: string | null; form: Form } | null>(null);
+  const [edit, setEdit] = useState<{ id: string | null; form: Form; orig?: Form } | null>(null);
   const [selected, setSelected] = useState<Employee | null>(null);
   // several people ticked in the grid, to edit together
   const [picked, setPicked] = useState<Employee[]>([]);
+  // "Select all matching": everyone the filters match, however many, not only the rows ticked in the grid
+  const [allPicked, setAllPicked] = useState<{ id: string; name: string }[] | null>(null);
+  const people = allPicked ?? picked;
   const [bulk, setBulk] = useState(false);
   const gridApi = useRef<GridApi<Employee> | null>(null);
-  const clearPicked = () => { gridApi.current?.deselectAll(); setPicked([]); setBulk(false); };
+  useEffect(() => { gridApi.current?.deselectAll(); setPicked([]); setAllPicked(null); setBulk(false); }, [filterKey]);   // never bulk-edit people a filter has hidden
+  const clearPicked = () => { gridApi.current?.deselectAll(); setPicked([]); setAllPicked(null); setBulk(false); };
+  const selectAllMatching = async () => {
+    setError('');
+    try {
+      const f = new URLSearchParams({ ...(q ? { q } : {}), ...(groupIds.length ? { groupIds: groupIds.join(',') } : {}), ...(teamIds.length ? { teamIds: teamIds.join(',') } : {}), ...(statuses.length ? { statuses: statuses.join(',') } : {}), ...(skillIds.length ? { skillIds: skillIds.join(',') } : {}) });
+      // every id (small, whatever the size of the company) plus the first few names to show what was chosen
+      const [all, first] = await Promise.all([api<{ id: string }[]>(`/workforce/employees?${new URLSearchParams({ fields: 'ids', ...Object.fromEntries(f) })}`), apiPage<Employee>(`/workforce/employees?${new URLSearchParams({ limit: '4', ...Object.fromEntries(f) })}`)]);
+      const head = first.rows.map((e) => ({ id: e.id, name: e.name }));
+      const seen = new Set(head.map((h) => h.id));
+      setAllPicked([...head, ...all.filter((x) => !seen.has(x.id)).map((x) => ({ id: x.id, name: '' }))]);
+    } catch (e: any) { setError(e.message); }
+  };
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [stopOnError, setStopOnError] = useState(false);
   const canWrite = can('workforce:write');
   const logins = useApi<{ userId: string; employeeId: string; username: string; role: string; status: string }[]>(can('users:read') ? '/self-service/logins' : null, [tick]);
-  const [cred, setCred] = useState<{ username: string; password: string } | null>(null);
+  const [cred, setCred] = useState<Cred | null>(null);
   const createLogin = async (employeeId: string) => {
     setError(''); setCred(null);
-    try { setCred(await api<{ username: string; password: string }>('/self-service/logins', { method: 'POST', body: { employeeId } })); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
+    try { setCred(await api<Cred>('/self-service/logins', { method: 'POST', body: { employeeId } })); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
   };
   const resetPassword = async (userId: string) => {
     if (!confirm('Replace their current password with a new temporary one? They will need the new one to sign in next time.')) return;
     setError(''); setCred(null);
-    try { setCred(await api<{ username: string; password: string }>(`/self-service/logins/${userId}/reset-password`, { method: 'PUT', body: {} })); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
+    try { setCred(await api<Cred>(`/self-service/logins/${userId}/reset-password`, { method: 'PUT', body: {} })); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
   };
   /** A fast fix for an "Unassigned" pill in the preview, without leaving it to open the full edit form. */
   const assignField = async (key: 'teamId' | 'primaryGroupId', value: string) => {
     if (!selected) return;
     setError('');
     try {
-      const body: any = { [key]: value };
+      const body: any = { [key]: value, reason: 'Assigned from the employee preview' };
       if (key === 'primaryGroupId') body.eligibleGroupIds = [...new Set([...selected.eligibleGroupIds, value])];
       const saved = await api<Employee>(`/workforce/employees/${selected.id}`, { method: 'PUT', body });
       setSelected(saved); setTick((t) => t + 1);
@@ -118,7 +188,7 @@ export const EmployeesPanel: React.FC = () => {
           <div className="w-7 h-7 rounded-full bg-[#EFEFEA] text-[#525252] text-[11px] font-semibold flex items-center justify-center shrink-0">{initialsOf(p.data.name)}</div>
           <div className="min-w-0 leading-tight">
             <div className="font-semibold truncate">{p.data.name}</div>
-            <div className="text-[11px] text-[#737373] truncate">{p.data.employeeNumber}{p.data.extension ? ` · Ext ${p.data.extension}` : ''}</div>
+            <div className="text-[11px] text-[#6B6B6B] truncate">{p.data.employeeNumber}{p.data.extension ? ` · Ext ${p.data.extension}` : ''}</div>
           </div>
         </div>
       ),
@@ -127,9 +197,9 @@ export const EmployeesPanel: React.FC = () => {
     { headerName: 'WFM group', field: 'primaryGroupName', minWidth: 150, cellRenderer: (p: ICellRendererParams<Employee>) => (p.value ? p.value : <Pill tone="warn">Unassigned</Pill>) },
     { headerName: 'Type', field: 'employmentType', valueFormatter: (p) => TYPE_LABEL[p.value as EmploymentType], width: 110 },
     { headerName: 'Contract', field: 'weeklyContractHours', type: 'rightAligned', width: 100, valueFormatter: (p) => `${p.value}h` },
-    { headerName: 'Skills', valueGetter: (p) => p.data!.skills.map((s) => `${s.name} ${s.proficiency}`).join(', '), minWidth: 160, flex: 1 },
-    { headerName: 'Shift times', width: 150, valueGetter: (p) => { const e = p.data!; return [e.fixedStartSlot != null ? `starts ${slotHHMM(e.fixedStartSlot)}` : '', e.shiftConsistency === 'REQUIRE' ? 'steady' : e.shiftConsistency === 'PREFER' ? 'steady if possible' : e.shiftConsistency === 'OFF' ? 'varies' : ''].filter(Boolean).join(', ') || 'company setting'; }, cellStyle: { color: '#525252' } },
-    { headerName: 'Status', field: 'status', valueFormatter: (p) => EMP_STATUS_LABEL[p.value as EmployeeStatus], width: 120, cellStyle: (p) => (p.value === 'ACTIVE' ? { color: '#2F7D5A', fontWeight: 600 } : { color: '#737373' }) },
+    { headerName: 'Skills', sortable: false, valueGetter: (p) => p.data?.skills.map((s) => `${s.name} ${s.proficiency}`).join(', ') ?? '', minWidth: 160, flex: 1 },
+    { headerName: 'Shift times', sortable: false, width: 150, valueGetter: (p) => { const e = p.data; if (!e) return ''; return [e.fixedStartSlot != null ? `starts ${slotHHMM(e.fixedStartSlot)}` : '', e.shiftConsistency === 'REQUIRE' ? 'steady' : e.shiftConsistency === 'PREFER' ? 'steady if possible' : e.shiftConsistency === 'OFF' ? 'varies' : ''].filter(Boolean).join(', ') || 'company setting'; }, cellStyle: { color: '#525252' } },
+    { headerName: 'Status', field: 'status', valueFormatter: (p) => EMP_STATUS_LABEL[p.value as EmployeeStatus], width: 120, cellStyle: (p) => (p.value === 'ACTIVE' ? { color: '#2A7553', fontWeight: 600 } : { color: '#737373' }) },
   ], []);
 
   const save = async () => {
@@ -141,11 +211,14 @@ export const EmployeesPanel: React.FC = () => {
         employeeNumber: f.employeeNumber.trim(), firstName: f.firstName.trim(), lastName: f.lastName.trim(), email: f.email.trim() || null, extension: f.extension.trim() || null, teamId: f.teamId || null, primaryGroupId: f.primaryGroupId || null,
         eligibleGroupIds: [...new Set([...f.eligibleGroupIds, ...(f.primaryGroupId ? [f.primaryGroupId] : [])])], status: f.status, employmentType: f.employmentType, weeklyContractHours: f.weeklyContractHours,
         maxWeeklyHours: f.maxWeeklyHours, workDaysPerWeek: f.workDaysPerWeek, minRestHours: f.minRestHours, maxConsecutiveDays: f.maxConsecutiveDays, allowWeekend: f.allowWeekend, allowOvernight: f.allowOvernight, nightShiftConsent: f.nightShiftConsent,
-        preferredTemplateId: f.preferredTemplateId || null, shiftConsistency: f.shiftConsistency, fixedStartSlot: slotOfTime(f.fixedStart),
+        preferredTemplateId: f.preferredTemplateId || null, shiftConsistency: f.shiftConsistency, fixedStartSlot: slotOfTime(f.fixedStart), isSupervisor: f.isSupervisor, isManager: f.isManager, reportsTo: f.reportsTo || null,
+        ...(edit.id ? { reason: f.reason.trim() || undefined } : {}),
+        ...(f.status === 'TERMINATED' && edit.orig?.status !== 'TERMINATED' ? { terminationDate: f.lastDay || null, terminationReason: f.leaveReason.trim() || null } : {}),
       };
       const saved = edit.id ? await api<Employee>(`/workforce/employees/${edit.id}`, { method: 'PUT', body }) : await api<Employee>('/workforce/employees', { method: 'POST', body });
       await api(`/workforce/employees/${saved.id}/skills`, { method: 'PUT', body: { skills: Object.entries(f.skills).map(([skillId, proficiency]) => ({ skillId, proficiency })) } });
-      setNotice({ kind: 'ok', text: `${saved.name} saved.` });
+      const d = (saved as any).departure as { futureShifts: number; schedules: number; logins: number; pendingTimeOff: number; openSwaps: number; scheduled: boolean; lastDay: string } | undefined;
+      setNotice({ kind: 'ok', text: d ? (d.scheduled ? `${saved.name} is leaving after ${d.lastDay}: ${d.futureShifts} later shift${d.futureShifts === 1 ? '' : 's'} removed. They are marked Terminated automatically on that day.` : `${saved.name} has left: ${d.futureShifts} later shift${d.futureShifts === 1 ? '' : 's'} removed from ${d.schedules} schedule${d.schedules === 1 ? '' : 's'}, ${d.logins} login${d.logins === 1 ? '' : 's'} switched off, ${d.pendingTimeOff + d.openSwaps} waiting request${d.pendingTimeOff + d.openSwaps === 1 ? '' : 's'} cancelled.`) : `${saved.name} saved.` });
       setEdit(null); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -186,7 +259,7 @@ export const EmployeesPanel: React.FC = () => {
           <input ref={file} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) check(f); }} />
           <Btn onClick={() => downloadXlsx('employees-template.xlsx', 'Employees', EMPLOYEE_TEMPLATE, EMPLOYEE_NOTES).catch((e) => setError(e.message))}><Download className="w-3.5 h-3.5" />Excel template</Btn>
           <Btn onClick={() => file.current?.click()}><Upload className="w-3.5 h-3.5" />Import CSV</Btn>
-          <Btn variant="primary" onClick={() => { setError(''); setEdit({ id: null, form: blank(groupId || groups[0]?.id || '') }); }}><Plus className="w-3.5 h-3.5" />Add employee</Btn>
+          <Btn variant="primary" onClick={() => { setError(''); setEdit({ id: null, form: blank(groupIds[0] || groups[0]?.id || '') }); }}><Plus className="w-3.5 h-3.5" />Add employee</Btn>
         </>}
       >
         {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
@@ -197,10 +270,10 @@ export const EmployeesPanel: React.FC = () => {
             <div className="flex flex-wrap items-center gap-4 text-[13px]">
               <b>Check before importing</b>
               {preview.mapped && <>
-                <span className="text-[#2F7D5A] font-semibold">{preview.diff.new} new</span>
-                <span className="text-[#B7791F] font-semibold">{preview.diff.updated} changed</span>
-                <span className="text-[#737373]">{preview.diff.unchanged} unchanged</span>
-                <span className={preview.errorCount ? 'text-[#C84A4A] font-semibold' : 'text-[#737373]'}>{preview.errorCount} problems</span>
+                <span className="text-[#2A7553] font-semibold">{preview.diff.new} new</span>
+                <span className="text-[#8F6200] font-semibold">{preview.diff.updated} changed</span>
+                <span className="text-[#6B6B6B]">{preview.diff.unchanged} unchanged</span>
+                <span className={preview.errorCount ? 'text-[#BC3F3F] font-semibold' : 'text-[#6B6B6B]'}>{preview.errorCount} problems</span>
               </>}
               <button className="ml-auto text-[12px] underline text-[#525252]" onClick={() => setShowMapper((s) => !s)}>{showMapper ? 'Hide column mapping' : 'Edit column mapping'}</button>
             </div>
@@ -208,15 +281,15 @@ export const EmployeesPanel: React.FC = () => {
 
             {showMapper && (
               <div className="border border-[#E5E5E0] rounded-lg bg-white p-3 space-y-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373]">From this file, drag a column onto what it is</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">From this file, drag a column onto what it is</div>
                 <div className="flex flex-wrap gap-2">
                   {preview.headers.map((h, i) => {
                     const used = MAP_TARGETS.some((t) => colMap[t.k] === i);
                     return (
                       <div key={i} draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', String(i))}
-                        className={`cursor-grab active:cursor-grabbing rounded-md border px-2.5 py-1.5 text-[12px] ${used ? 'border-[#D6D6D0] bg-[#FAFAF8] text-[#A3A3A3]' : 'border-[#E5E5E0] bg-white'}`}>
+                        className={`cursor-grab active:cursor-grabbing rounded-md border px-2.5 py-1.5 text-[12px] ${used ? 'border-[#D6D6D0] bg-[#FAFAF8] text-[#6B6B6B]' : 'border-[#E5E5E0] bg-white'}`}>
                         <div className="font-semibold">{h || `(column ${i + 1})`}</div>
-                        {preview.headerSample[i] && <div className="text-[11px] text-[#737373] truncate max-w-40">{preview.headerSample[i]}</div>}
+                        {preview.headerSample[i] && <div className="text-[11px] text-[#6B6B6B] truncate max-w-40">{preview.headerSample[i]}</div>}
                       </div>
                     );
                   })}
@@ -230,7 +303,7 @@ export const EmployeesPanel: React.FC = () => {
                         className={`rounded-md border-2 border-dashed px-2.5 py-1.5 text-[12px] min-h-13 ${filled ? 'border-[#2F7D5A] bg-[#EAF5EF]' : t.required ? 'border-[#D6A3A3] bg-[#FDF3F3]' : 'border-[#E5E5E0] bg-[#FAFAF8]'}`}>
                         <div className="flex items-center justify-between gap-1">
                           <span className="font-semibold">{t.label}{t.required ? ' *' : ''}</span>
-                          {filled && <button className="text-[#737373] hover:text-[#C84A4A]" onClick={() => mapTo(t.k, -1)}>×</button>}
+                          {filled && <button className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => mapTo(t.k, -1)}>×</button>}
                         </div>
                         <div className="text-[#525252] truncate">{filled ? (preview.headers[idx] || `column ${idx + 1}`) : 'drop a column here'}</div>
                       </div>
@@ -243,10 +316,10 @@ export const EmployeesPanel: React.FC = () => {
             {preview.mapped && preview.errors.length > 0 && (
               <>
                 <Banner kind="warn">{stopOnError ? `${preview.errorCount} rows have a problem, so nothing will be imported until they are fixed.` : `These ${preview.errorCount} rows won't be imported. Everything else will be. Fix these in the file and import again afterwards to add them too.`}</Banner>
-                <Table head={['Line', 'Problem']}>{preview.errors.slice(0, 15).map((e, i) => <tr key={i}><td className="p-2.5 font-mono text-[#737373]">{e.line}</td><td className="p-2.5">{e.message}</td></tr>)}</Table>
+                <Table head={['Line', 'Problem']}>{preview.errors.slice(0, 15).map((e, i) => <tr key={i}><td className="p-2.5 font-mono text-[#6B6B6B]">{e.line}</td><td className="p-2.5">{e.message}</td></tr>)}</Table>
               </>
             )}
-            <p className="text-[11px] text-[#737373]">Columns: employee_number, first_name, last_name (required); team, wfm_group, employment_type, weekly_hours, max_weekly_hours, days_per_week, status, hire_date, skills (e.g. Billing:4; Chat:3). Teams, groups and skills must already exist.</p>
+            <p className="text-[11px] text-[#6B6B6B]">Columns: employee_number, first_name, last_name (required); team, wfm_group, employment_type, weekly_hours, max_weekly_hours, days_per_week, status, hire_date, skills (e.g. Billing:4; Chat:3). Teams, groups and skills must already exist.</p>
             <label className="flex items-center gap-2 text-[12px] text-[#525252]"><input type="checkbox" checked={stopOnError} onChange={(e) => setStopOnError(e.target.checked)} />Stop if any row has a problem (import nothing until the file is clean)</label>
             <div className="flex gap-2">
               <Btn variant="primary" disabled={busy || !preview.mapped || preview.diff.new + preview.diff.updated === 0 || (stopOnError && preview.errorCount > 0)} onClick={commit}>
@@ -265,10 +338,10 @@ export const EmployeesPanel: React.FC = () => {
               return (
                 <div className="flex flex-wrap items-center gap-3 text-[12px] p-2.5 rounded bg-[#FAFAF8] border border-[#E5E5E0]">
                   <span className="font-semibold">App login</span>
-                  {l ? <span className="text-[#525252]">Signs in as <b>{l.username}</b> ({l.status.toLowerCase()}) &mdash; works for the mobile app and the employee web portal</span> : <span className="text-[#737373]">None yet. They cannot use the mobile app or the employee web portal until you create one.</span>}
+                  {l ? <span className="text-[#525252]">Signs in as <b>{l.username}</b> ({l.status.toLowerCase()}) &mdash; works for the mobile app and the employee web portal</span> : <span className="text-[#6B6B6B]">None yet. They cannot use the mobile app or the employee web portal until you create one.</span>}
                   {!l && <Btn onClick={() => createLogin(edit.id!)}>Create app login</Btn>}
                   {l && <Btn onClick={() => resetPassword(l.userId)}>Reset password</Btn>}
-                  {cred && <span className="text-[#2F7D5A]">{cred.username === l?.username ? 'New password' : 'Created'}. Username <b>{cred.username}</b>, temporary password <b className="font-mono">{cred.password}</b>. Shown once. They are asked to choose their own the first time they sign in. Works for both the mobile app and the employee web portal.</span>}
+                  {cred && <div className="basis-full"><LoginHandover cred={cred} reset={cred.username === l?.username} /></div>}
                 </div>
               );
             })()}
@@ -279,6 +352,27 @@ export const EmployeesPanel: React.FC = () => {
               <Field label="Last name"><Input value={edit.form.lastName} onChange={(e) => set('lastName', e.target.value)} /></Field>
               <Field label="Email"><Input type="email" value={edit.form.email} onChange={(e) => set('email', e.target.value)} /></Field>
               <Field label="Agent extension" hint="Phone/softphone extension on the ACD"><Input value={edit.form.extension} onChange={(e) => set('extension', e.target.value)} /></Field>
+              <div className="md:col-span-2 xl:col-span-4 rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] p-3 space-y-1.5">
+                <div className="flex flex-wrap gap-x-6 gap-y-1.5">
+                  <label className="flex items-center gap-2 text-[13px] font-semibold"><input type="checkbox" checked={edit.form.isSupervisor} onChange={(e) => set('isSupervisor', e.target.checked)} />Is a supervisor</label>
+                  <label className="flex items-center gap-2 text-[13px] font-semibold"><input type="checkbox" checked={edit.form.isManager} onChange={(e) => set('isManager', e.target.checked)} />Is a manager</label>
+                </div>
+                <p className="text-[12px] text-[#6B6B6B]">This only says they can be chosen as a team's supervisor or a WFM group's manager. It gives them no access: that comes from the role on their login.</p>
+                {edit.id && (() => {
+                  const leads = (teams.data ?? []).filter((t) => t.managerId === edit.id), deputies = (teams.data ?? []).filter((t) => t.deputyId === edit.id);
+                  const runs = groups.filter((g) => g.managerId === edit.id);
+                  return leads.length + deputies.length + runs.length > 0 ? (
+                    <p className="text-[12px] text-[#171717]">
+                      {leads.length > 0 && <>Supervises <b>{leads.map((t) => t.name).join(', ')}</b>. </>}
+                      {deputies.length > 0 && <>Deputy for <b>{deputies.map((t) => t.name).join(', ')}</b>. </>}
+                      {runs.length > 0 && <>Manages <b>{runs.map((g) => g.name).join(', ')}</b>. </>}
+                      <span className="text-[#6B6B6B]">Choose someone else for these before unticking.</span>
+                    </p>
+                  ) : null;
+                })()}
+                {edit.id && (edit.form.isSupervisor || edit.form.isManager) && !(logins.data ?? []).some((l) => l.employeeId === edit.id) && <p className="text-[12px] text-[#B7791F]">They have no app login yet, so they cannot sign in to act as a {edit.form.isManager ? 'manager' : 'supervisor'}. Create one below, and give it the role they need on the Users and Roles screen.</p>}
+              </div>
+              <Field label="Reports to" hint="Their manager or supervisor, for the org chart"><PersonPicker ariaLabel="Reports to" value={edit.form.reportsTo} statuses="ONBOARDING,ACTIVE,LEAVE" placeholder="Choose who they report to" onChange={(id) => set('reportsTo', id)} /></Field>
               <Field label="Team"><Select value={edit.form.teamId} onChange={(e) => set('teamId', e.target.value)}><option value="">No team</option>{teams.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
               <Field label="Main WFM group" hint="They are always eligible for it"><Select value={edit.form.primaryGroupId} onChange={(e) => set('primaryGroupId', e.target.value)}><option value="">None</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select></Field>
               <Field label="Status"><Select value={edit.form.status} onChange={(e) => set('status', e.target.value as EmployeeStatus)}>{Object.entries(EMP_STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
@@ -301,12 +395,12 @@ export const EmployeesPanel: React.FC = () => {
                 {groups.filter((g) => g.id !== edit.form.primaryGroupId).map((g) => (
                   <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={edit.form.eligibleGroupIds.includes(g.id)} onChange={(e) => set('eligibleGroupIds', e.target.checked ? [...edit.form.eligibleGroupIds, g.id] : edit.form.eligibleGroupIds.filter((x) => x !== g.id))} />{g.name}</label>
                 ))}
-                {groups.length <= 1 && <span className="text-[12px] text-[#737373]">No other groups.</span>}
+                {groups.length <= 1 && <span className="text-[12px] text-[#6B6B6B]">No other groups.</span>}
               </div>
             </div>
             <div>
               <div className="text-[12px] font-semibold mb-1.5">Skills and level (1 beginner, 5 expert)</div>
-              {skills.data?.length === 0 ? <span className="text-[12px] text-[#737373]">No skills defined yet. Add some under Skills.</span> : (
+              {skills.data?.length === 0 ? <span className="text-[12px] text-[#6B6B6B]">No skills defined yet. Add some under Skills.</span> : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
                   {skills.data?.filter((s) => s.status === 'ACTIVE').map((s) => (
                     <div key={s.id} className="flex items-center gap-2 text-[13px]">
@@ -318,38 +412,55 @@ export const EmployeesPanel: React.FC = () => {
                 </div>
               )}
             </div>
+            {edit.id && (leavingState(edit).marking || leavingState(edit).planned) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"><LeavingBlock id={edit.id} form={edit.form} wasLeaving={leavingState(edit).planned} set={set} /></div>
+            )}
+            {edit.id && (() => {
+              const changed = changedFields(edit.orig, edit.form).length > 0 || (leavingState(edit).planned && !edit.form.lastDay);
+              return changed ? (
+                <div className="max-w-xl"><Field label="Why are you changing this?" hint="Kept in the history with your name. Needed for anything except contact details."><Input value={edit.form.reason} maxLength={300} onChange={(e) => set('reason', e.target.value)} placeholder="For example: moved to part time at their request" /></Field></div>
+              ) : null;
+            })()}
             <div className="flex items-center gap-2">
-              <Btn variant="primary" disabled={busy || !edit.form.employeeNumber.trim() || !edit.form.firstName.trim() || !edit.form.lastName.trim()} onClick={save}>Save employee</Btn>
+              <Btn variant="primary" disabled={busy || !edit.form.employeeNumber.trim() || !edit.form.firstName.trim() || !edit.form.lastName.trim()
+                || (!!edit.id && (changedFields(edit.orig, edit.form).length > 0) && edit.form.reason.trim().length < 3)
+                || (!!edit.id && leavingState(edit).marking && (!edit.form.lastDay || edit.form.leaveReason.trim().length < 3))} onClick={save}>Save employee</Btn>
               <Btn onClick={() => setEdit(null)}>Cancel</Btn>
-              {edit.id && <button className="ml-auto text-[12px] text-[#C84A4A] underline" onClick={remove}>Delete</button>}
+              {edit.id && <button className="ml-auto text-[12px] text-[#BC3F3F] underline" onClick={remove}>Delete</button>}
             </div>
           </div>
         )}
 
         <div className="flex flex-wrap gap-2">
           <Input placeholder="Search name or number" value={q} onChange={(e) => setQ(e.target.value)} className="!w-56" />
-          <Select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="!w-auto" aria-label="WFM group"><option value="">All groups</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
-          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto" aria-label="Status"><option value="">Any status</option>{Object.entries(EMP_STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select>
-          <Pill>{emps.data?.length ?? 0} people</Pill>
-          {picked.length > 0 && (
-            <div className="flex items-center gap-2 ml-auto text-[13px]">
-              <span className="font-semibold">{picked.length} selected</span>
+          <MultiSelect ariaLabel="WFM groups" allLabel="All groups" noun={['group', 'groups']} value={groupIds} onChange={setGroupIds} options={groups.map((g) => ({ value: g.id, label: g.name }))} />
+          <MultiSelect ariaLabel="Teams" allLabel="All teams" noun={['team', 'teams']} value={teamIds} onChange={setTeamIds} options={(teams.data ?? []).map((t) => ({ value: t.id, label: t.name }))} />
+          <MultiSelect ariaLabel="Status" allLabel="Any status" noun={['status', 'statuses']} value={statuses} onChange={setStatuses} options={Object.entries(EMP_STATUS_LABEL).map(([k, l]) => ({ value: k, label: l }))} />
+          <span title="People who have every skill you tick"><MultiSelect ariaLabel="Skills (has all)" allLabel="Any skills" noun={['skill', 'skills']} value={skillIds} onChange={setSkillIds} options={(skills.data ?? []).filter((k) => k.status === 'ACTIVE').map((k) => ({ value: k.id, label: k.name }))} /></span>
+          {anyFilter && <button className="text-[12px] underline text-[#525252] self-center" onClick={() => { setQ(''); setGroupIds([]); setTeamIds([]); setStatuses([]); setSkillIds([]); }}>Clear filters</button>}
+          <Pill>{(total ?? 0).toLocaleString('en-US')} {total === 1 ? 'person' : 'people'}</Pill>
+          {people.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 ml-auto text-[13px]">
+              <span className="font-semibold">{allPicked ? `All ${allPicked.length.toLocaleString('en-US')} matching selected` : `${picked.length} selected`}</span>
+              {!allPicked && (total ?? 0) > picked.length && <button className="underline text-[#525252]" onClick={selectAllMatching}>Select all {(total ?? 0).toLocaleString('en-US')} matching</button>}
               {canWrite && <Btn variant="primary" onClick={() => { setError(''); setSelected(null); setBulk(true); }}>Edit selected</Btn>}
               <Btn onClick={clearPicked}>Clear selection</Btn>
             </div>
           )}
         </div>
-        {bulk && picked.length > 0 && (
-          <BulkEdit people={picked} groups={groups} teams={teams.data ?? []} skills={skills.data ?? []} templates={(tpls.data ?? []).filter((t) => t.status === 'ACTIVE')}
+        {bulk && people.length > 0 && (
+          <BulkEdit people={people} groups={groups} teams={teams.data ?? []} skills={skills.data ?? []} templates={(tpls.data ?? []).filter((t) => t.status === 'ACTIVE')}
             onCancel={() => setBulk(false)} onDone={(text) => { setNotice({ kind: 'ok', text }); clearPicked(); setTick((t) => t + 1); }} />
         )}
-        {emps.data?.length === 0 && !q && !groupId && !status
-          ? <Empty title="No employees yet">{canWrite ? 'Add people one by one, or import a CSV.' : 'Ask an administrator to add people.'} Create WFM groups and teams first so each person can be assigned.</Empty>
-          : <Grid<Employee> rowData={emps.data ?? []} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true, suppressHeaderMenuButton: true }} loading={emps.loading} height={460}
-              rowSelection={canWrite ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, enableClickSelection: false } : undefined}
+        {loadError && <Banner kind="err" onClose={() => setLoadError('')}>{loadError}</Banner>}
+        {noOne && <Empty title="No employees yet">{canWrite ? 'Add people one by one, or import a CSV.' : 'Ask an administrator to add people.'} Create WFM groups and teams first so each person can be assigned.</Empty>}
+        <div className={noOne ? 'hidden' : ''}>{/* stays mounted when empty, so it fetches again after the first person is added */}
+          <Grid<Employee> rowModelType="infinite" datasource={datasource} cacheBlockSize={100} maxBlocksInCache={20} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true, suppressHeaderMenuButton: true }} height={460}
+              rowSelection={canWrite ? { mode: 'multiRow', checkboxes: true, headerCheckbox: false, enableClickSelection: false } : undefined}
               getRowId={(p) => p.data.id} onGridReady={(e) => { gridApi.current = e.api; }}
               onSelectionChanged={(e) => setPicked(e.api.getSelectedRows())}
-              onRowClicked={(e) => { if (e.data && !(e.event?.target as HTMLElement | null)?.closest?.('.ag-selection-checkbox, .ag-header-select-all')) setSelected(e.data); }} rowStyle={{ cursor: 'pointer' }} />}
+              onRowClicked={(e) => { if (e.data && !(e.event?.target as HTMLElement | null)?.closest?.('.ag-selection-checkbox, .ag-header-select-all')) setSelected(e.data); }} rowStyle={{ cursor: 'pointer' }} />
+        </div>
       </Card>
 
       {selected && (
@@ -358,15 +469,15 @@ export const EmployeesPanel: React.FC = () => {
             <div className="w-10 h-10 rounded-full bg-[#EFEFEA] text-[#525252] flex items-center justify-center text-[13px] font-semibold shrink-0">{initialsOf(selected.name)}</div>
             <div className="flex-1 min-w-0">
               <div className="font-semibold truncate">{selected.name}</div>
-              <div className="text-[11px] text-[#737373] font-mono truncate">{selected.employeeNumber}{selected.extension ? ` · Ext ${selected.extension}` : ''}</div>
+              <div className="text-[11px] text-[#6B6B6B] font-mono truncate">{selected.employeeNumber}{selected.extension ? ` · Ext ${selected.extension}` : ''}</div>
             </div>
-            {canWrite && <Btn onClick={() => { setError(''); setEdit({ id: selected.id, form: fromEmployee(selected) }); setSelected(null); }}>Edit</Btn>}
-            <button aria-label="Close" className="text-[#737373] hover:text-[#171717] text-[18px] leading-none px-2" onClick={() => setSelected(null)}>×</button>
+            {canWrite && <Btn onClick={() => { setError(''); setEdit({ id: selected.id, form: fromEmployee(selected), orig: fromEmployee(selected) }); setSelected(null); }}>Edit</Btn>}
+            <button aria-label="Close" className="text-[#6B6B6B] hover:text-[#171717] text-[18px] leading-none px-2" onClick={() => setSelected(null)}>×</button>
           </div>
           <div className="p-4 space-y-5 text-[13px]">
             <div className="flex items-center gap-2">
               <Pill tone={selected.status === 'ACTIVE' ? 'good' : selected.status === 'TERMINATED' || selected.status === 'SUSPENDED' ? 'bad' : 'neutral'}>{EMP_STATUS_LABEL[selected.status]}</Pill>
-              <span className="text-[#737373]">{TYPE_LABEL[selected.employmentType]}</span>
+              <span className="text-[#6B6B6B]">{TYPE_LABEL[selected.employmentType]}</span>
             </div>
 
             <PreviewSection title="Assignment">
@@ -388,7 +499,7 @@ export const EmployeesPanel: React.FC = () => {
             </PreviewSection>
 
             <PreviewSection title="Skills">
-              {selected.skills.length === 0 ? <div className="text-[#A3A3A3]">None</div> : (
+              {selected.skills.length === 0 ? <div className="text-[#6B6B6B]">None</div> : (
                 <div className="flex flex-wrap gap-1.5">{selected.skills.map((s) => <span key={s.skillId} className="text-[11px] bg-[#F5F5F2] text-[#525252] rounded px-1.5 py-0.5">{s.name} · L{s.proficiency}</span>)}</div>
               )}
             </PreviewSection>
@@ -403,12 +514,12 @@ export const EmployeesPanel: React.FC = () => {
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[#A3A3A3]">None yet</span>
+                    <span className="text-[#6B6B6B]">None yet</span>
                     {canWrite && <button className="text-[11px] underline text-[#171717] shrink-0" onClick={() => createLogin(selected.id)}>Create app login</button>}
                   </div>
                 );
               })()}
-              {cred && <div className="mt-2 text-[#2F7D5A] text-[12px]">Username <b>{cred.username}</b>, temporary password <b className="font-mono">{cred.password}</b>. Shown once.</div>}
+              {cred && <div className="mt-2"><LoginHandover cred={cred} /></div>}
             </PreviewSection>
           </div>
         </aside>
@@ -418,12 +529,12 @@ export const EmployeesPanel: React.FC = () => {
 };
 
 const PreviewRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="flex items-center justify-between gap-3"><span className="text-[#737373]">{label}</span><span className="font-medium text-[#171717] text-right">{value}</span></div>
+  <div className="flex items-center justify-between gap-3"><span className="text-[#6B6B6B]">{label}</span><span className="font-medium text-[#171717] text-right">{value}</span></div>
 );
 
 const PreviewSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="space-y-2">
-    <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373]">{title}</div>
+    <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">{title}</div>
     {children}
   </div>
 );
@@ -434,7 +545,7 @@ const AssignRow: React.FC<{ label: string; value: string | null; options: { id: 
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[#737373]">{label}</span>
+        <span className="text-[#6B6B6B]">{label}</span>
         {value ? <span className="font-medium text-[#171717] text-right">{value}</span> : (
           <div className="flex items-center gap-2">
             <Pill tone="warn">Unassigned</Pill>
@@ -509,7 +620,7 @@ const AssignmentsSection: React.FC<{ employeeId: string; groupId: string | null 
       </div>
       <div className="p-3 rounded bg-[#FAFAF8] border border-[#E5E5E0] space-y-2">
         <div className="font-semibold text-[12px]">Labour-law rule pack override</div>
-        <p className="text-[11px] text-[#737373]">Otherwise follows their team's, then WFM group's, then the organisation's pack.</p>
+        <p className="text-[11px] text-[#6B6B6B]">Otherwise follows their team's, then WFM group's, then the organisation's pack.</p>
         <Select value={packId} disabled={!canConfig} onChange={(e) => setPackId(e.target.value)} aria-label="Rule pack override">
           <option value="">No override (inherit)</option>{packs.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </Select>

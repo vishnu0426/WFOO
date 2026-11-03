@@ -1,11 +1,12 @@
 /** Balances, a request form with a live "would this be auto-approved" preview, and your request history. */
+import { approvalLine } from '../approval';
 import React, { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import { TimeOff as TimeOffDto, TimeOffBalance, TimeOffCheck, TimeOffRules, TimeOffType } from '../types';
 import { useLoad, Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Textarea, todayIso } from '../ui';
 
 const TYPES: TimeOffType[] = ['VACATION', 'SICK', 'PERSONAL', 'HOLIDAY', 'TRAINING', 'LEAVE', 'OTHER'];
-const STATUS_TONE: Record<string, 'good' | 'bad' | 'warn' | 'neutral'> = { APPROVED: 'good', REJECTED: 'bad', CANCELLED: 'neutral', PENDING: 'warn' };
+const STATUS_TONE: Record<string, 'good' | 'bad' | 'warn' | 'neutral'> = { APPROVED: 'good', REJECTED: 'bad', CANCELLED: 'neutral', PENDING: 'warn', REQUESTED: 'warn' };
 
 export const TimeOff: React.FC<{ initialDate?: string; onConsumed?: () => void }> = ({ initialDate, onConsumed }) => {
   const { data, error, loading, reload } = useLoad<{ requests: TimeOffDto[]; balances: TimeOffBalance[]; rules: TimeOffRules; today: string }>('/me/time-off');
@@ -53,8 +54,8 @@ export const TimeOff: React.FC<{ initialDate?: string; onConsumed?: () => void }
         <div className="grid grid-cols-2 gap-2">
           {data.balances.map((b) => (
             <div key={b.type} className="border border-[#E5E5E0] rounded-md p-2.5">
-              <div className="text-[11px] text-[#737373]">{b.type.replace(/_/g, ' ').toLowerCase()}</div>
-              <div className="text-[15px] font-semibold text-[#171717]">{b.remainingDays}<span className="text-[11px] font-normal text-[#737373]"> / {b.entitledDays}d left</span></div>
+              <div className="text-[11px] text-[#6B6B6B]">{b.type.replace(/_/g, ' ').toLowerCase()}</div>
+              <div className="text-[15px] font-semibold text-[#171717]">{b.remainingDays}<span className="text-[11px] font-normal text-[#6B6B6B]"> / {b.entitledDays}d left</span></div>
             </div>
           ))}
         </div>
@@ -68,14 +69,15 @@ export const TimeOff: React.FC<{ initialDate?: string; onConsumed?: () => void }
             <Field label="End"><Input type="date" min={start} value={end} onChange={(e) => setEnd(e.target.value)} /></Field>
           </div>
           <Field label="Reason (optional)"><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-          {check && (
+          {end < start && <Banner kind="err">The end date is before the start date.</Banner>}
+          {end >= start && check && (
             <Banner kind={check.willBeApprovedAutomatically ? 'ok' : 'warn'}>
               {check.days} day{check.days === 1 ? '' : 's'}. {check.willBeApprovedAutomatically ? 'This will be approved automatically.' : `Needs a manager's approval${check.reasonsForReview.length ? `: ${check.reasonsForReview.join('; ')}` : '.'}`}
-              {check.blockers.length > 0 && <div className="mt-1 text-[#C84A4A] font-semibold">{check.blockers.join('; ')}</div>}
+              {check.blockers.length > 0 && <div className="mt-1 text-[#BC3F3F] font-semibold">{check.blockers.join('; ')}</div>}
             </Banner>
           )}
           <div className="flex gap-2">
-            <Btn variant="primary" disabled={busy || !!check?.blockers.length} onClick={submit}>{busy ? 'Submitting…' : 'Submit request'}</Btn>
+            <Btn variant="primary" disabled={busy || end < start || !!check?.blockers.length} onClick={submit}>{busy ? 'Submitting…' : 'Submit request'}</Btn>
             <Btn onClick={() => setForm(false)}>Cancel</Btn>
           </div>
         </Card>
@@ -90,9 +92,10 @@ export const TimeOff: React.FC<{ initialDate?: string; onConsumed?: () => void }
                   <div className="text-[13px] font-semibold text-[#171717]">{r.type.replace(/_/g, ' ').toLowerCase()} · {r.days}d</div>
                   <Pill tone={STATUS_TONE[r.status] ?? 'neutral'}>{r.status.toLowerCase()}</Pill>
                 </div>
-                <div className="text-[12px] text-[#737373]">{r.startDate} – {r.endDate}</div>
-                {r.decisionNote && <div className="text-[12px] text-[#737373] mt-1">{r.decisionNote}</div>}
-                {(r.status === 'PENDING' || r.status === 'APPROVED') && <button onClick={() => cancel(r.id)} className="text-[11px] text-[#C84A4A] underline mt-1">Cancel</button>}
+                <div className="text-[12px] text-[#6B6B6B]">{r.startDate} – {r.endDate}</div>
+                {approvalLine(r) && <div className="text-[12px] text-[#525252] mt-1">{approvalLine(r)}</div>}
+                {r.decisionNote && <div className="text-[12px] text-[#6B6B6B] mt-1">{r.decisionNote}</div>}
+                {(r.status === 'PENDING' || r.status === 'REQUESTED' || r.status === 'APPROVED') && <button onClick={() => cancel(r.id)} className="text-[11px] text-[#BC3F3F] underline mt-1">Cancel</button>}
               </div>
             ))}
           </div>

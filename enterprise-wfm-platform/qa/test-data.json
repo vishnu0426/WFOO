@@ -1,0 +1,5 @@
+{
+  "agentPassword": "Qa-J7uilfNl-740!",
+  "rolePassword": "Qa-xDQBxlxZ-130!",
+  "note": "Generated test-only credentials for QA logins on the local stack (demo.agent*, qa.* users). Never reuse elsewhere."
+}

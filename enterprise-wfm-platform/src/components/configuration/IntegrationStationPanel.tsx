@@ -10,7 +10,8 @@ import { Plus, Trash2 } from "lucide-react";
 import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, IntegrationCatalog, IntegrationField, IntegrationFieldMap, MapTestResult, when } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi } from "../forecasting/hooks";
-import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select } from "../forecasting/ui";
+import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from "../forecasting/ui";
+import { describeSchedule, NO_SCHEDULE, ScheduleEditor, type ScheduleDraft } from "../data/ScheduleEditor";
 
 const CATEGORIES = [
   { id: "ACD", label: "ACD (voice/chat volume, agent state)" }, { id: "CRM", label: "CRM (agent presence)" },
@@ -27,7 +28,7 @@ const freshness = (lastReceivedAt: string | null) => {
   return { label: `Stale, ${Math.round(mins / 1440)}d ago`, tone: "bad" as const };
 };
 
-export const IntegrationStationPanel: React.FC = () => {
+export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: () => void; feeds?: boolean }> = ({ focusId, onChange, feeds }) => {
   const { groups, can } = useForecast();
   const canWrite = can("config:write");
   const [tick, setTick] = useState(0);
@@ -37,8 +38,9 @@ export const IntegrationStationPanel: React.FC = () => {
   const [selected, setSelected] = useState<string>("");
   const [justCreated, setJustCreated] = useState<ConnectorCreated | null>(null);
   const [error, setError] = useState("");
+  useEffect(() => { if (focusId) { setSelected(focusId); setCreating(false); } }, [focusId]);   // the Data Feeds table can open a connector here
 
-  const run = async (fn: () => Promise<void>) => { setError(""); try { await fn(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } };
+  const run = async (fn: () => Promise<void>) => { setError(""); try { await fn(); setTick((t) => t + 1); onChange?.(); } catch (e: any) { setError(e.message); } };
 
   return (
     <div className="space-y-6">
@@ -58,7 +60,7 @@ export const IntegrationStationPanel: React.FC = () => {
 
       <Card title="Connectors" sub="Real, vendor-specific integrations -- ACD, CRM, HRMS, a database, an on-prem system or a scheduled file. Historical data lands in Staged Ingestion for review, exactly like a manual CSV upload; live data feeds interval history or RTA state directly."
         actions={canWrite && <Btn variant="primary" onClick={() => { setCreating((c) => !c); setSelected(""); }}><Plus className="w-3.5 h-3.5" />{creating ? "Cancel" : "New connector"}</Btn>}>
-        {creating && catalog.data && <NewConnectorForm catalog={catalog.data} groups={groups} onCreated={(c) => { setCreating(false); setJustCreated(c); setSelected(c.id); setTick((t) => t + 1); }} onError={setError} />}
+        {creating && catalog.data && <NewConnectorForm feeds={feeds} catalog={catalog.data} groups={groups} onCreated={(c) => { setCreating(false); setJustCreated(c); setSelected(c.id); setTick((t) => t + 1); }} onError={setError} />}
 
         {connectors.loading && !connectors.data ? <Busy text="Loading connectors…" /> : !connectors.data?.length ? (
           <Empty title="No connectors yet">Add one for the ACD, CRM or HRMS system you actually use, or a direct database read.</Empty>
@@ -72,8 +74,8 @@ export const IntegrationStationPanel: React.FC = () => {
                     <span className="font-semibold text-[13px]">{c.name}</span>
                     <div className="flex gap-1.5"><Pill tone={statusTone(c.status)}>{c.status}</Pill><Pill tone={f.tone}>{f.label}</Pill></div>
                   </div>
-                  <div className="text-[11px] text-[#737373] mt-1">{c.category} · {c.preset} · {c.method.replace(/_/g, " ").toLowerCase()}</div>
-                  {c.lastError && <div className="text-[11px] text-[#C84A4A] mt-1">{c.lastError}</div>}
+                  <div className="text-[11px] text-[#6B6B6B] mt-1">{c.category} · {c.preset} · {c.method.replace(/_/g, " ").toLowerCase()}</div>
+                  {c.lastError && <div className="text-[11px] text-[#BC3F3F] mt-1">{c.lastError}</div>}
                 </button>
               );
             })}
@@ -82,7 +84,7 @@ export const IntegrationStationPanel: React.FC = () => {
       </Card>
 
       {selected && connectors.data?.find((c) => c.id === selected) && (
-        <ConnectorDetail connector={connectors.data.find((c) => c.id === selected)!} catalog={catalog.data ?? null} canWrite={canWrite} onChanged={() => setTick((t) => t + 1)} onDeleted={() => { setSelected(""); setTick((t) => t + 1); }} onError={setError} run={run} />
+        <ConnectorDetail feeds={feeds} connector={connectors.data.find((c) => c.id === selected)!} catalog={catalog.data ?? null} canWrite={canWrite} onChanged={() => { setTick((t) => t + 1); onChange?.(); }} onDeleted={() => { setSelected(""); setTick((t) => t + 1); }} onError={setError} run={run} />
       )}
     </div>
   );
@@ -90,13 +92,14 @@ export const IntegrationStationPanel: React.FC = () => {
 
 // ---------------------------------------------------------------- create
 
-const FieldInput: React.FC<{ f: IntegrationField; value: string; onChange: (v: string) => void }> = ({ f, value, onChange }) => {
+export const FieldInput: React.FC<{ f: IntegrationField; value: string; onChange: (v: string) => void }> = ({ f, value, onChange }) => {
   if (f.kind === "select") return <Select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Choose…</option>{f.options?.map((o) => <option key={o} value={o}>{o}</option>)}</Select>;
+  if (f.kind === "textarea") return <textarea className="w-full p-2 border border-[#E5E5E0] rounded text-[12px] font-mono h-32" spellCheck={false} placeholder="SELECT queue, day, time, volume, ahtSec FROM ... WHERE day BETWEEN {from} AND {to}" value={value} onChange={(e) => onChange(e.target.value)} />;
   if (f.kind === "file") return <textarea className="w-full p-2 border border-[#E5E5E0] rounded text-[12px] font-mono h-20" placeholder="Paste the file's contents" value={value} onChange={(e) => onChange(e.target.value)} />;
   return <Input type={f.kind === "password" ? "password" : "text"} value={value} onChange={(e) => onChange(e.target.value)} />;
 };
 
-const NewConnectorForm: React.FC<{ catalog: IntegrationCatalog; groups: { id: string; name: string }[]; onCreated: (c: ConnectorCreated) => void; onError: (m: string) => void }> = ({ catalog, groups, onCreated, onError }) => {
+const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog; groups: { id: string; name: string }[]; onCreated: (c: ConnectorCreated) => void; onError: (m: string) => void }> = ({ feeds, catalog, groups, onCreated, onError }) => {
   const [category, setCategory] = useState<string>("ACD");
   const presets = catalog[category] ?? [];
   const [presetId, setPresetId] = useState(presets[0]?.id ?? "");
@@ -107,11 +110,14 @@ const NewConnectorForm: React.FC<{ catalog: IntegrationCatalog; groups: { id: st
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => setConfig({}), [presetId]);
   const [busy, setBusy] = useState(false);
+  const { session } = useForecast();
+  const [schedule, setSchedule] = useState<ScheduleDraft>(NO_SCHEDULE);
+  useEffect(() => setSchedule(NO_SCHEDULE), [presetId]);
 
   const create = async () => {
     setBusy(true);
     try {
-      const c = await api<ConnectorCreated>("/integrations", { method: "POST", body: { category, preset: presetId, name: name || `${preset?.label} connector`, wfmGroupId: groupId || null, config } });
+      const c = await api<ConnectorCreated>("/integrations", { method: "POST", body: { category, preset: presetId, name: name || `${preset?.label} connector`, wfmGroupId: groupId || null, config, ...(feeds && preset?.canPull && (schedule.scheduleAt || schedule.scheduleMin) ? schedule : {}) } });
       onCreated(c);
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
   };
@@ -134,7 +140,14 @@ const NewConnectorForm: React.FC<{ catalog: IntegrationCatalog; groups: { id: st
           ))}
         </div>
       )}
-      {preset && preset.fields.length === 0 && <p className="text-[12px] text-[#737373]">No credentials to enter -- we issue an API key on creation and your own connector script uses it.</p>}
+      {feeds && preset?.canPull && (
+        <div className="space-y-1">
+          <div className="text-[12px] font-semibold">When should we fetch it?</div>
+          <ScheduleEditor value={schedule} onChange={setSchedule} timezone={session.tenant.timezone} />
+          <p className="text-[12px] text-[#6B6B6B]">It starts running once the connector is set to Active.</p>
+        </div>
+      )}
+      {preset && preset.fields.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No credentials to enter -- we issue an API key on creation and your own connector script uses it.</p>}
       <Btn variant="primary" disabled={busy} onClick={create}>Create connector</Btn>
     </div>
   );
@@ -168,7 +181,117 @@ function flattenSample(obj: unknown, prefix = '', out: { path: string; value: st
   return out;
 }
 
-const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCatalog | null; canWrite: boolean; onChanged: () => void; onDeleted: () => void; onError: (m: string) => void; run: (fn: () => Promise<void>) => Promise<void> }> = ({ connector, catalog, canWrite, onChanged, onDeleted, onError, run }) => {
+
+// ---------------------------------------------------------------- schedule, run now, run history
+
+type RunRow = { startedAt: string; trigger: string; kind: string; status: string; rowsIn: number; rowsOk: number; rowsRejected: number; message: string | null };
+type FileRow = { fileName: string; fileSize: number; status: string; importJobId: string | null; message: string | null; seenAt: string };
+const TRIGGER_LABEL: Record<string, string> = { SCHEDULE: "Schedule", MANUAL: "Run now", PUSH: "Sent to us" };
+const KIND_LABEL: Record<string, string> = { PULL: "Pulled", FILE: "File pick-up", LIVE: "Live rows", BACKFILL: "History backfill", WEBHOOK: "Webhook" };
+const RUN_TONE: Record<string, "good" | "warn" | "bad"> = { OK: "good", PARTIAL: "warn", FAILED: "bad" };
+
+const RunsPanel: React.FC<{ connector: Connector; canWrite: boolean; onChanged: () => void }> = ({ connector, canWrite, onChanged }) => {
+  const [tick, setTick] = useState(0);
+  const history = useApi<{ runs: RunRow[]; files: FileRow[] }>(`/integrations/${connector.id}/runs`, [connector.id, tick]);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [error, setError] = useState("");
+
+  const runTest = async () => {
+    setTesting(true); setTest(null); setError("");
+    try { setTest(await api(`/integrations/${connector.id}/test-pull`, { method: "POST", timeoutMs: 90_000 })); }
+    catch (e: any) { setError(e.message); } finally { setTesting(false); }
+  };
+  const runNow = async (mode?: "backfill") => {
+    setBusy(true); setResult(null); setError("");
+    try {
+      const r = await api<{ status: string; message: string }>(`/integrations/${connector.id}/run`, { method: "POST", body: mode ? { mode } : {}, timeoutMs: 10 * 60_000 });
+      setResult({ ok: r.status !== "FAILED", text: r.message }); setTick((t) => t + 1); onChanged();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const { session } = useForecast();
+  const saved: ScheduleDraft = { scheduleMin: connector.scheduleMin, scheduleAt: connector.scheduleAt, scheduleDays: connector.scheduleDays };
+  const [draft, setDraft] = useState<ScheduleDraft>(saved);
+  useEffect(() => setDraft(saved), [connector.id, connector.scheduleMin, connector.scheduleAt, JSON.stringify(connector.scheduleDays)]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const saveSchedule = async () => {
+    setError("");
+    try { await api(`/integrations/${connector.id}`, { method: "PUT", body: draft }); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  };
+  const [test, setTest] = useState<{ columns: string[]; rowCount: number; sample: Record<string, unknown>[]; problems: string[] } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const isDb = connector.preset === "DATABASE_POSTGRES_PULL";
+  const attention = history.data?.files.filter((f) => f.status === "NEEDS_ATTENTION") ?? [];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="text-[13px] font-semibold">Schedule and runs</div>
+        {connector.canPull && (
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            {isDb && <Btn disabled={!canWrite || testing} onClick={runTest}>{testing ? "Testing…" : "Test the query"}</Btn>}
+            {isDb && <Btn disabled={!canWrite || busy || connector.status !== "ACTIVE"} onClick={() => runNow("backfill")}>Load history</Btn>}
+            <Btn variant="primary" disabled={!canWrite || busy || connector.status !== "ACTIVE"} onClick={() => runNow()}>{busy ? "Running…" : isDb ? "Run now (last 2 days)" : "Run now"}</Btn>
+          </div>
+        )}
+      </div>
+      {connector.canPull && (
+        <div className="space-y-2 p-3 border border-[#E5E5E0] rounded bg-[#FAFAF8]">
+          <div className="text-[12px] font-semibold">When we fetch it</div>
+          <ScheduleEditor value={draft} onChange={setDraft} disabled={!canWrite} timezone={session.tenant.timezone} />
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            <Btn variant="primary" disabled={!canWrite || !dirty} onClick={saveSchedule}>Save schedule</Btn>
+            <span className="text-[#6B6B6B]">{dirty ? "Not saved yet." : describeSchedule(saved, session.tenant.timezone)}</span>
+          </div>
+        </div>
+      )}
+      <p className="text-[12px] text-[#6B6B6B]">
+        {connector.note || "This source sends its data to us, so there is nothing to schedule. Each delivery appears below."}
+        {connector.canPull && connector.status !== "ACTIVE" && " Set the connector to Active for the schedule to run, or to run it by hand."}
+        {connector.canPull && connector.status === "ACTIVE" && connector.scheduleMin && connector.nextRunAt && ` Next run ${when(connector.nextRunAt)} (${session.tenant.timezone}).`}
+      </p>
+      {isDb && connector.backfillStatus === "NOT_STARTED" && connector.status === "ACTIVE" && <Banner kind="info">No history has been loaded yet. Use Load history first: it stages the last weeks for review on the Staged Ingestion page, and forecasts need at least 4 weeks to work from.</Banner>}
+      {error && <Banner kind="err" onClose={() => setError("")}>{error}</Banner>}
+      {test && (
+        <div className="space-y-2">
+          <div className="text-[12px] text-[#6B6B6B]">The query returned {test.rowCount} row{test.rowCount === 1 ? "" : "s"} for the last two days (at most 20 are read for a test). Nothing was saved.</div>
+          {test.problems.map((p) => <Banner key={p} kind="warn">{p}</Banner>)}
+          {test.sample.length > 0 && (
+            <div className="overflow-x-auto border border-[#E5E5E0] rounded">
+              <table className="w-full text-[12px]"><thead className="bg-[#FAFAF8] text-[#6B6B6B]"><tr>{test.columns.map((c) => <th key={c} className="p-1.5 text-left">{c}</th>)}</tr></thead>
+                <tbody>{test.sample.map((r, i) => <tr key={i} className="border-t border-[#E5E5E0]">{test.columns.map((c) => <td key={c} className="p-1.5 font-mono">{String(r[c] ?? "")}</td>)}</tr>)}</tbody></table>
+            </div>
+          )}
+        </div>
+      )}
+      {result && <Banner kind={result.ok ? "ok" : "err"} onClose={() => setResult(null)}>{result.text}</Banner>}
+      {attention.length > 0 && (
+        <Banner kind="warn">
+          <div className="font-semibold">{attention.length} file{attention.length === 1 ? "" : "s"} could not be read and {attention.length === 1 ? "was" : "were"} left alone</div>
+          {attention.slice(0, 5).map((f) => <div key={f.fileName + f.seenAt}>{f.fileName}: {f.message}</div>)}
+          <div className="mt-1">Fix the file and put it back in the folder. A changed file is picked up again.</div>
+        </Banner>
+      )}
+      {history.data && history.data.runs.length > 0 && (
+        <Table head={["When", "How", "Result", "Rows saved / sent", "What happened"]} right={[3]}>
+          {history.data.runs.slice(0, 10).map((r, i) => (
+            <tr key={i}>
+              <td className="p-3 whitespace-nowrap">{when(r.startedAt)}</td>
+              <td className="p-3">{KIND_LABEL[r.kind] ?? r.kind}<div className="text-[11px] text-[#6B6B6B]">{TRIGGER_LABEL[r.trigger] ?? r.trigger}</div></td>
+              <td className="p-3"><Pill tone={RUN_TONE[r.status] ?? "neutral"}>{r.status === "OK" ? "OK" : r.status === "PARTIAL" ? "Partly" : "Failed"}</Pill></td>
+              <td className="p-3 text-right font-mono">{r.rowsOk.toLocaleString()} / {r.rowsIn.toLocaleString()}</td>
+              <td className="p-3 text-[12px]">{r.message}</td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      {history.data && history.data.runs.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No runs yet.</p>}
+    </div>
+  );
+};
+
+export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; catalog: IntegrationCatalog | null; canWrite: boolean; onChanged: () => void; onDeleted: () => void; onError: (m: string) => void; run: (fn: () => Promise<void>) => Promise<void> }> = ({ feeds, connector, catalog, canWrite, onChanged, onDeleted, onError, run }) => {
   const [tick, setTick] = useState(0);
   const maps = useApi<IntegrationFieldMap[]>(`/integrations/${connector.id}/field-maps`, [connector.id, tick]);
   const [rows, setRows] = useState<IntegrationFieldMap[]>([]);
@@ -207,26 +330,27 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
         {preset?.method === "STREAM_SUBSCRIBE" && (
           <div>
-            <div className="text-[#737373]">Connection</div>
-            <div className={`font-semibold ${connector.connectedAt ? "text-[#2F7D5A]" : "text-[#737373]"}`}>{connector.connectedAt ? `Connected since ${when(connector.connectedAt)}` : "Not yet connected"}</div>
+            <div className="text-[#6B6B6B]">Connection</div>
+            <div className={`font-semibold ${connector.connectedAt ? "text-[#2A7553]" : "text-[#6B6B6B]"}`}>{connector.connectedAt ? `Connected since ${when(connector.connectedAt)}` : "Not yet connected"}</div>
           </div>
         )}
-        <div><div className="text-[#737373]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>
-        <div><div className="text-[#737373]">Last received</div><div className="font-semibold">{connector.lastReceivedAt ? when(connector.lastReceivedAt) : "never"}</div></div>
-        <div><div className="text-[#737373]">Created</div><div className="font-semibold">{when(connector.createdAt)} by {connector.createdBy}</div></div>
-        <div><div className="text-[#737373]">Config</div><div className="font-semibold">{Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
+        <div><div className="text-[#6B6B6B]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>
+        <div><div className="text-[#6B6B6B]">Last received</div><div className="font-semibold">{connector.lastReceivedAt ? when(connector.lastReceivedAt) : "never"}</div></div>
+        <div><div className="text-[#6B6B6B]">Created</div><div className="font-semibold">{when(connector.createdAt)} by {connector.createdBy}</div></div>
+        <div><div className="text-[#6B6B6B]">Config</div><div className="font-semibold">{Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
       </div>
       {connector.lastError && <Banner kind="err">Last error: {connector.lastError}</Banner>}
+      {feeds && <RunsPanel connector={connector} canWrite={canWrite} onChanged={onChanged} />}
 
       {sampleFields.length > 0 && targetFields.length > 0 && (
         <div className="space-y-2">
           <div className="text-[13px] font-semibold">Map by drag and drop</div>
-          <p className="text-[12px] text-[#737373]">From the last real message this connector received. Drag a field from the sample onto the target it belongs to.</p>
+          <p className="text-[12px] text-[#6B6B6B]">From the last real message this connector received. Drag a field from the sample onto the target it belongs to.</p>
           <div className="flex flex-wrap gap-1.5 p-2.5 border border-dashed border-[#D6D6D0] rounded-lg bg-[#FAFAF8]">
             {sampleFields.map((f) => (
               <span key={f.path} draggable={canWrite} onDragStart={(e) => e.dataTransfer.setData('text/plain', f.path)}
                 title={f.value} className={`text-[11px] font-mono px-2 py-1 rounded border border-[#E5E5E0] bg-white ${canWrite ? "cursor-grab active:cursor-grabbing" : ""}`}>
-                {f.path} <span className="text-[#A3A3A3]">= {f.value.length > 20 ? `${f.value.slice(0, 20)}…` : f.value}</span>
+                {f.path} <span className="text-[#6B6B6B]">= {f.value.length > 20 ? `${f.value.slice(0, 20)}…` : f.value}</span>
               </span>
             ))}
           </div>
@@ -247,7 +371,7 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
 
       <div className="space-y-2">
         <div className="text-[13px] font-semibold">Field mapping{sampleFields.length > 0 && targetFields.length > 0 ? ", by hand" : ""}</div>
-        <p className="text-[12px] text-[#737373]">Where each of our fields comes from in this vendor's own payload. Pre-filled for a named preset; blank for Generic -- fill in your own response shape. The same rows the drag-and-drop above writes to -- use this for a transform (ms → seconds etc.) or a field outside the usual set.</p>
+        <p className="text-[12px] text-[#6B6B6B]">Where each of our fields comes from in this vendor's own payload. Pre-filled for a named preset; blank for Generic -- fill in your own response shape. The same rows the drag-and-drop above writes to -- use this for a transform (ms → seconds etc.) or a field outside the usual set.</p>
         {rows.map((r, i) => {
           const required = targetFields.includes(r.targetField);
           return (
@@ -259,13 +383,13 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
               ) : (
                 <Input disabled={!canWrite} value={r.targetField} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, targetField: e.target.value } : x)))} placeholder="our field (volume, ahtSec, state...)" className="max-w-[200px]" />
               )}
-              <span className="text-[11px] text-[#737373]">←</span>
+              <span className="text-[11px] text-[#6B6B6B]">←</span>
               <Input disabled={!canWrite} value={r.sourcePath} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: e.target.value } : x)))} placeholder="their field (data.stats.offered)" className="max-w-[260px]" />
               <Select disabled={!canWrite} value={r.transform ?? ""} onChange={(e) => setRows((s) => s.map((x, j) => (j === i ? { ...x, transform: e.target.value || null } : x)))} className="!w-auto"><option value="">no conversion</option><option value="ms_to_s">ms → seconds</option><option value="minutes_to_s">minutes → seconds</option></Select>
               {canWrite && (required ? (
-                <button title="Clear what it's mapped from (the slot itself stays, since this field is required)" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: "" } : x)))}><Trash2 className="w-4 h-4" /></button>
+                <button title="Clear what it's mapped from (the slot itself stays, since this field is required)" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setRows((s) => s.map((x, j) => (j === i ? { ...x, sourcePath: "" } : x)))}><Trash2 className="w-4 h-4" /></button>
               ) : (
-                <button className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((s) => s.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>
+                <button className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setRows((s) => s.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>
               ))}
             </div>
           );
@@ -282,10 +406,10 @@ const ConnectorDetail: React.FC<{ connector: Connector; catalog: IntegrationCata
           <div className={`border rounded-lg p-3 space-y-2 text-[12px] ${testResult.ok ? "border-[#2F7D5A]/30 bg-[#EAF5EF]" : "border-[#E9D9B4] bg-[#FFF5DD]"}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="font-semibold">{testResult.ok ? "This mapping is ready -- nothing was saved or sent anywhere." : "This mapping has a problem -- nothing was saved or sent anywhere."}</div>
-              <button aria-label="Close" className="text-[#737373] hover:text-[#171717] text-[14px] leading-none shrink-0" onClick={() => setTestResult(null)}>&times;</button>
+              <button aria-label="Close" className="text-[#6B6B6B] hover:text-[#171717] text-[14px] leading-none shrink-0" onClick={() => setTestResult(null)}>&times;</button>
             </div>
-            {testResult.issues.map((msg, i) => <div key={i} className="text-[#B7791F]">{msg}</div>)}
-            {testResult.notes.map((msg, i) => <div key={i} className="text-[#737373]">{msg}</div>)}
+            {testResult.issues.map((msg, i) => <div key={i} className="text-[#8F6200]">{msg}</div>)}
+            {testResult.notes.map((msg, i) => <div key={i} className="text-[#6B6B6B]">{msg}</div>)}
             <div className="font-mono text-[11px] bg-white/60 rounded p-2 space-y-0.5">
               {Object.entries(testResult.resolved).map(([k, v]) => <div key={k}>{k}: <span className="font-semibold">{v === null || v === undefined || v === "" ? "–" : String(v)}</span></div>)}
             </div>
@@ -333,7 +457,7 @@ const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean }> = ({ 
   return (
     <div className="space-y-2">
       <div className="text-[13px] font-semibold">Event types</div>
-      <p className="text-[12px] text-[#737373]">
+      <p className="text-[12px] text-[#6B6B6B]">
         What each raw event type means when the message itself carries no state of its own.
         {pending.length > 0 ? ` ${pending.length} event type${pending.length === 1 ? " is" : "s are"} waiting for a rule -- every message of that type is being dropped until it's set.` : " All event types seen so far have a rule."}
       </p>
@@ -363,7 +487,7 @@ const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean }> = ({ 
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div>
                   <span className="font-mono font-semibold">{r.eventType}</span>
-                  <span className="text-[#737373]"> · seen {r.seenCount}x · last {when(r.lastSeenAt)}</span>
+                  <span className="text-[#6B6B6B]"> · seen {r.seenCount}x · last {when(r.lastSeenAt)}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   {r.action === "PENDING" ? <Pill tone="warn">Waiting for a rule</Pill>
@@ -405,7 +529,7 @@ const EntityMatching: React.FC<{ connectorId: string; entityType: "queue" | "emp
   return (
     <div className="space-y-2">
       <div className="text-[13px] font-semibold">{entityType === "queue" ? "Queue" : "Employee"} matching</div>
-      <p className="text-[12px] text-[#737373]">The part that can't be guessed: this vendor's own identifiers, matched to ours. {existing.data?.length ? `${existing.data.length} already matched.` : "None matched yet."}</p>
+      <p className="text-[12px] text-[#6B6B6B]">The part that can't be guessed: this vendor's own identifiers, matched to ours. {existing.data?.length ? `${existing.data.length} already matched.` : "None matched yet."}</p>
       {error && <Banner kind="err" onClose={() => setError("")}>{error}</Banner>}
       {existing.data && existing.data.length > 0 && (
         <div className="text-[12px] space-y-1 max-h-32 overflow-y-auto border border-[#E5E5E0] rounded p-2">
@@ -418,7 +542,7 @@ const EntityMatching: React.FC<{ connectorId: string; entityType: "queue" | "emp
           <Btn disabled={busy} onClick={suggest}>Suggest matches</Btn>
           {suggestions && (
             <div className="space-y-1">
-              {suggestions.map((s) => <div key={s.sourceId} className="text-[12px] flex justify-between"><span>{s.sourceLabel}</span><span className={s.targetId ? "text-[#2F7D5A]" : "text-[#C84A4A]"}>{s.targetName ?? "no match"} {s.targetId ? `(${Math.round(s.score * 100)}%)` : ""}</span></div>)}
+              {suggestions.map((s) => <div key={s.sourceId} className="text-[12px] flex justify-between"><span>{s.sourceLabel}</span><span className={s.targetId ? "text-[#2A7553]" : "text-[#BC3F3F]"}>{s.targetName ?? "no match"} {s.targetId ? `(${Math.round(s.score * 100)}%)` : ""}</span></div>)}
               <Btn variant="primary" disabled={busy} onClick={confirm}>Save these matches</Btn>
             </div>
           )}

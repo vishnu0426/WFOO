@@ -24,8 +24,8 @@ export const Inbox: React.FC = () => {
                 <div className={`text-[13px] ${n.read ? 'font-medium text-[#525252]' : 'font-semibold text-[#171717]'}`}>{n.title}</div>
                 {!n.read && <span className="w-2 h-2 rounded-full bg-[#171717]" />}
               </div>
-              <div className="text-[12px] text-[#737373]">{n.body}</div>
-              <div className="text-[11px] text-[#A3A3A3] mt-0.5">{new Date(n.createdAt).toLocaleString()}</div>
+              <div className="text-[12px] text-[#6B6B6B]">{n.body}</div>
+              <div className="text-[11px] text-[#6B6B6B] mt-0.5">{new Date(n.createdAt).toLocaleString()}</div>
             </button>
           ))}
         </div>

@@ -27,7 +27,21 @@ BACKTEST_H = 7
 PROFILE_WEEKS = 8
 
 
+def _exit_with_parent():
+    """A worker must not outlive the engine that started it: if the engine is killed, its workers (each holding statsmodels in memory) would otherwise stay behind."""
+    import multiprocessing
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def watch():
+        parent.join()                  # returns when the parent process is gone
+        os._exit(0)
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def warm_up():
+    _exit_with_parent()
     from sklearn.ensemble import HistGradientBoostingRegressor  # noqa: F401
     from statsmodels.tsa.holtwinters import ExponentialSmoothing  # noqa: F401
 
@@ -293,6 +307,20 @@ LABELS = {"snaive": "Seasonal naive", "wavg": "Weighted seasonal avg", "ets": "H
           "gbm": "Gradient boosting", "combo": "Ensemble", "croston": "Croston-SBA", "sarima": "Seasonal ARIMA (SARIMA)", "arima": "ARIMA with weekday effects"}
 
 
+def unavailable_reason(name, y):
+    """Why a model is not offered for this history, in plain words."""
+    n, zeros, mean = len(y), float((y == 0).mean()), float(y.mean())
+    if name == "gbm":
+        return f"gradient boosting needs at least 120 days of history and this queue has {n}"
+    if name in ("sarima", "arima"):
+        if n < 84:
+            return f"it needs at least 12 weeks (84 days) of history and this queue has {n} days"
+        return f"it is built for steady volume, and this queue has {round(zeros * 100)}% empty days and averages {mean:.1f} a day"
+    if name == "croston":
+        return "it is made for intermittent volume (many empty days or very low counts), and this queue has contacts on most days"
+    return "it cannot be fitted to this history"
+
+
 def candidates(y: pd.Series):
     names = ["snaive", "wavg", "ets"]
     if len(y) >= 120:
@@ -417,7 +445,12 @@ def forecast_queue(q, dates, spd, events, model, holidays):
     scores, per_model = backtest(y, names, holidays, cache)
     chosen = pick_model(scores, model)
     if model and model != "auto" and chosen != model:
-        notes.append(f"Requested model '{model}' unavailable for this history; used '{chosen}'.")
+        notes.append(f"You asked for '{model}' but it was not used: {unavailable_reason(model, y)}. '{chosen}' was used instead.")
+    elif model and model != "auto" and model in scores:
+        best = min(scores, key=lambda m: scores[m]["mase"])
+        if best != model and scores[best]["mase"] > 0 and scores[model]["mase"] > scores[best]["mase"] * 1.15:
+            gap = round((scores[model]["mase"] / scores[best]["mase"] - 1) * 100)
+            notes.append(f"'{model}' ran as you asked, but in the backtest '{best}' was about {gap}% more accurate on this queue. Choose Auto to let the engine pick the best one.")
     if scores and chosen == "snaive" and model in (None, "", "auto"):
         notes.append("No model beat seasonal naive in the backtest, so seasonal naive is used.")
     out.model = chosen

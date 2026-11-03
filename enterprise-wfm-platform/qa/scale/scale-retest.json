@@ -1,0 +1,177 @@
+{
+ "overallVerdict": "NO-GO",
+ "overallVerdictLine": "Do not launch for a 50,000-person organisation yet. The release gate is a conditional GO: both critical defects and 18 others are fixed, and three high items are left, all small. The scale re-test is much better than the first run: all 13 groups now build, the engine no longer crashes when a solve fails, the 2,000-person limits are gone, and 355,800 re-checked shifts have 0 rule breaks. But these still block a large organisation: one over-limit request freezes the whole API (DEF-31), the job queue kills or repeats builds that are still running (DEF-47), the optimiser crashes on many parts and leaves those parts as the plain starting roster (DEF-48), large builds take 20–75 minutes when two run at once (DEF-46), and screens that load every employee now take up to 72 s (DEF-50). For organisations of a few thousand people, closing the release-gate items is enough.",
+ "verdict": "NOT READY",
+ "verdictLine": "All 13 groups built and passed an independent check of every shift with 0 rule breaks (first run: 9 of 13, and nothing built when started together). Engine crashes are contained, the two-at-a-time limit holds, and the 2,000-person limits are gone. Still blocking: an over-limit request froze the API for 20 minutes, the queue failed or repeated live builds, CP-SAT crashed on every part of two groups, two builds at once took 20–75 minutes each, and the Time off screen now takes 72 s.",
+ "boundaryLine": "still no answer: both requests timed out after 5 min and the API answered nobody for 20 min, until the gateway was restarted",
+ "parallelWindow": {
+  "samples": 435,
+  "failures": 7,
+  "healthP50": 546,
+  "healthP95": 5830,
+  "worstHealthMs": 32135,
+  "over10s": 21,
+  "minutes": 128,
+  "maxRunning": 2
+ },
+ "caps": [
+  {
+   "check": "Employee list, no filter",
+   "run1": "stopped at 2,000 rows without saying so",
+   "run2": "all 50,656 rows; but the call takes 40 s and sends 42 MB"
+  },
+  {
+   "check": "Employee list, paged (?limit=50&offset=40000)",
+   "run1": "no paging",
+   "run2": "50 rows, correct total (x-total-count 50,656)"
+  },
+  {
+   "check": "Bulk edit someone beyond the first 2,000",
+   "run1": "silently skipped",
+   "run2": "updated (S04-02999 minimum rest 12 h)"
+  },
+  {
+   "check": "Re-import someone beyond the first 2,000",
+   "run1": "failed",
+   "run2": "updated; a one-row file took 16–45 s while builds ran"
+  },
+  {
+   "check": "Direct (wait-for-it) build of 3,000+ people",
+   "run1": "not tried",
+   "run2": "refused at once with a clear message to use a background build"
+  }
+ ],
+ "retest": {
+  "DEF-29": [
+   "Fixed",
+   "Each solve now runs in its own process. CP-SAT still died natively on parts of S01, S05, S06 and S10 (exit code 0xC0000409), but only that process ended: the engine server itself had 0 crashes, other builds carried on, and every build finished. The crashes themselves are now DEF-48."
+  ],
+  "DEF-30": [
+   "Partly fixed",
+   "Normal builds no longer freeze the API: with two 4,000–6,000-person builds preparing at once for 2 hours, health checks had a median of 546 ms. But 21 of 435 took over 10 s and 7 got no answer within 30 s, and the over-limit request in DEF-31 still froze everything."
+  ],
+  "DEF-31": [
+   "Still open",
+   "The same request (every 15-minute start and length for 3,000 people) got no answer: the direct build and the background job both timed out after 5 minutes, and the gateway sat at 100% of one core and answered nobody for 20 minutes until it was restarted. The new up-front size check lets it through because its estimate assumes the thinnest setting."
+  ],
+  "DEF-32": [
+   "Fixed",
+   "The list returns all 50,656 people, and ?limit=&offset= pages correctly with the true total. But the unpaged list now takes 40 s and sends 42 MB even with nothing else running, and screens that still load it pay for it (DEF-50)."
+  ],
+  "DEF-33": [
+   "Fixed",
+   "Bulk edit of S04-02999 (beyond the first 2,000) was applied."
+  ],
+  "DEF-34": [
+   "Fixed",
+   "Re-importing S04-02999 was matched and updated (dry run and commit). It took 16–45 s for one row while builds ran."
+  ],
+  "DEF-35": [
+   "Fixed",
+   "All 13 builds were queued together; never more than 2 ran at once. The queue has a new problem with long builds, see DEF-47."
+  ],
+  "DEF-36": [
+   "Fixed",
+   "The gateway now retries: its log shows 'ENGINE_UNAVAILABLE; trying again (attempt 2 of 3)' and 'ENGINE_CRASHED; trying again'. One build (S13) still failed with a 2-minute engine timeout while the database was recovering from a crash; it built on the next try."
+  ],
+  "DEF-37": [
+   "Partly fixed",
+   "Groups are now split into parts of 667–800 people that CP-SAT improves: S02 (failed in run 1) reached 83.1%, S09 95.1%, S11 96.5%. Where CP-SAT crashes (DEF-48) the part is still the greedy starting roster: all of S05 and S06, 2 of 8 parts of S01."
+  ],
+  "DEF-38": [
+   "Fixed",
+   "Email back office (S04) coverage rose from 43.5% to 87.1%."
+  ],
+  "DEF-39": [
+   "Fixed",
+   "Full-timers now average their 40 contract hours in 11 groups (S06 39.2 h with 400 people on leave; S07 37.3 h on the 4-on-4-off rota). First run: 21.7–32.7 h in several groups."
+  ],
+  "DEF-40": [
+   "Partly fixed",
+   "Faster: schedule plan view 18.4 s to 3.8 s, schedule timeline 44 s to 27 s, schedule quality 120 s to 54 s, all schedules 2.6 s to 1.2 s. Still slow: shifts of a 6,000-person group are 18 MB in one call, live coverage and adherence screens take about 30 s to settle, and the Time off screen got much slower (DEF-50)."
+  ],
+  "DEF-41": [
+   "Not re-tested",
+   "Forecasts from the first run were reused."
+  ],
+  "DEF-42": [
+   "Not re-tested",
+   "Schedules were not published in this run."
+  ]
+ },
+ "newDefects": [
+  {
+   "id": "DEF-46",
+   "sev": "High",
+   "area": "Scheduling · Performance",
+   "title": "Large builds take 20–75 minutes when two run at once, almost all of it before the solver starts",
+   "steps": "Queue the 13 SCALE builds together (2 run at a time) on a gateway that has been up for a few hours; S01's 24,288-shift schedule from the first run is published",
+   "expected": "A few minutes per group (the solver itself needs 1.5–3 minutes)",
+   "actual": "S01 20 min, S02 41 min, S03 76 min, S05 44 min for the build itself; the solver's share was 90–190 s. The gateway sat at 100% of one core while the engine was idle. On a freshly restarted gateway, one build at a time, groups of 3,000–4,000 took 4–9 minutes.",
+   "evidence": "Job progress stayed on 'Preparing' for 17–40 min; process CPU sampling; solver wallSec in each schedule's statistics",
+   "fix": "Profile candidate preparation. Every candidate shift scans tenant-wide arrays: all approved time off, all 2,008 availability rows and every published shift of other groups (blockedReason, preferenceFor). Index them by employee once (Map) before the loop, and move preparation off the API process (worker thread or the engine)."
+  },
+  {
+   "id": "DEF-47",
+   "sev": "High",
+   "area": "Scheduling · Job queue",
+   "title": "The queue fails or repeats builds that are still running",
+   "steps": "Run two large background builds at once, or one long build, and watch schedule_jobs",
+   "expected": "A running build keeps its slot and its status until it finishes",
+   "actual": "While a build prepares, its heartbeat falls more than 30 s behind, so the sweeper hands it back to the queue while it is still running. S02 and S05 were built twice (two S02 versions). S05 showed QUEUED while running. S09 and S10 failed with 'The server restarted twice while this was running' with no restart, and S10 saved an empty version. After the laptop's standby, S05's finished build was overwritten as FAILED.",
+   "evidence": "wfm.schedule_jobs attempts = 2–3 with a fresh heartbeat on a QUEUED row; two 'SCALE S02 rerun' versions; gateway log",
+   "fix": "Send the heartbeat from outside the busy event loop (or make preparation yield properly), give the sweeper a much longer grace period, never overwrite a DONE job, and make a job's run single-owner (check the worker and attempt before writing results)."
+  },
+  {
+   "id": "DEF-48",
+   "sev": "High",
+   "area": "Scheduling · Engine",
+   "title": "CP-SAT crashes on many parts, so those parts get only the starting roster",
+   "steps": "Build S05 (5,000 people, two skills) or S06 (4,000 people, leave and availability) as a background plan",
+   "expected": "CP-SAT solves each 750–800-person part",
+   "actual": "The solver process ended with exit code 0xC0000409 (a native abort) on every part of S05 and S06 and on 2 of 8 parts of S01. HiGHS and SCIP returned 'unknown', so those parts used the greedy roster. In S05, 1,000 people got no shifts at all.",
+   "evidence": "Schedule statistics: 'part 1: cpsat: failed (the solver process ended without an answer (exit code 3221226505))'",
+   "fix": "Capture the worker's stderr and a core dump to find the abort (often memory, or a model OR-Tools rejects); try fewer search workers or a per-process memory limit; report 'starting roster only' on the schedule when every solver fails."
+  },
+  {
+   "id": "DEF-49",
+   "sev": "Medium",
+   "area": "Reliability · Gateway",
+   "title": "The gateway stopped again with no log line, right after an engine crash",
+   "steps": "Background build of S10 (13-week plan); the engine's solver crashed and the gateway logged 'ENGINE_CRASHED; trying again'",
+   "expected": "The gateway retries the build, or logs why it stops",
+   "actual": "The gateway process ended with exit code 127 and nothing more in its log. This is the second time (release-gate DEF-44). The build failed and was retried after the gateway was back.",
+   "evidence": "Gateway log ends on the ENGINE_CRASHED line followed by 'gateway exit=127'",
+   "fix": "Log uncaughtException, unhandledRejection and process exit before quitting; run the gateway under a supervisor that restarts it."
+  },
+  {
+   "id": "DEF-50",
+   "sev": "High",
+   "area": "Performance · Workforce",
+   "title": "Screens that load every employee became very slow once the 2,000 limit was lifted",
+   "steps": "Open Workforce > Time off in Chrome on the 50,656-person organisation; call GET /workforce/employees with no paging",
+   "expected": "A few seconds, as in the first run (3.1 s)",
+   "actual": "Time off took 72 s to settle (first run 3.1 s). The unpaged employee list takes 40 s and sends 42 MB with nothing else running. The Employees screen itself pages and opens in 3.9 s.",
+   "evidence": "probe-ui and probe-api rows in the run-2 results",
+   "fix": "Make every screen and picker that needs employees use paging or a search endpoint (names and ids only), and cap or refuse the unpaged list on large organisations."
+  }
+ ],
+ "strengths": [
+  "All 13 scenario groups (50,000 people) built: 24x7 nights, part-timers, multi-skill, leave and availability, a 4-on-4-off rota, another time zone, a 13-week plan, over- and under-staffing, and the candidate-limit case. In the first run, 4 groups never built.",
+  "Independent re-check of every shift in all 13 schedules (about 355,800 shifts, including the 13-week plan): 0 double-bookings, 0 rest or weekly-hour breaks, 0 shifts on approved leave or in unavailable hours, 0 weekend shifts for the 1,200 people who may not work weekends.",
+  "A crashing solve no longer takes the engine or other builds down: each part runs in its own process and falls back to HiGHS, SCIP and then the greedy roster.",
+  "The two-builds-at-a-time limit holds with 13 builds queued at once.",
+  "The 2,000-person limits are gone: the employee list, bulk edit and re-import work for all 50,656 people, with paging and a true total.",
+  "Full-timers now get their contract hours (40 h on average), and the email back office is 87% covered instead of 44%.",
+  "A wait-for-it build of 3,000+ people is refused at once with a clear message to build in the background."
+ ],
+ "method": [
+  "Same machine as the first run: one laptop (Intel i5-10310U, 4 cores, 16 GB RAM with about 3 GB free), one engine under a restart supervisor, Vite dev servers. Same 50,656 people and the published forecasts from the first run; only the code changed.",
+  "Step 1: the over-limit request (every 15-minute start and length for 3,000 people), as a direct build and as a background job. Step 2: all 13 builds queued together, health-checked every 3 s by the test and every 15 s separately. Step 3: groups that did not finish were built again one at a time.",
+  "The laptop went into Modern Standby from 23:49 to 10:01 local time during step 2. Only the 2 hours 8 minutes before that count as the 'together' result (6 builds finished, 0 failed). The builds that broke during the standby were built again afterwards.",
+  "During step 3 the database crashed once and recovered (about 2.8 GB of memory was free, and a second gateway on the test settings was using 2.6 GB), and the gateway and engine were restarted. All 13 groups built in the end.",
+  "Every schedule was re-checked by an independent script that reads each shift and each person's own rules (validate.mjs); it does not trust the solver's statistics.",
+  "The release-gate part of this report is the 1 November re-test (Playwright suite, functional, security, access-control, accessibility and static checks); it was not repeated.",
+  "Raw results: <tmp>/wfm-qa/run2/scale/results.jsonl; scripts in qa/scale (rerun-50k.mjs, finish-queue.mjs, direct-builds.mjs, validate.mjs, probe-50k.mjs) and qa/tools/build-production-report.mjs."
+ ]
+}

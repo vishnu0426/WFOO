@@ -6,4 +6,5 @@ scipy>=1.13
 statsmodels>=0.14
 scikit-learn>=1.5
 ortools>=9.10
+# backup solvers are open source and ship inside these two: HiGHS (scipy) and SCIP (ortools); see docs/SOLVER_BACKENDS.md
 pytest>=8

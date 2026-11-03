@@ -70,7 +70,7 @@ export const ForecastingView: React.FC<{ activeSubSection?: string; onOpenTracea
         badge={version && usesVersion ? <Pill tone={version.status === 'PUBLISHED' ? 'good' : 'neutral'}>{version.name}</Pill> : undefined}
         actions={groups.length > 0 && (
           <div className="flex items-center gap-2 text-[12px] text-[#525252]">
-            <Layers className="w-3.5 h-3.5 text-[#737373]" />
+            <Layers className="w-3.5 h-3.5 text-[#6B6B6B]" />
             <Select value={group?.id ?? ''} onChange={(e) => setGroupId(e.target.value)} className="!w-auto" aria-label="WFM group">
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </Select>

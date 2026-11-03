@@ -15,12 +15,14 @@ pg.types.setTypeParser(1082, (v) => v);                 // DATE stays 'YYYY-MM-D
 pg.types.setTypeParser(1700, (v) => parseFloat(v));     // NUMERIC -> number
 pg.types.setTypeParser(20, (v) => parseInt(v, 10));     // BIGINT (counts) -> number
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl, options: '-c search_path=wfm,public', max: 12 });
+export const pool = new pg.Pool({ connectionString: config.databaseUrl, options: '-c search_path=wfm,public', max: config.dbPoolMax });
 pool.on('error', (e) => console.error('[db] idle client error:', e.message));
 
 export type Row = Record<string, any>;
 
-const camel = (s: string) => s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+// the same few dozen column names come back on every row of every query, so each is converted once
+const camelCache = new Map<string, string>();
+const camel = (s: string) => { let v = camelCache.get(s); if (v === undefined) { v = s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase()); camelCache.set(s, v); } return v; };
 /** Column names only (snake_case -> camelCase). JSONB values are returned untouched. */
 export const camelize = <T = Row>(row: Row): T => {
   const out: Row = {};
@@ -45,6 +47,13 @@ export class Tx {
     if (TENANT_PLACEHOLDER.test(sql)) { p.push(this.tenantId); sql = sql.replace(TENANT_PLACEHOLDER_ALL, `$${p.length}`); }
     const res = await this.client.query(sql, p);
     return res.rows.map((r) => camelize<T>(r));
+  }
+  /** Rows as plain arrays in column order: no object per row, for the few queries that return hundreds of thousands of them. */
+  async arrays(text: string, params: unknown[] = []): Promise<any[][]> {
+    let sql = text;
+    const p = [...params];
+    if (TENANT_PLACEHOLDER.test(sql)) { p.push(this.tenantId); sql = sql.replace(TENANT_PLACEHOLDER_ALL, `$${p.length}`); }
+    return (await this.client.query({ text: sql, values: p, rowMode: 'array' })).rows;
   }
   async one<T = Row>(text: string, params: unknown[] = []): Promise<T | undefined> {
     return (await this.q<T>(text, params))[0];
@@ -82,7 +91,25 @@ export async function raw<T = Row>(text: string, params: unknown[] = []): Promis
 
 // ---------------------------------------------------------------- migrations + RLS
 
-export async function migrate(): Promise<void> {
+/**
+ * Several gateway processes start together when a deployment scales or rolls out. Each would apply the same migrations and rebuild the same row-level-security
+ * policies at once, and the second to arrive failed ("policy already exists") and stopped. A database lock makes them take turns: the first does the work, the others
+ * wait for it, find nothing left to do, and carry on.
+ */
+export async function withStartupLock<T>(work: () => Promise<T>): Promise<T> {
+  const lock = await pool.connect();
+  try {
+    await lock.query('SELECT pg_advisory_lock(727001)');
+    return await work();
+  } finally {
+    await lock.query('SELECT pg_advisory_unlock(727001)').catch(() => {});
+    lock.release();
+  }
+}
+
+export const migrate = (): Promise<void> => withStartupLock(migrateLocked);
+
+async function migrateLocked(): Promise<void> {
   await pool.query('CREATE SCHEMA IF NOT EXISTS wfm');
   await pool.query('CREATE TABLE IF NOT EXISTS wfm.schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())');
   const done = new Set((await pool.query('SELECT name FROM wfm.schema_migrations')).rows.map((r) => r.name));

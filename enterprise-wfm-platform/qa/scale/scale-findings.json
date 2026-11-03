@@ -1,0 +1,249 @@
+{
+  "machine": "1 laptop: Intel i5-10310U 4 cores / 8 threads, 15.7 GB RAM (about 3 GB free), one engine, Vite dev servers",
+  "verdict": "NOT READY",
+  "verdictLine": "The platform holds 50,000 people, forecasts every group in seconds and, when a group is solved one at a time and whole, produces schedules with zero rule breaks. It is not ready for an organisation this size: the engine crashed 15 times, every group large enough to need splitting failed, all 12 builds failed when started together, and the gateway stopped answering everyone for 40+ minutes while large schedules were prepared. Four employee features silently stop at 2,000 people.",
+  "defects": [
+    {
+      "id": "DEF-29",
+      "sev": "Critical",
+      "area": "Scheduling · Engine",
+      "title": "Engine crashes on large solves and takes every running build down with it",
+      "steps": "Schedule groups of 3,000–6,000 people (one week, 90 s limit). Runs: 12 groups together; then one at a time; then one at a time without splitting.",
+      "expected": "A solve that runs out of time or memory fails alone; the engine keeps serving",
+      "actual": "15 engine crashes in the scale run (engine-supervisor.log; 17 counting the 2 earlier in the day). All 12 builds started together failed. One at a time: every group that the gateway splits into parts (S02, S03, S05 and the split runs of S09, S11) crashed the engine; S10 survived one crash. Logs: 'Fatal Python error: Aborted' (14; 2 of them show SCIP 'Insufficient memory for allocation' followed by an OR-Tools 'Check failed' abort), and one 'Windows fatal exception: access violation' in backends.py respond() while building the reply. The parts of one group are solved side by side in one engine process, each CP-SAT model plus the HiGHS/SCIP backups in memory at once.",
+      "evidence": "scale/engine-run-*.log, engine-supervisor.log; S11 whole: DONE 157 s, no crash; S11 in parts: crash",
+      "fix": "Solve each part/solve in its own child process with a memory cap so a native abort kills one solve, not the server; skip the MIP backups (HiGHS/SCIP) above a candidate size they cannot handle; run parts one after another when memory is short; supervise the engine and retry the job after a restart."
+    },
+    {
+      "id": "DEF-30",
+      "sev": "Critical",
+      "area": "Gateway · Availability",
+      "title": "Preparing a large schedule freezes the gateway for every user",
+      "steps": "Start schedule builds for groups of 5,000–6,000 people; call GET /health and the admin app meanwhile",
+      "expected": "The API stays responsive while schedules are built in the background",
+      "actual": "Gateway pinned at 100% of one CPU core (Node main thread, 430→604 MB); /health timed out at 15–30 s continuously for 40+ minutes; DB sessions sat 'idle in transaction' waiting for the gateway; S03 spent 16 minutes preparing. Opening Schedule Quality for a 6,000-person group did the same for 2+ minutes.",
+      "evidence": "health-samples.jsonl; scheduleRoutes.ts ~598–640: candidates are built on the main thread, rebuilt up to 8 times at coarser settings, yielding only every 25 people",
+      "fix": "Build candidates in a worker thread or in the engine; compute the candidate count arithmetically and pick the thinning level once instead of rebuilding the list; cap per-request CPU for report screens and cache their results."
+    },
+    {
+      "id": "DEF-31",
+      "sev": "High",
+      "area": "Scheduling · Limits",
+      "title": "An over-limit schedule request is not refused — it runs 8½ minutes and then drops",
+      "steps": "S13: one template with every 15-minute start and every length 4–12 h, 3,000 people, POST /scheduling/versions",
+      "expected": "Immediate 400: 'too many possible shifts' (the 900,000 limit exists in the code)",
+      "actual": "510 s, then the connection failed; /health afterwards showed Redis down; the gateway answered nobody meanwhile",
+      "evidence": "results.jsonl phase boundary",
+      "fix": "Estimate people × days × starts × lengths before building and refuse at once."
+    },
+    {
+      "id": "DEF-32",
+      "sev": "High",
+      "area": "Workforce · API and screens",
+      "title": "Employee list stops at 2,000 people without saying so",
+      "steps": "GET /workforce/employees (or ?groupId= for a 6,000-person group); open Workforce › Employees",
+      "expected": "Paging, or a total and a 'showing 2,000 of 50,000' notice",
+      "actual": "Exactly 2,000 rows, no total, no next page (loadEmployees … LIMIT 2000). The other 48,000 people cannot be found by scrolling.",
+      "evidence": "probe-api; workforceRoutes.ts:70",
+      "fix": "Server-side paging with a total count; AG Grid server-side row model."
+    },
+    {
+      "id": "DEF-33",
+      "sev": "High",
+      "area": "Workforce · Bulk edit",
+      "title": "Bulk edit silently skips anyone outside the first 2,000",
+      "steps": "POST /workforce/employees/bulk with one person inside and one outside the first 2,000 (by last name)",
+      "expected": "Both updated",
+      "actual": "200 OK, updated 1, skipped 1: 'Employee not found'",
+      "evidence": "cap-check.mjs; workforceRoutes.ts:178 uses the capped loader",
+      "fix": "Load the selected ids directly (WHERE id = ANY($1)) instead of the capped list."
+    },
+    {
+      "id": "DEF-34",
+      "sev": "High",
+      "area": "Workforce · Import",
+      "title": "Re-importing existing employees fails once the organisation has more than 2,000 people",
+      "steps": "Import a CSV row for an existing employee outside the first 2,000",
+      "expected": "Dry run says UPDATE; commit updates them",
+      "actual": "Dry run says NEW; commit fails with 409 'That already exists' and rejects the whole file. A nightly HR sync of 50,000 people cannot run.",
+      "evidence": "cap-check.mjs; workforceRoutes.ts:274",
+      "fix": "Match existing employees by number with a direct query for the numbers in the file."
+    },
+    {
+      "id": "DEF-35",
+      "sev": "High",
+      "area": "Scheduling · Background jobs",
+      "title": "The 'two builds at a time' limit is not enforced",
+      "steps": "Queue 12 schedule jobs while the gateway is busy",
+      "expected": "At most SCHEDULE_JOB_CONCURRENCY (default 2) running",
+      "actual": "10 jobs RUNNING at once on one gateway, multiplying the load that caused DEF-29 and DEF-30",
+      "evidence": "schedule_jobs rows at 14:35; scheduleJobs.ts tick(): the running-count check and the claim are separated by an await, and tick() runs from both a timer and every enqueue",
+      "fix": "Make tick() single-flight (a flag or mutex) and claim only CONCURRENCY - running.size jobs in one UPDATE."
+    },
+    {
+      "id": "DEF-36",
+      "sev": "Medium",
+      "area": "Scheduling · Background jobs",
+      "title": "Jobs fail at once while the engine restarts, and timeouts are reported as 'engine not reachable'",
+      "steps": "Queue jobs during the ~60 s an engine takes to start; or solve a group whose call exceeds the gateway's gRPC deadline",
+      "expected": "Wait/retry with back-off; a timeout says it timed out",
+      "actual": "8 jobs failed within 5 s each; S09 (no crash) failed after 172 s with 'The forecasting engine is not reachable'",
+      "evidence": "seq.log",
+      "fix": "Retry engine-unavailable failures with back-off for a few minutes; distinguish DEADLINE_EXCEEDED from UNAVAILABLE in the message."
+    },
+    {
+      "id": "DEF-37",
+      "sev": "High",
+      "area": "Scheduling · Optimiser",
+      "title": "At 3,000+ people the optimiser adds nothing: schedules are the greedy starting roster",
+      "steps": "Schedule any group with ≥ 210,000 candidate shifts (S01, S06, S08, S11, S12, S13) with a 90 s limit",
+      "expected": "CP-SAT improves on the starting roster; or the screen says the result is unoptimised",
+      "actual": "Every one: 'cpsat: feasible (starting roster only), highs: unknown, scip: unknown, greedy: feasible', gap 1 (100%). Valid schedules, often 95–98% covered, but contract hours, preferences and fairness are not optimised. Only S04/S07 (≤ 75,000 candidates) were optimised.",
+      "evidence": "results.jsonl schedule-seq statsRaw",
+      "fix": "Split earlier (smaller parts, solved safely — see DEF-29), give large groups a longer default limit, and show 'starting roster only' prominently on the schedule."
+    },
+    {
+      "id": "DEF-38",
+      "sev": "Medium",
+      "area": "Forecasting · Staffing",
+      "title": "Email (24 h turnaround) demand is spread across the night",
+      "steps": "S04: email queue, weekday office-hours history (no night volume), Mon–Fri 08:00–18:30 templates",
+      "expected": "Back-office work can wait within its 24 h turnaround, so it is staffed in office hours",
+      "actual": "Requirement of about 140 people 00:00–08:00 every day; coverage 43.5% while 388,976 surplus quarter-hours sit in the day; shortage report: 'no shift template covers this time'",
+      "evidence": "GET /scheduling/versions/:id/shortage for S04",
+      "fix": "For deferrable channels, place the requirement within the queue's opening hours (backlog model) instead of flat over 24 h."
+    },
+    {
+      "id": "DEF-39",
+      "sev": "Medium",
+      "area": "Scheduling · Contracts",
+      "title": "Full-timers scheduled well below contract hours with no warning",
+      "steps": "Validate hours per person in S11 (overstaffed) and S01",
+      "expected": "Contract hours met, or the shortfall listed as a warning for payroll",
+      "actual": "Full-time 40 h people averaged 21.7 h (S11) and 32.4 h (S01); schedule statistics show warnings: 0",
+      "evidence": "validate rows",
+      "fix": "Report contract-hour shortfall per person; offer VTO instead of silently cutting hours where the policy pays contract hours."
+    },
+    {
+      "id": "DEF-40",
+      "sev": "Medium",
+      "area": "Performance · Large groups",
+      "title": "Screens and reads for a 6,000-person group are slow and heavy",
+      "steps": "Open screens with the 6,000-person group selected; call the shift and plan APIs",
+      "expected": "< 5 s",
+      "actual": "Schedule Timeline 44 s, 236 MB browser heap; Live Coverage and Adherence 30 s; Schedule Quality > 120 s; plan view API 18 s; shifts API returns everything at once (15 MB for one week; 79 MB for 2,000 people × 13 weeks — about 1 GB for 6,000 × 52 weeks)",
+      "evidence": "probe-ui, probe-api, validate (shiftsKb)",
+      "fix": "Page and window the shift APIs (by day/team), virtualise the timeline, precompute report screens."
+    },
+    {
+      "id": "DEF-41",
+      "sev": "Low",
+      "area": "Forecasting",
+      "title": "Model choice is not explained: unsuitable models run, unavailable ones fall back quietly",
+      "steps": "Request ARIMA for S09, Croston for S04, GBM for S06",
+      "expected": "The screen says what each model needs and warns when the chosen one is worse than a naive forecast",
+      "actual": "ARIMA used though worse than seasonal naive (MASE 2.6, WAPE 7.7% vs ~0.1–0.2% elsewhere, stability VARIABLE). GBM needs 120 days of history and Croston a sparse daily series; both fell back with a note only in the summary.",
+      "evidence": "forecast versions summaries",
+      "fix": "Show eligibility next to each model and warn when the selected model loses to the baseline."
+    },
+    {
+      "id": "DEF-42",
+      "sev": "Low",
+      "area": "Self-service",
+      "title": "Publishing a schedule does not notify the people on it",
+      "steps": "Publish S01 (6,000 people) → sign in as S01-00001",
+      "expected": "'Your schedule for 2–8 Nov is published'",
+      "actual": "0 notifications (shifts are visible)",
+      "evidence": "probe-portal after publish",
+      "fix": "Confirm intended behaviour; if not, notify on publish (batched)."
+    }
+  ],
+  "strengths": [
+    "50,000 employees loaded through the real API: 6,000-row CSV imports in about 3.5 s, 12 weeks of 15-minute history per queue in about 2 s, 400 leave requests and 400 availability rules without an error.",
+    "Every forecast model the engine offers was exercised across 13 groups; each forecast was created in 3–6 s, published through submit/approve/publish, plus a 365-day long-term forecast and a +20% adjustment. Missing days were tolerated and outlier days detected and replaced.",
+    "Independent re-check of every shift in 9 built schedules (250,495 shifts, incl. a 13-week plan): 0 double-bookings, 0 rest or weekly-hour breaks, 0 shifts on approved leave, 0 in unavailable hours, 0 weekend shifts for the 1,200 people who may not work weekends, and everyone got shifts.",
+    "Solved whole and one at a time, groups of 3,000–6,000 people built in about 3 minutes each (S01: 6,000 people, 98.4% covered).",
+    "Rotation 4-on-4-off: 2,000 members assigned in 4 s and 28,000 shifts materialised in 12 s.",
+    "Live agent states for 6,000 people accepted in 3 batches of 2,000 (about 330 ms each); the 2,000-per-call limit is enforced with a clear message.",
+    "Publishing a 6,000-person schedule (24,288 shifts) took 9.5 s; the employee then saw their week in the portal in under 100 ms.",
+    "The shortage report explains gaps in plain words with causes and suggested actions (overtime, a missing template, temporary staff)."
+  ],
+  "parallelRun": {
+    "started": "2026-10-31 13:52 UTC",
+    "note": "All 12 jobs queued together (S13 not queued: the orchestrator lost its connection to the frozen gateway). Up to 10 ran at once although the limit is 2.",
+    "jobs": [
+      {
+        "key": "S01",
+        "status": "FAILED",
+        "minutes": 42,
+        "why": "engine not reachable (crash) while solving"
+      },
+      {
+        "key": "S02",
+        "status": "FAILED",
+        "minutes": 42,
+        "why": "engine not reachable while preparing"
+      },
+      {
+        "key": "S03",
+        "status": "FAILED",
+        "minutes": 31,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S04",
+        "status": "FAILED",
+        "minutes": 11,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S05",
+        "status": "FAILED",
+        "minutes": 25,
+        "why": "engine crash while preparing"
+      },
+      {
+        "key": "S06",
+        "status": "FAILED",
+        "minutes": 25,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S07",
+        "status": "FAILED",
+        "minutes": 9,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S08",
+        "status": "FAILED",
+        "minutes": 25,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S09",
+        "status": "FAILED",
+        "minutes": 25,
+        "why": "engine crash while preparing"
+      },
+      {
+        "key": "S10",
+        "status": "FAILED",
+        "minutes": 17,
+        "why": "engine crash in week 1 of 4"
+      },
+      {
+        "key": "S11",
+        "status": "FAILED",
+        "minutes": 22,
+        "why": "engine crash while solving"
+      },
+      {
+        "key": "S12",
+        "status": "FAILED",
+        "minutes": 22,
+        "why": "engine crash while solving"
+      }
+    ]
+  }
+}

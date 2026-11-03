@@ -21,7 +21,7 @@ const PERM_LABEL: Record<string, string> = {
   'forecast:submit': 'Submit for approval', 'forecast:approve': 'Approve forecasts', 'forecast:publish': 'Publish forecasts', 'forecast:delete': 'Delete forecasts',
   'workforce:read': 'View employees and teams', 'workforce:write': 'Edit employees and teams',
   'schedule:read': 'View schedules', 'schedule:generate': 'Generate a schedule', 'schedule:edit': 'Manually edit a schedule', 'schedule:approve': 'Approve a schedule', 'schedule:publish': 'Publish a schedule',
-  'intraday:read': 'View intraday and RTA', 'intraday:act': 'Act on intraday recommendations',
+  'requests:approve': "Decide their own team's time off and swaps", 'intraday:read': 'View intraday and RTA', 'intraday:act': 'Act on intraday recommendations',
   'audit:read': 'View the audit log', 'users:read': 'View users and roles', 'users:write': 'Manage users and role permissions',
   'self:use': 'Use the self-service app',
 };
@@ -92,7 +92,7 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E5E5E0] pb-4">
         <div>
           <h1 className="text-[20px] font-semibold text-[#171717]">Users & roles</h1>
-          <p className="text-[13px] text-[#737373] mt-0.5">Who can sign in, and what each role can do. Tenant: {session.tenant.name}.</p>
+          <p className="text-[13px] text-[#6B6B6B] mt-0.5">Who can sign in, and what each role can do. Tenant: {session.tenant.name}.</p>
         </div>
         <div className="flex rounded border border-[#E5E5E0] bg-white p-0.5 text-[12px]">
           <button onClick={() => setTab('USERS')} className={`px-3 py-1.5 rounded font-medium transition-colors ${tab === 'USERS' ? 'bg-[#171717] text-white' : 'text-[#525252] hover:text-[#171717]'}`}>Users ({users.data?.length ?? 0})</button>
@@ -120,22 +120,22 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
             {!users.data?.length ? <Empty title="No users yet" /> : (
               <div className="border border-[#E5E5E0] rounded-lg overflow-hidden">
                 <table className="w-full text-left text-[13px]">
-                  <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+                  <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
                     <tr><th className="p-3">User</th><th className="p-3">Role</th><th className="p-3">Status</th><th className="p-3">Last active</th><th className="p-3"></th></tr>
                   </thead>
                   <tbody className="divide-y divide-[#E5E5E0]">
                     {users.data.map((u) => (
                       <React.Fragment key={u.id}>
                         <tr className="hover:bg-[#FAFAF8]">
-                          <td className="p-3"><div className="font-semibold text-[#171717]">{u.userName}{u.id === session.user.id && <span className="text-[11px] text-[#737373] font-normal"> (you)</span>}</div><div className="text-[11px] text-[#737373]">{u.username}{u.email ? ` · ${u.email}` : ''}</div></td>
+                          <td className="p-3"><div className="font-semibold text-[#171717]">{u.userName}{u.id === session.user.id && <span className="text-[11px] text-[#6B6B6B] font-normal"> (you)</span>}</div><div className="text-[11px] text-[#6B6B6B]">{u.username}{u.email ? ` · ${u.email}` : ''}</div></td>
                           <td className="p-3 text-[12px] font-medium">{ROLE_LABEL[u.role] ?? u.role}</td>
-                          <td className="p-3"><span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${u.status === 'ACTIVE' ? 'bg-[#EAF5EF] text-[#2F7D5A]' : 'bg-[#FCEBEC] text-[#C84A4A]'}`}>{u.status}</span></td>
-                          <td className="p-3 text-[12px] text-[#737373]">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never signed in'}</td>
+                          <td className="p-3"><span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${u.status === 'ACTIVE' ? 'bg-[#EAF5EF] text-[#2A7553]' : 'bg-[#FCEBEC] text-[#BC3F3F]'}`}>{u.status}</span></td>
+                          <td className="p-3 text-[12px] text-[#6B6B6B]">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never signed in'}</td>
                           <td className="p-3 text-right">{canWrite && <Btn onClick={() => setEditId(editId === u.id ? null : u.id)}>{editId === u.id ? 'Close' : 'Edit'}</Btn>}</td>
                         </tr>
                         {editId === u.id && editing && (
                           <tr><td colSpan={5} className="p-3 bg-[#FAFAF8]">
-                            {isSelf && <div className="text-[12px] text-[#737373] mb-2">You cannot change your own role or status. You can still reset your own password.</div>}
+                            {isSelf && <div className="text-[12px] text-[#6B6B6B] mb-2">You cannot change your own role or status. You can still reset your own password.</div>}
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                               <Field label="Role"><Select value={edit.role} disabled={isSelf} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>{roles.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>)}</Select></Field>
                               <Field label="Status"><Select value={edit.status} disabled={isSelf} onChange={(e) => setEdit({ ...edit, status: e.target.value as WUser['status'] })}><option value="ACTIVE">Active</option><option value="DISABLED">Disabled</option></Select></Field>
@@ -157,7 +157,7 @@ export const UsersAndRolesView: React.FC<UsersAndRolesViewProps> = ({ activeSubS
           {rbac.loading && !rbac.data ? <Busy text="Loading permissions…" /> : !work ? null : (
             <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
               <table className="w-full text-left text-[12px]">
-                <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+                <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
                   <tr><th className="p-3 w-64">Permission</th>{roles.map((r) => <th key={r} className="p-3 text-center">{ROLE_LABEL[r] ?? r}</th>)}</tr>
                 </thead>
                 <tbody className="divide-y divide-[#E5E5E0]">

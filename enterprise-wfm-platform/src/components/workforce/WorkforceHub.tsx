@@ -7,19 +7,26 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api, AvailabilityWindow, DOW, Employee, Skill, Team, TimeOff, dayYear, when } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
+import { PersonPicker } from '../common/PersonPicker';
 import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Card, Empty, Field, Input, PageHeader, Pill, Select, Table } from '../forecasting/ui';
+import { MultiSelect } from '../common/MultiSelect';
 import { NoticeBanner } from '../forecasting/VersionBar';
 import { EmployeesPanel } from './EmployeesPanel';
 import { AttendancePanel } from './AttendancePanel';
+import { PayrollPanel } from './PayrollPanel';
+import { OrgChartPanel } from './OrgChartPanel';
+import { Confirm } from '../configuration/groups/shared';
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   employees: { title: 'Employees', sub: 'People, contracts and the limits a schedule must respect.' },
   teams: { title: 'Teams', sub: 'How people are organised and who leads them.' },
+  'org-chart': { title: 'Org chart', sub: 'Who reports to whom, from the top down.' },
   skills: { title: 'Skills', sub: 'What people can do, and how well.' },
   availability: { title: 'Availability', sub: 'When each person can and cannot be scheduled.' },
   'time-off': { title: 'Time Off', sub: 'Leave requests. Approved time off is never scheduled over.' },
   attendance: { title: 'Time & Attendance', sub: 'Punches compared against the published schedule, and the payroll export.' },
+  payroll: { title: 'Payroll', sub: 'Turn a pay period into pay codes, check it, approve it and export it for payroll.' },
 };
 
 export const WorkforceHub: React.FC<{ activeSubSection?: string }> = ({ activeSubSection = 'employees' }) => {
@@ -28,7 +35,7 @@ export const WorkforceHub: React.FC<{ activeSubSection?: string }> = ({ activeSu
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-[#FFFFFF] p-6 space-y-6">
       <PageHeader title={meta.title} sub={meta.sub} />
       <NoticeBanner />
-      {activeSubSection === 'teams' ? <TeamsPanel /> : activeSubSection === 'skills' ? <SkillsPanel /> : activeSubSection === 'availability' ? <AvailabilityPanel /> : activeSubSection === 'time-off' ? <TimeOffPanel /> : activeSubSection === 'attendance' ? <AttendancePanel /> : <EmployeesPanel />}
+      {activeSubSection === 'org-chart' ? <OrgChartPanel /> : activeSubSection === 'teams' ? <TeamsPanel /> : activeSubSection === 'skills' ? <SkillsPanel /> : activeSubSection === 'availability' ? <AvailabilityPanel /> : activeSubSection === 'time-off' ? <TimeOffPanel /> : activeSubSection === 'attendance' ? <AttendancePanel /> : activeSubSection === 'payroll' ? <PayrollPanel /> : <EmployeesPanel />}
     </div>
   );
 };
@@ -38,44 +45,109 @@ export const WorkforceHub: React.FC<{ activeSubSection?: string }> = ({ activeSu
 const TeamsPanel: React.FC = () => {
   const { can, setNotice } = useForecast();
   const [tick, setTick] = useState(0);
-  const teams = useApi<Team[]>('/workforce/teams', [tick]);
-  const emps = useApi<Employee[]>('/workforce/employees');
-  const [f, setF] = useState<{ id: string | null; name: string; description: string; location: string; managerId: string } | null>(null);
+  // teams come a page at a time and can be searched, so a company with thousands of them opens as fast as one with ten
+  const [find, setFind] = useState(''); const [shown, setShown] = useState(100);
+  const teams = useApi<Team[]>(`/workforce/teams?limit=${shown}${find.trim() ? `&q=${encodeURIComponent(find.trim())}` : ''}`, [tick]);
+  const [f, setF] = useState<{ id: string | null; name: string; description: string; location: string; managerId: string; deputyId: string } | null>(null);
   const [error, setError] = useState('');
   const w = can('workforce:write');
+  const [lines, setLines] = useState<Team | null>(null);          // putting everyone in a team under its supervisor
+  const [overwrite, setOverwrite] = useState(false);
+  const [linesError, setLinesError] = useState('');
+  const applyLines = async (reason: string) => {
+    if (!lines) return; setLinesError('');
+    try { const r = await api<{ updated: number }>(`/workforce/teams/${lines.id}/apply-reports-to`, { method: 'POST', body: { reason, overwrite } }); setNotice({ kind: 'ok', text: `${r.updated} ${r.updated === 1 ? 'person now reports' : 'people now report'} to ${lines.managerName}.` }); setLines(null); setOverwrite(false); }
+    catch (e: any) { setLinesError(e.message); }
+  };
   const save = async () => {
     if (!f) return; setError('');
     try {
-      const body = { name: f.name, description: f.description, location: f.location, managerId: f.managerId || null };
+      const body = { name: f.name, description: f.description, location: f.location, managerId: f.managerId || null, deputyId: f.deputyId || null };
       if (f.id) await api(`/workforce/teams/${f.id}`, { method: 'PUT', body }); else await api('/workforce/teams', { method: 'POST', body });
       setF(null); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); }
   };
   const del = async (t: Team) => { if (!confirm(`Delete team “${t.name}”?`)) return; try { await api(`/workforce/teams/${t.id}`, { method: 'DELETE' }); setTick((x) => x + 1); } catch (e: any) { setNotice({ kind: 'err', text: e.message }); } };
   return (
-    <Card title="Teams" actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', description: '', location: '', managerId: '' }); }}><Plus className="w-3.5 h-3.5" />Add team</Btn>}>
+    <Card title="Teams" actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', description: '', location: '', managerId: '', deputyId: '' }); }}><Plus className="w-3.5 h-3.5" />Add team</Btn>}>
       {f && (
-        <div className="border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
           <Field label="Name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
           <Field label="Location"><Input value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} /></Field>
-          <Field label="Lead"><Select value={f.managerId} onChange={(e) => setF({ ...f, managerId: e.target.value })}><option value="">None</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>
-          <Field label="Description"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
-          <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save team</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#C84A4A]">{error}</span>}</div>
+          <Field label="Team lead (supervisor)" hint="Approves and covers this team"><PersonPicker ariaLabel="Team lead" value={f.managerId} statuses="ONBOARDING,ACTIVE,LEAVE" only="supervisor" placeholder="Choose the team lead" onChange={(id) => setF({ ...f, managerId: id })} /></Field>
+          <Field label="Deputy" hint="Covers when the lead is away"><PersonPicker ariaLabel="Deputy" value={f.deputyId} statuses="ONBOARDING,ACTIVE,LEAVE" only="supervisor" placeholder="Choose a deputy (optional)" onChange={(id) => setF({ ...f, deputyId: id })} /></Field>
+          <div className="md:col-span-4"><Field label="Description"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field></div>
+          <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save team</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
-      {teams.data?.length === 0 ? <Empty title="No teams yet">Teams group people under a lead. Create one, then assign people to it.</Empty> : (
-        <Table head={['Team', 'Lead', 'Location', 'People', 'Status', '']} right={[3]}>
+      <div className="max-w-xs"><Input aria-label="Find a team" placeholder="Find a team by name or code" value={find} onChange={(e) => { setFind(e.target.value); setShown(100); }} /></div>
+      {teams.data?.length === 0 ? <Empty title={find.trim() ? 'No team matches that search' : 'No teams yet'}>{find.trim() ? 'Try part of the name.' : 'Teams group people under a team lead. Create one, then assign people to it.'}</Empty> : (
+        <Table head={['Team', 'Team lead', 'Deputy', 'Location', 'People', 'Status', '']} right={[4]}>
           {teams.data?.map((t) => (
             <tr key={t.id}>
-              <td className="p-3"><div className="font-semibold">{t.name}</div><div className="text-[11px] text-[#737373]">{t.description}</div></td>
-              <td className="p-3">{t.managerName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono">{t.memberCount}</td>
+              <td className="p-3"><div className="font-semibold">{t.name}</div><div className="text-[11px] text-[#6B6B6B]">{t.description}</div></td>
+              <td className="p-3">{t.managerName ?? <span className="text-[#B7791F]">None</span>}</td><td className="p-3">{t.deputyName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono">{t.memberCount}</td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '' })}>Edit</button><button aria-label="Delete team" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <>{t.managerId && <button className="text-[12px] underline mr-3" title="Make everyone in the team report to its supervisor" onClick={() => { setLinesError(''); setLines(t); }}>Set reporting lines</button>}<button className="text-[12px] underline mr-3" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '', deputyId: t.deputyId ?? '' })}>Edit</button><button aria-label="Delete team" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
             </tr>
           ))}
         </Table>
       )}
+      {(teams.data?.length ?? 0) >= shown && <button type="button" className="text-[12px] underline" onClick={() => setShown(shown + 200)}>Show more teams</button>}
+      {lines && (
+        <Confirm title={`Put ${lines.name} under ${lines.managerName}`} confirmLabel="Set reporting lines" reason error={linesError} onCancel={() => setLines(null)} onConfirm={applyLines}>
+          <p>Everyone in {lines.name} will report to {lines.managerName}. People who already report to someone are left as they are.</p>
+          <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />Change them too</label>
+        </Confirm>
+      )}
+      <CoverPanel />
     </Card>
+  );
+};
+
+// ---------------------------------------------------------------- cover while a supervisor is away
+
+type Cover = { id: string; fromEmployeeId: string; fromName: string; toEmployeeId: string; toName: string; startsOn: string; endsOn: string; note: string; teams: string[]; active: boolean };
+const CoverPanel: React.FC = () => {
+  const { can, setNotice } = useForecast();
+  const mayAsk = can('workforce:write') || can('requests:approve');
+  const [tick, setTick] = useState(0);
+  const list = useApi<Cover[]>('/workforce/cover', [tick]);
+  const today = new Date().toISOString().slice(0, 10), week = new Date(Date.now() + 6 * 864e5).toISOString().slice(0, 10);
+  const [f, setF] = useState<{ from: string; to: string; startsOn: string; endsOn: string; note: string } | null>(null);
+  const [error, setError] = useState('');
+  const save = async () => {
+    if (!f) return; setError('');
+    try { await api('/workforce/cover', { method: 'POST', body: { fromEmployeeId: f.from, toEmployeeId: f.to, startsOn: f.startsOn, endsOn: f.endsOn, note: f.note } }); setF(null); setTick((t) => t + 1); setNotice({ kind: 'ok', text: 'Cover set. The person covering is told, and decides requests for those teams on those days.' }); }
+    catch (e: any) { setError(e.message); }
+  };
+  const end = async (c: Cover) => { try { await api(`/workforce/cover/${c.id}`, { method: 'DELETE' }); setTick((t) => t + 1); } catch (e: any) { setNotice({ kind: 'err', text: e.message }); } };
+  return (
+    <div className="mt-5 pt-4 border-t border-[#E5E5E0] space-y-3">
+      <div className="flex items-center justify-between gap-2"><div><div className="text-[14px] font-semibold">Cover while a supervisor is away</div><div className="text-[12px] text-[#6B6B6B]">Someone takes over a supervisor's teams between two dates: they are told about requests and can decide them. It ends by itself.</div></div>{mayAsk && !f && <Btn onClick={() => { setError(''); setF({ from: '', to: '', startsOn: today, endsOn: week, note: '' }); }}><Plus className="w-3.5 h-3.5" />Hand over teams</Btn>}</div>
+      {f && (
+        <div className="border border-[#E5E5E0] rounded-lg p-3 grid grid-cols-1 md:grid-cols-4 gap-3 items-start bg-[#FAFAF8]">
+          <Field label="Supervisor going away"><PersonPicker ariaLabel="Supervisor going away" value={f.from} statuses="ONBOARDING,ACTIVE,LEAVE" only="supervisor" onChange={(id) => setF({ ...f, from: id })} /></Field>
+          <Field label="Covered by" hint="Needs a login with the Supervisor role"><PersonPicker ariaLabel="Covered by" value={f.to} statuses="ACTIVE" placeholder="Choose who covers" onChange={(id) => setF({ ...f, to: id })} /></Field>
+          <Field label="From"><Input type="date" value={f.startsOn} onChange={(e) => setF({ ...f, startsOn: e.target.value })} /></Field>
+          <Field label="To"><Input type="date" value={f.endsOn} min={f.startsOn} onChange={(e) => setF({ ...f, endsOn: e.target.value })} /></Field>
+          <div className="md:col-span-4"><Field label="Note (optional)"><Input value={f.note} maxLength={200} onChange={(e) => setF({ ...f, note: e.target.value })} placeholder="For example: annual leave" /></Field></div>
+          <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.from || !f.to || !f.startsOn || !f.endsOn} onClick={save}>Set cover</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
+        </div>
+      )}
+      {list.data && list.data.length === 0 && !f && <p className="text-[12px] text-[#6B6B6B]">No cover set.</p>}
+      {list.data && list.data.length > 0 && (
+        <Table head={['Supervisor', 'Covered by', 'Teams', 'From', 'To', 'Note', '']}>
+          {list.data.map((c) => (
+            <tr key={c.id}>
+              <td className="p-3 font-medium">{c.fromName}</td><td className="p-3">{c.toName} {c.active && <Pill tone="good">Covering now</Pill>}</td><td className="p-3 text-[12px]">{c.teams.join(', ')}</td>
+              <td className="p-3 font-mono text-[12px]">{c.startsOn}</td><td className="p-3 font-mono text-[12px]">{c.endsOn}</td><td className="p-3 text-[12px] text-[#6B6B6B]">{c.note}</td>
+              <td className="p-3 text-right">{mayAsk && <button className="text-[12px] underline" onClick={() => end(c)}>{c.active ? 'End now' : 'Cancel'}</button>}</td>
+            </tr>
+          ))}
+        </Table>
+      )}
+    </div>
   );
 };
 
@@ -105,16 +177,16 @@ const SkillsPanel: React.FC = () => {
           <Field label="Category"><Select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value as Skill['category'] })}>{['CHANNELS', 'LANGUAGES', 'PRODUCTS', 'TIERS'].map((c) => <option key={c} value={c}>{c[0] + c.slice(1).toLowerCase()}</option>)}</Select></Field>
           <Field label="Importance"><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as Skill['type'] })}>{['CORE', 'SECONDARY', 'SPECIALTY'].map((c) => <option key={c} value={c}>{c[0] + c.slice(1).toLowerCase()}</option>)}</Select></Field>
           <Field label="Certification"><Select value={f.requiresCertification ? 'y' : 'n'} onChange={(e) => setF({ ...f, requiresCertification: e.target.value === 'y' })}><option value="n">Not required</option><option value="y">Required</option></Select></Field>
-          <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save skill</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#C84A4A]">{error}</span>}</div>
+          <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save skill</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
       {skills.data?.length === 0 ? <Empty title="No skills yet">Skills describe what people can handle, such as a product line, a language or a tier.</Empty> : (
         <Table head={['Skill', 'Category', 'Importance', 'Certification', 'People', '']} right={[4]}>
           {skills.data?.map((s) => (
-            <tr key={s.id}><td className="p-3 font-semibold">{s.name}<div className="text-[11px] font-mono text-[#737373] font-normal">{s.code}</div></td>
+            <tr key={s.id}><td className="p-3 font-semibold">{s.name}<div className="text-[11px] font-mono text-[#6B6B6B] font-normal">{s.code}</div></td>
               <td className="p-3">{s.category[0] + s.category.slice(1).toLowerCase()}</td><td className="p-3">{s.type[0] + s.type.slice(1).toLowerCase()}</td>
               <td className="p-3">{s.requiresCertification ? 'Required' : '–'}</td><td className="p-3 text-right font-mono">{s.holders}</td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => setF({ id: s.id, name: s.name, category: s.category, type: s.type, requiresCertification: s.requiresCertification })}>Edit</button><button aria-label="Delete skill" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(s)}><Trash2 className="w-4 h-4 inline" /></button></>}</td></tr>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => setF({ id: s.id, name: s.name, category: s.category, type: s.type, requiresCertification: s.requiresCertification })}>Edit</button><button aria-label="Delete skill" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(s)}><Trash2 className="w-4 h-4 inline" /></button></>}</td></tr>
           ))}
         </Table>
       )}
@@ -126,10 +198,16 @@ const SkillsPanel: React.FC = () => {
 
 const AvailabilityPanel: React.FC = () => {
   const { can, setNotice } = useForecast();
-  const emps = useApi<Employee[]>('/workforce/employees?status=ACTIVE');
   const [empId, setEmpId] = useState('');
+  const [teamId, setTeamId] = useState('');                    // narrows the list, and lets the planner step through the team one person at a time
   const [tick, setTick] = useState(0);
   const loaded = useApi<AvailabilityWindow[]>(empId ? `/workforce/employees/${empId}/availability` : null, [tick]);
+  const teams = useApi<Team[]>('/workforce/teams?fields=pick');
+  const crew = useApi<Employee[]>(teamId ? `/workforce/employees?teamId=${teamId}&status=ACTIVE&sort=name&limit=500` : null, []);
+  const everyone = useApi<{ employeeId: string }[]>(teamId ? '/workforce/availability' : null, [tick]);
+  const at = crew.data ? crew.data.findIndex((p) => p.id === empId) : -1;
+  const withRows = new Set((everyone.data ?? []).map((r) => r.employeeId));
+  const unset = crew.data ? crew.data.filter((p) => !withRows.has(p.id)).length : 0;
   const [rows, setRows] = useState<AvailabilityWindow[]>([]);
   const [error, setError] = useState('');
   useEffect(() => { setRows(loaded.data ?? []); }, [loaded.data]);
@@ -137,26 +215,39 @@ const AvailabilityPanel: React.FC = () => {
   const upd = (i: number, p: Partial<AvailabilityWindow>) => setRows((r) => r.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const save = async () => {
     setError('');
-    try { await api(`/workforce/employees/${empId}/availability`, { method: 'PUT', body: { windows: rows.map(({ id, ...r }) => r) } }); setNotice({ kind: 'ok', text: 'Availability saved. New schedules will follow it.' }); setTick((t) => t + 1); }
-    catch (e: any) { setError(e.message); }
+    try { await api(`/workforce/employees/${empId}/availability`, { method: 'PUT', body: { windows: rows.map(({ id, ...r }) => r) } }); setNotice({ kind: 'ok', text: 'Availability saved. New schedules will follow it.' }); setTick((t) => t + 1); return true; }
+    catch (e: any) { setError(e.message); return false; }
   };
+  const step = (d: number) => { const next = crew.data?.[at + d]; if (next) setEmpId(next.id); };
+  const saveAndNext = async () => { if (await save()) step(1); };
   return (
     <Card title="Weekly availability" sub="With nothing entered, a person can work any time a shift template allows. “Only available” narrows a day to those hours; “Unavailable” removes hours; “Prefer” is a wish the scheduler tries to honour.">
-      <div className="max-w-sm"><Field label="Employee"><Select value={empId} onChange={(e) => setEmpId(e.target.value)}><option value="">Choose a person…</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name} ({e.employeeNumber})</option>)}</Select></Field></div>
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="w-56"><Field label="Team" hint="Optional: step through one team"><Select value={teamId} onChange={(e) => { setTeamId(e.target.value); setEmpId(''); }}><option value="">Everyone</option>{teams.data?.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.memberCount})</option>)}</Select></Field></div>
+        <div className="w-full max-w-sm"><Field label="Employee"><PersonPicker ariaLabel="Employee" value={empId} status="ACTIVE" teamId={teamId || undefined} placeholder="Choose a person" onChange={(id) => setEmpId(id)} /></Field></div>
+        {teamId && crew.data && (
+          <div className="pt-[22px] flex items-center gap-2 text-[12px] text-[#6B6B6B]">
+            <Btn aria-label="Previous person" disabled={at <= 0} onClick={() => step(-1)}>Previous</Btn>
+            <Btn aria-label="Next person" disabled={at < 0 || at >= crew.data.length - 1} onClick={() => step(1)}>Next</Btn>
+            <span>{at >= 0 ? `Person ${at + 1} of ${crew.data.length}` : `${crew.data.length} people`} · {crew.data.length - unset} of {crew.data.length} have availability entered</span>
+          </div>
+        )}
+      </div>
       {empId && (
         <div className="space-y-3">
-          {rows.length === 0 && <p className="text-[12px] text-[#737373]">No restrictions: available whenever a template allows.</p>}
+          <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-1.5"><span className="text-[12px] font-semibold text-[#6B6B6B]">Editing availability{at >= 0 && crew.data ? ` · person ${at + 1} of ${crew.data.length}` : ''}</span><button type="button" className="text-[12px] font-semibold text-[#6B6B6B] hover:text-[#171717]" onClick={() => setEmpId('')}>Close ×</button></div>
+          {rows.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No restrictions: available whenever a template allows.</p>}
           {rows.map((r, i) => (
             <div key={i} className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
               <Field label="Day"><Select disabled={!w} value={r.dayOfWeek} onChange={(e) => upd(i, { dayOfWeek: Number(e.target.value) })}>{DOW.map((d, n) => <option key={d} value={n}>{d}</option>)}</Select></Field>
               <Field label="From"><Input disabled={!w} type="time" step={900} value={r.startTime} onChange={(e) => upd(i, { startTime: e.target.value })} /></Field>
               <Field label="To"><Input disabled={!w} type="time" step={900} value={r.endTime === '24:00' ? '23:59' : r.endTime} onChange={(e) => upd(i, { endTime: e.target.value === '23:59' ? '24:00' : e.target.value })} /></Field>
               <div className="md:col-span-2"><Field label="Meaning"><Select disabled={!w} value={r.kind} onChange={(e) => upd(i, { kind: e.target.value as AvailabilityWindow['kind'] })}><option value="AVAILABLE">Only available in this window</option><option value="UNAVAILABLE">Unavailable</option><option value="PREFERRED">Prefer to work</option></Select></Field></div>
-              {w && <button aria-label="Remove window" className="pb-2 text-[#737373] hover:text-[#C84A4A]" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
+              {w && <button aria-label="Remove window" className="pb-2 text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
             </div>
           ))}
           {error && <Banner kind="err">{error}</Banner>}
-          {w && <div className="flex gap-2"><Btn onClick={() => setRows((r) => [...r, { dayOfWeek: 0, startTime: '09:00', endTime: '17:00', kind: 'UNAVAILABLE' }])}><Plus className="w-3.5 h-3.5" />Add window</Btn><Btn variant="primary" onClick={save}>Save availability</Btn></div>}
+          {w && <div className="flex gap-2"><Btn onClick={() => setRows((r) => [...r, { dayOfWeek: 0, startTime: '09:00', endTime: '17:00', kind: 'UNAVAILABLE' }])}><Plus className="w-3.5 h-3.5" />Add window</Btn><Btn variant="primary" onClick={() => void save()}>Save availability</Btn>{teamId && at >= 0 && at < (crew.data?.length ?? 0) - 1 && <Btn onClick={saveAndNext}>Save and next person</Btn>}</div>}
         </div>
       )}
     </Card>
@@ -170,9 +261,8 @@ const STATUS_TONE = { REQUESTED: 'warn', APPROVED: 'good', REJECTED: 'bad', CANC
 const TimeOffPanel: React.FC = () => {
   const { can, setNotice } = useForecast();
   const [tick, setTick] = useState(0);
-  const [status, setStatus] = useState('');
-  const list = useApi<TimeOff[]>(`/workforce/time-off${status ? `?status=${status}` : ''}`, [tick]);
-  const emps = useApi<Employee[]>('/workforce/employees?status=ACTIVE');
+  const [statuses, setStatuses] = useState<string[]>([]);
+  const list = useApi<TimeOff[]>(`/workforce/time-off${statuses.length ? `?statuses=${statuses.join(',')}` : ''}`, [tick, statuses.join(',')]);
   const [f, setF] = useState<{ employeeId: string; type: string; startDate: string; endDate: string; reason: string; approve: boolean } | null>(null);
   const [error, setError] = useState('');
   const w = can('workforce:write');
@@ -192,31 +282,31 @@ const TimeOffPanel: React.FC = () => {
     { headerName: 'From', field: 'startDate', valueFormatter: (p) => dayYear(p.value) },
     { headerName: 'To', field: 'endDate', valueFormatter: (p) => dayYear(p.value) },
     { headerName: 'Days', field: 'days', type: 'rightAligned', width: 90 },
-    { headerName: 'Status', field: 'status', width: 130, cellRenderer: (p: any) => <Pill tone={STATUS_TONE[p.value as keyof typeof STATUS_TONE]}>{p.value[0] + p.value.slice(1).toLowerCase()}</Pill> },
+    { headerName: 'Status', field: 'status', width: 130, cellRenderer: (p: any) => <span className="flex items-center gap-1 h-full"><Pill tone={STATUS_TONE[p.value as keyof typeof STATUS_TONE]}>{p.value[0] + p.value.slice(1).toLowerCase()}</Pill>{p.data?.escalatedAt && p.value === 'REQUESTED' && <Pill tone="warn" title="Waited longer than the escalation time: the managers have been told">Overdue</Pill>}</span> },
     { headerName: 'Reason / note', field: 'reason', flex: 2, minWidth: 160 },
-    { headerName: 'Decided', valueGetter: (p) => (p.data!.decidedBy ? `${p.data!.decidedBy} · ${when(p.data!.decidedAt)}` : ''), minWidth: 170 },
+    { headerName: 'Decided', valueGetter: (p) => (p.data!.decidedBy ? `${p.data!.decidedBy}${p.data!.decidedLevel ? ` (${p.data!.decidedLevel === 'SUPERVISOR' ? 'supervisor' : 'manager'})` : ''} · ${when(p.data!.decidedAt)}` : ''), minWidth: 200 },
     { headerName: '', width: 190, sortable: false, filter: false, cellRenderer: (p: any) => !w ? null : (
       <span className="flex gap-2 items-center h-full text-[12px]">
-        {p.data.status === 'REQUESTED' && <><button className="font-semibold text-[#2F7D5A] underline" onClick={() => decide(p.data, 'APPROVED')}>Approve</button><button className="font-semibold text-[#C84A4A] underline" onClick={() => decide(p.data, 'REJECTED')}>Reject</button></>}
-        {(p.data.status === 'REQUESTED' || p.data.status === 'APPROVED') && <button className="underline text-[#737373]" onClick={() => decide(p.data, 'CANCELLED')}>Cancel</button>}
+        {p.data.status === 'REQUESTED' && <><button className="font-semibold text-[#2A7553] underline" onClick={() => decide(p.data, 'APPROVED')}>Approve</button><button className="font-semibold text-[#BC3F3F] underline" onClick={() => decide(p.data, 'REJECTED')}>Reject</button></>}
+        {(p.data.status === 'REQUESTED' || p.data.status === 'APPROVED') && <button className="underline text-[#6B6B6B]" onClick={() => decide(p.data, 'CANCELLED')}>Cancel</button>}
       </span>) },
   ], [w]);
 
   return (
     <Card title="Time off" sub="Approved time off blocks scheduling for those days. Requests wait for a decision."
       actions={<>
-        <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto" aria-label="Status"><option value="">All requests</option><option value="REQUESTED">Waiting</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option></Select>
+        <MultiSelect ariaLabel="Status" allLabel="All requests" noun={['status', 'statuses']} value={statuses} onChange={setStatuses} options={[{ value: 'REQUESTED', label: 'Waiting' }, { value: 'APPROVED', label: 'Approved' }, { value: 'REJECTED', label: 'Rejected' }, { value: 'CANCELLED', label: 'Cancelled' }]} />
         {w && <Btn variant="primary" onClick={() => { setError(''); setF({ employeeId: '', type: 'VACATION', startDate: '', endDate: '', reason: '', approve: false }); }}><Plus className="w-3.5 h-3.5" />New request</Btn>}
       </>}>
       {f && (
         <div className="border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-          <div className="md:col-span-2"><Field label="Employee"><Select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })}><option value="">Choose…</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field></div>
+          <div className="md:col-span-2"><Field label="Employee"><PersonPicker ariaLabel="Employee" value={f.employeeId} status="ACTIVE" placeholder="Choose: type a name or number" onChange={(id) => setF({ ...f, employeeId: id })} /></Field></div>
           <Field label="Type"><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>{['VACATION', 'SICK', 'PERSONAL', 'HOLIDAY', 'TRAINING', 'LEAVE', 'OTHER'].map((t) => <option key={t} value={t}>{t[0] + t.slice(1).toLowerCase()}</option>)}</Select></Field>
           <Field label="From"><Input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate || e.target.value })} /></Field>
           <Field label="To"><Input type="date" min={f.startDate} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></Field>
           <Field label="Decision"><Select value={f.approve ? 'y' : 'n'} onChange={(e) => setF({ ...f, approve: e.target.value === 'y' })}><option value="n">Leave for approval</option><option value="y">Approve now</option></Select></Field>
           <div className="md:col-span-6"><Field label="Reason (optional)"><Input value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
-          <div className="md:col-span-6 flex items-center gap-2"><Btn variant="primary" disabled={!f.employeeId || !f.startDate || !f.endDate} onClick={create}>Save</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#C84A4A]">{error}</span>}</div>
+          <div className="md:col-span-6 flex items-center gap-2"><Btn variant="primary" disabled={!f.employeeId || !f.startDate || !f.endDate} onClick={create}>Save</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
       {list.data?.length === 0 ? <Empty title="No time-off requests">Requests and approved leave appear here.</Empty> : <Grid<TimeOff> rowData={list.data ?? []} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true }} loading={list.loading} height={420} />}

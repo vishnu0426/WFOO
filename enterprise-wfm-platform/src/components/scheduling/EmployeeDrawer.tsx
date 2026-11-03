@@ -3,8 +3,8 @@
  * proficiency, and the weekly schedule distribution (any week, past or future).
  */
 import React, { useEffect, useState } from 'react';
-import { addDays, DOW, Employee } from '../../services/api';
-import { useApi } from '../forecasting/hooks';
+import { addDays, DOW, Employee, weekFloor } from '../../services/api';
+import { useApi, usePayWeek } from '../forecasting/hooks';
 
 export type HistoryShift = {
   id: string; day: string; startTime: string; endTime: string; startSlot: number; lengthSlots: number; templateName: string | null; source: string;
@@ -21,7 +21,8 @@ export const EmployeeDrawer: React.FC<{
 }> = ({ employee, currentVersionId, periodStart, periodEnd, day, onClose }) => {
   const [anchor, setAnchor] = useState(day);
   useEffect(() => setAnchor(day), [day, employee?.id]);
-  const monday = addDays(anchor, -dowOf(anchor));
+  const weekStart = usePayWeek(employee?.primaryGroupId);   // the week this person is paid by
+  const monday = weekFloor(anchor, weekStart);              // first day of that pay week (a Monday unless the group says otherwise)
   const sunday = addDays(monday, 6);
   const history = useApi<HistoryShift[]>(employee ? `/scheduling/employees/${employee.id}/shifts?from=${monday}&to=${sunday}` : null, [employee?.id, monday]);
   if (!employee) return null;
@@ -47,13 +48,13 @@ export const EmployeeDrawer: React.FC<{
         <div className="w-10 h-10 rounded-full bg-[#171717] text-white flex items-center justify-center text-[13px] font-semibold">{initials}</div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold truncate">{employee.name}</div>
-          <div className="text-[12px] text-[#737373] font-mono">EMP-{employee.employeeNumber} · {employee.teamName ?? 'No team'}</div>
+          <div className="text-[12px] text-[#6B6B6B] font-mono">EMP-{employee.employeeNumber} · {employee.teamName ?? 'No team'}</div>
         </div>
-        <button aria-label="Close" className="text-[#737373] hover:text-[#171717] text-[18px] leading-none px-2" onClick={onClose}>×</button>
+        <button aria-label="Close" className="text-[#6B6B6B] hover:text-[#171717] text-[18px] leading-none px-2" onClick={onClose}>×</button>
       </div>
 
       <section className="p-4 space-y-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373]">Employment metrics</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Employment metrics</div>
         <div className="grid grid-cols-2 gap-2">
           <Metric label="Contract" value={`${employee.weeklyContractHours}h/week`} />
           <Metric label="Scheduled this week" value={`${scheduled.toFixed(1)}h`} tone={scheduled > employee.maxWeeklyHours ? 'bad' : undefined} />
@@ -63,19 +64,19 @@ export const EmployeeDrawer: React.FC<{
       </section>
 
       <section className="p-4 space-y-2 border-t border-[#E5E5E0]">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373]">Skills & proficiencies</div>
-        {employee.skills.length === 0 && <div className="text-[12px] text-[#737373]">No skills recorded yet.</div>}
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Skills & proficiencies</div>
+        {employee.skills.length === 0 && <div className="text-[12px] text-[#6B6B6B]">No skills recorded yet.</div>}
         {employee.skills.map((s) => (
           <div key={s.skillId} className="flex items-center justify-between rounded-md border border-[#E5E5E0] px-3 py-2 text-[13px]">
             <span>{s.name}</span>
-            <span className="font-semibold">Level {s.proficiency} <span className="text-[#737373] font-normal">({PROF[s.proficiency] ?? '—'})</span></span>
+            <span className="font-semibold">Level {s.proficiency} <span className="text-[#6B6B6B] font-normal">({PROF[s.proficiency] ?? '—'})</span></span>
           </div>
         ))}
       </section>
 
       <section className="p-4 space-y-2 border-t border-[#E5E5E0]">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373]">Weekly schedule distribution</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Weekly schedule distribution</div>
           <div className="flex items-center gap-1 text-[12px]">
             <button className="px-2 py-0.5 rounded border border-[#E5E5E0] hover:bg-[#FAFAF8]" onClick={() => setAnchor(addDays(monday, -7))}>‹</button>
             <button className="px-2 py-0.5 rounded border border-[#E5E5E0] hover:bg-[#FAFAF8]" onClick={() => setAnchor(day)}>Today</button>
@@ -88,17 +89,17 @@ export const EmployeeDrawer: React.FC<{
             const isToday = d === day;
             return (
               <div key={d} className={`flex items-center justify-between px-3 py-2.5 ${isToday ? 'bg-[#EAF5EF]' : ''}`}>
-                <span className={isToday ? 'font-semibold text-[#2F7D5A]' : dayShifts.length ? 'text-[#171717]' : 'text-[#737373]'}>
+                <span className={isToday ? 'font-semibold text-[#2A7553]' : dayShifts.length ? 'text-[#171717]' : 'text-[#6B6B6B]'}>
                   {DOW[dowOf(d)]}, {new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}{isToday ? ' (Today)' : ''}
                 </span>
                 {dayShifts.length
-                  ? <span className={`font-mono ${isToday ? 'font-bold text-[#2F7D5A]' : ''}`}>{dayShifts.map((s) => `${s.startTime} – ${s.endTime}`).join(', ')}</span>
-                  : <span className="text-[#737373]">Rest Day</span>}
+                  ? <span className={`font-mono ${isToday ? 'font-bold text-[#2A7553]' : ''}`}>{dayShifts.map((s) => `${s.startTime} – ${s.endTime}`).join(', ')}</span>
+                  : <span className="text-[#6B6B6B]">Rest Day</span>}
               </div>
             );
           })}
         </div>
-        {history.loading && <div className="text-[12px] text-[#737373]">Loading…</div>}
+        {history.loading && <div className="text-[12px] text-[#6B6B6B]">Loading…</div>}
       </section>
     </aside>
   );
@@ -106,7 +107,7 @@ export const EmployeeDrawer: React.FC<{
 
 const Metric: React.FC<{ label: string; value: string; tone?: 'good' | 'bad' }> = ({ label, value, tone }) => (
   <div className="rounded-md border border-[#E5E5E0] p-3">
-    <div className="text-[11px] text-[#737373]">{label}</div>
-    <div className={`text-[14px] font-semibold ${tone === 'bad' ? 'text-[#C84A4A]' : tone === 'good' ? 'text-[#2F7D5A]' : ''}`}>{value}</div>
+    <div className="text-[11px] text-[#6B6B6B]">{label}</div>
+    <div className={`text-[14px] font-semibold ${tone === 'bad' ? 'text-[#BC3F3F]' : tone === 'good' ? 'text-[#2A7553]' : ''}`}>{value}</div>
   </div>
 );

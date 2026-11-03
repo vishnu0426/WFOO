@@ -8,7 +8,7 @@ const ShiftCard: React.FC<{ title: string; shift: HomeDto['todayShift']; emptyTe
     {shift ? (
       <div>
         <div className="text-[18px] font-semibold text-[#171717]">{hm(shift.startTime)} – {hm(shift.endTime)}</div>
-        <div className="text-[12px] text-[#737373]">{dayLabel(shift.day)}{shift.template ? ` · ${shift.template}` : ''}{shift.overnight ? ' · overnight' : ''}</div>
+        <div className="text-[12px] text-[#6B6B6B]">{dayLabel(shift.day)}{shift.template ? ` · ${shift.template}` : ''}{shift.overnight ? ' · overnight' : ''}</div>
         {shift.activities.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {shift.activities.map((a, i) => (
@@ -17,7 +17,7 @@ const ShiftCard: React.FC<{ title: string; shift: HomeDto['todayShift']; emptyTe
           </div>
         )}
       </div>
-    ) : <div className="text-[13px] text-[#737373]">{emptyText}</div>}
+    ) : <div className="text-[13px] text-[#6B6B6B]">{emptyText}</div>}
   </Card>
 );
 
@@ -38,7 +38,7 @@ export const Home: React.FC<{ name: string; onNavigate: (tab: 'requests' | 'sche
     <div className="space-y-5">
       <div>
         <div className="text-[20px] font-semibold text-[#171717]">Hi, {name.split(' ')[0]}</div>
-        <div className="text-[12px] text-[#737373]">{dayLabel(data.today)}</div>
+        <div className="text-[12px] text-[#6B6B6B]">{dayLabel(data.today)}</div>
       </div>
       {data.unreadNotifications > 0 && (
         <button onClick={() => onNavigate('inbox')} className="w-full text-left">

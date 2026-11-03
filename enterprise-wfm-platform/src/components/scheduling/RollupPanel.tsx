@@ -5,8 +5,8 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { dec } from '../../services/api';
-import { useApi } from '../forecasting/hooks';
+import { dec, weekFloor } from '../../services/api';
+import { useApi, usePayWeek } from '../forecasting/hooks';
 import { Banner, Busy, Card, Empty, Field, Input, Kpi, KpiRow, Pill, Select } from '../forecasting/ui';
 
 type Day = { day: string; requiredHours: number; scheduledHours: number; coveragePercent: number; underIntervals: number; available: number };
@@ -15,14 +15,15 @@ type G = { groupId: string; groupName: string; siteName: string; timezone: strin
 type Site = { siteName: string; timezone: string; groups: string[]; requiredHours: number; scheduledHours: number; coveragePercent: number; series: Series | null };
 type Roll = { from: string; to: string; day: string | null; total: { requiredHours: number; scheduledHours: number; coveragePercent: number }; sites: Site[]; groups: G[] };
 
-const monday = (d: Date) => { const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
 const plus = (s: string, n: number) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const tone = (p: number) => (p >= 95 ? 'bg-[#EAF5EF] text-[#2F7D5A]' : p >= 85 ? 'bg-[#FFF5DD] text-[#B7791F]' : 'bg-[#FCEBEC] text-[#C84A4A]');
+const tone = (p: number) => (p >= 95 ? 'bg-[#EAF5EF] text-[#2A7553]' : p >= 85 ? 'bg-[#FFF5DD] text-[#8F6200]' : 'bg-[#FCEBEC] text-[#BC3F3F]');
 
 export const RollupPanel: React.FC = () => {
-  const [from, setFrom] = useState(monday(new Date()));
+  const weekStart = usePayWeek(null);                      // the company's pay week: these sites span groups
+  const [picked, setPicked] = useState<string | null>(null);
+  const from = weekFloor(picked ?? new Date(), weekStart);
   const to = plus(from, 6);
-  const [day, setDay] = useState(plus(monday(new Date()), 1));
+  const [day, setDay] = useState('');
   const [site, setSite] = useState('');
   const r = useApi<Roll>(`/scheduling/rollup?from=${from}&to=${to}&day=${day >= from && day <= to ? day : from}`);
   const data = r.data;
@@ -39,7 +40,7 @@ export const RollupPanel: React.FC = () => {
     <div className="space-y-6">
       <Card title="Multi-site view" sub="Published schedules for the week, by site and group. Hours are worked out from each group's published forecast; the chart puts every site on one clock (UTC)."
         actions={<div className="flex flex-wrap items-center gap-3">
-          <Field label="Week starting"><Input type="date" value={from} onChange={(e) => e.target.value && setFrom(monday(new Date(e.target.value + 'T00:00:00')))} /></Field>
+          <Field label="Week starting"><Input type="date" value={from} onChange={(e) => e.target.value && setPicked(e.target.value)} /></Field>
           <Field label="Chart day"><Select value={data?.day ?? day} onChange={(e) => setDay(e.target.value)}>{days.map((d) => <option key={d} value={d}>{new Date(d + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}</Select></Field>
         </div>}>
         {r.loading && !data && <Busy text="Reading every published schedule…" />}
@@ -57,7 +58,7 @@ export const RollupPanel: React.FC = () => {
               {data.sites.map((s) => (
                 <button key={s.siteName} onClick={() => setSite(site === s.siteName ? '' : s.siteName)} className={`text-left p-3 rounded-lg border ${site === s.siteName ? 'border-[#171717] bg-[#FAFAF8]' : 'border-[#E5E5E0] hover:bg-[#FAFAF8]'}`}>
                   <div className="flex items-center justify-between gap-2"><span className="font-semibold text-[14px]">{s.siteName}</span><span className={`px-2 py-0.5 rounded text-[12px] font-semibold ${tone(s.coveragePercent)}`}>{dec(s.coveragePercent)}%</span></div>
-                  <div className="text-[11px] text-[#737373] mt-1">{s.timezone} · {s.groups.join(', ')}</div>
+                  <div className="text-[11px] text-[#6B6B6B] mt-1">{s.timezone} · {s.groups.join(', ')}</div>
                   <div className="text-[12px] text-[#525252] mt-1">{dec(s.scheduledHours, 0)} of {dec(s.requiredHours, 0)} hours</div>
                 </button>
               ))}
@@ -86,20 +87,20 @@ export const RollupPanel: React.FC = () => {
         <Card title="Coverage by group and day" sub="Share of the forecast that is covered. Below each figure, how many people are free that day and could be asked to cover (not working for any group, not on time off).">
           <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
             <table className="w-full text-[13px]">
-              <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+              <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
                 <tr><th className="p-3 text-left">Group</th>{days.map((d) => <th key={d} className="p-3 text-center">{new Date(d + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', day: 'numeric' })}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-[#E5E5E0]">
                 {data.groups.filter((g) => !site || g.siteName === site).map((g) => (
                   <tr key={g.groupId}>
-                    <td className="p-3"><div className="font-semibold">{g.groupName}</div><div className="text-[11px] text-[#737373]">{g.siteName} · {g.timezone}</div></td>
-                    {days.map((d) => { const x = g.days.find((y) => y.day === d); return <td key={d} className="p-2 text-center">{x ? <div><span className={`inline-block px-2 py-0.5 rounded text-[12px] font-semibold ${tone(x.coveragePercent)}`}>{dec(x.coveragePercent, 0)}%</span><div className="text-[11px] text-[#737373] mt-0.5">{x.available} free</div></div> : <span className="text-[#A3A3A3]">–</span>}</td>; })}
+                    <td className="p-3"><div className="font-semibold">{g.groupName}</div><div className="text-[11px] text-[#6B6B6B]">{g.siteName} · {g.timezone}</div></td>
+                    {days.map((d) => { const x = g.days.find((y) => y.day === d); return <td key={d} className="p-2 text-center">{x ? <div><span className={`inline-block px-2 py-0.5 rounded text-[12px] font-semibold ${tone(x.coveragePercent)}`}>{dec(x.coveragePercent, 0)}%</span><div className="text-[11px] text-[#6B6B6B] mt-0.5">{x.available} free</div></div> : <span className="text-[#6B6B6B]">–</span>}</td>; })}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="flex gap-2 text-[11px] text-[#737373]"><Pill tone="good">95% or more</Pill><Pill tone="warn">85% to 95%</Pill><Pill tone="bad">under 85%</Pill></div>
+          <div className="flex gap-2 text-[11px] text-[#6B6B6B]"><Pill tone="good">95% or more</Pill><Pill tone="warn">85% to 95%</Pill><Pill tone="bad">under 85%</Pill></div>
         </Card>
       )}
     </div>

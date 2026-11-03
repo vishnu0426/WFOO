@@ -93,12 +93,12 @@ export const TemplatesPanel: React.FC = () => {
           {list.data?.map((t) => (
             <tr key={t.id}>
               <td className="p-3 font-semibold">{t.name}</td>
-              <td className="p-3 font-mono text-[12px]">{t.earliestStart}–{t.latestStart} <span className="text-[#737373]">every {t.startStepMinutes}m</span></td>
+              <td className="p-3 font-mono text-[12px]">{t.earliestStart}–{t.latestStart} <span className="text-[#6B6B6B]">every {t.startStepMinutes}m</span></td>
               <td className="p-3">{t.minDurationHours ? `${t.minDurationHours}–${t.durationHours}h` : `${t.durationHours}h`}</td><td className="p-3">{t.minDurationHours && t.paidHoursMin != null ? `${t.paidHoursMin}–${t.paidHours}h` : `${t.paidHours}h`}</td>
               <td className="p-3 text-[12px]">{t.lengthRules?.length ? `${t.lengthRules.length} rules by length` : `${t.mealMinutes ? `${t.mealMinutes}m meal` : 'no meal'} · ${t.breakCount}×${t.breakMinutes}m`}{t.mealPaid ? ' · paid meal' : ''}</td>
-              <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}{t.dayWindows && Object.keys(t.dayWindows).length ? <span className="text-[#737373]"> · own times on {Object.keys(t.dayWindows).length}</span> : null}{t.groupIds || t.employmentTypes || t.skillIds ? <span className="text-[#737373]"> · limited</span> : null}{t.effectiveFrom || t.effectiveTo ? <span className="text-[#737373]"> · {t.effectiveFrom ?? '…'} to {t.effectiveTo ?? '…'}</span> : null}</td>
+              <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}{t.dayWindows && Object.keys(t.dayWindows).length ? <span className="text-[#6B6B6B]"> · own times on {Object.keys(t.dayWindows).length}</span> : null}{t.groupIds || t.employmentTypes || t.skillIds ? <span className="text-[#6B6B6B]"> · limited</span> : null}{t.effectiveFrom || t.effectiveTo ? <span className="text-[#6B6B6B]"> · {t.effectiveFrom ?? '…'} to {t.effectiveTo ?? '…'}</span> : null}</td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formOf(t), id: null, name: `${t.name} copy` }); }}>Copy</button><button aria-label="Delete template" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formOf(t), id: null, name: `${t.name} copy` }); }}>Copy</button><button aria-label="Delete template" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
             </tr>
           ))}
         </Table>
@@ -144,20 +144,20 @@ const ActivityTimeline: React.FC<{
   return (
     <div className="space-y-2">
       <div className="text-[12px] font-semibold">Where meals and breaks sit in the shift</div>
-      <p className="text-[11px] text-[#737373]">Drag onto the bar to anchor it there. Leave unplaced for fully automatic placement.</p>
+      <p className="text-[11px] text-[#6B6B6B]">Drag onto the bar to anchor it there. Leave unplaced for fully automatic placement.</p>
       {items.some((x) => x.start == null) && (
         <div className="flex flex-wrap gap-1.5">
           {items.filter((x) => x.start == null).map((x) => (
             <span key={x.id} draggable onDragStart={() => setDragId(x.id)}
               className="text-[11px] font-medium px-2 py-1 rounded border border-dashed border-[#D6D6D0] bg-white cursor-grab active:cursor-grabbing">
-              {x.label} <span className="text-[#A3A3A3]">(auto, {x.dur}m)</span>
+              {x.label} <span className="text-[#6B6B6B]">(auto, {x.dur}m)</span>
             </span>
           ))}
         </div>
       )}
       <div onDragOver={(e) => e.preventDefault()} onDrop={drop} className="relative h-11 border border-[#E5E5E0] rounded-lg bg-[#FAFAF8]">
         {Array.from({ length: Math.floor(total / 60) + 1 }, (_, h) => (
-          <span key={h} className="absolute top-0.5 text-[9px] text-[#A3A3A3] font-mono -translate-x-1/2" style={{ left: pct(h * 60) }}>{h}h</span>
+          <span key={h} className="absolute top-0.5 text-[9px] text-[#6B6B6B] font-mono -translate-x-1/2" style={{ left: pct(h * 60) }}>{h}h</span>
         ))}
         {items.filter((x) => x.start != null).map((x) => (
           <div key={x.id} draggable onDragStart={() => setDragId(x.id)} title={`${x.label}: ${minToHHMM(x.start!)}, drag to move`}
@@ -195,13 +195,13 @@ const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Fo
   return (
     <div className="border border-[#E5E5E0] rounded-lg">
       <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-[12px] font-semibold" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span>More options: shift lengths, meals by length, times per day, who it is for{used && <span className="ml-2 font-normal text-[#737373]">(in use)</span>}</span><span>{open ? '–' : '+'}</span>
+        <span>More options: shift lengths, meals by length, times per day, who it is for{used && <span className="ml-2 font-normal text-[#6B6B6B]">(in use)</span>}</span><span>{open ? '–' : '+'}</span>
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-5">
           <div className="space-y-2">
             <div className="text-[12px] font-semibold">Shift length</div>
-            <p className="text-[11px] text-[#737373]">Set a shortest length and the scheduler may pick any length from there up to the length above, so a quiet hour need not cost a full shift. Leave it empty for one fixed length.</p>
+            <p className="text-[11px] text-[#6B6B6B]">Set a shortest length and the scheduler may pick any length from there up to the length above, so a quiet hour need not cost a full shift. Leave it empty for one fixed length.</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Field label="Shortest shift (hours)" hint="Empty = fixed length"><Input type="number" min={1} max={14} step={0.25} value={f.minDurationHours ?? ''} onChange={(e) => setF({ ...f, minDurationHours: e.target.value === '' ? null : Number(e.target.value) })} /></Field>
               <Field label="Lengths in steps of"><Select value={f.lengthStepMinutes} onChange={(e) => setF({ ...f, lengthStepMinutes: Number(e.target.value) })}>{[30, 60, 120].map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select></Field>
@@ -211,14 +211,14 @@ const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Fo
 
           <div className="space-y-2">
             <div className="text-[12px] font-semibold">Meal and breaks by shift length</div>
-            <p className="text-[11px] text-[#737373]">For example no meal under 5 hours, one break from 4 hours, a 30-minute meal and two breaks from 7 hours. The rule with the largest “from” not above the shift’s length applies; shorter shifts get none. With no rules, a fixed-length template keeps the meal and breaks above, and a variable-length one scales them.</p>
+            <p className="text-[11px] text-[#6B6B6B]">For example no meal under 5 hours, one break from 4 hours, a 30-minute meal and two breaks from 7 hours. The rule with the largest “from” not above the shift’s length applies; shorter shifts get none. With no rules, a fixed-length template keeps the meal and breaks above, and a variable-length one scales them.</p>
             {f.lengthRules.map((r, i) => (
               <div key={i} className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
                 <Field label="From (hours)"><Input type="number" min={0} max={14} step={0.25} value={r.fromHours} onChange={(e) => setRule(i, { fromHours: Number(e.target.value) })} /></Field>
                 <Field label="Meal (minutes)"><Input type="number" min={0} max={120} step={15} value={r.mealMinutes} onChange={(e) => setRule(i, { mealMinutes: Number(e.target.value) })} /></Field>
                 <Field label="Breaks"><Input type="number" min={0} max={4} value={r.breakCount} onChange={(e) => setRule(i, { breakCount: Number(e.target.value) })} /></Field>
                 <Field label="Break length (minutes)"><Input type="number" min={15} max={60} step={15} value={r.breakMinutes} onChange={(e) => setRule(i, { breakMinutes: Number(e.target.value) })} /></Field>
-                <div><button type="button" className="text-[12px] underline text-[#737373] hover:text-[#C84A4A]" onClick={() => setF({ ...f, lengthRules: f.lengthRules.filter((_, j) => j !== i) })}>Remove</button></div>
+                <div><button type="button" className="text-[12px] underline text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setF({ ...f, lengthRules: f.lengthRules.filter((_, j) => j !== i) })}>Remove</button></div>
               </div>
             ))}
             <Btn onClick={() => setF({ ...f, lengthRules: [...f.lengthRules, { fromHours: f.lengthRules.length ? Math.min(14, f.lengthRules[f.lengthRules.length - 1].fromHours + 2) : 4, mealMinutes: 0, breakCount: 1, breakMinutes: 15 }] })}><Plus className="w-3.5 h-3.5" />Add a rule</Btn>
@@ -226,14 +226,14 @@ const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Fo
 
           <div className="space-y-2">
             <div className="text-[12px] font-semibold">Different start times on some days</div>
-            <p className="text-[11px] text-[#737373]">Tick a day to give it its own start window; other days use the window above. A day only counts if it is ticked under “Days it can be used”.</p>
+            <p className="text-[11px] text-[#6B6B6B]">Tick a day to give it its own start window; other days use the window above. A day only counts if it is ticked under “Days it can be used”.</p>
             <div className="space-y-1.5">
               {DOW.map((d, n) => {
                 const w = f.dayWindows[String(n)];
                 return (
                   <div key={d} className="flex flex-wrap items-center gap-3 text-[13px]">
                     <label className="flex items-center gap-1.5 w-16"><input type="checkbox" checked={!!w} onChange={(e) => setWin(n, e.target.checked ? {} : null)} />{d}</label>
-                    {w && <><Input type="time" step={900} value={w.earliest} onChange={(e) => setWin(n, { earliest: e.target.value })} aria-label={`${d} earliest start`} /><span className="text-[#737373]">to</span><Input type="time" step={900} value={w.latest} onChange={(e) => setWin(n, { latest: e.target.value })} aria-label={`${d} latest start`} /></>}
+                    {w && <><Input type="time" step={900} value={w.earliest} onChange={(e) => setWin(n, { earliest: e.target.value })} aria-label={`${d} earliest start`} /><span className="text-[#6B6B6B]">to</span><Input type="time" step={900} value={w.latest} onChange={(e) => setWin(n, { latest: e.target.value })} aria-label={`${d} latest start`} /></>}
                   </div>
                 );
               })}
@@ -242,17 +242,17 @@ const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Fo
 
           <div className="space-y-2">
             <div className="text-[12px] font-semibold">Who it is offered to</div>
-            <p className="text-[11px] text-[#737373]">Leave everything unticked to offer it to everyone. Tick groups, contract types or skills to limit it; for skills, having any one of those ticked is enough.</p>
+            <p className="text-[11px] text-[#6B6B6B]">Leave everything unticked to offer it to everyone. Tick groups, contract types or skills to limit it; for skills, having any one of those ticked is enough.</p>
             <div>
-              <div className="text-[11px] text-[#737373] mb-1">Contract types</div>
+              <div className="text-[11px] text-[#6B6B6B] mb-1">Contract types</div>
               <div className="flex flex-wrap gap-3 text-[13px]">{(Object.keys(TYPE_LABEL) as EmploymentType[]).map((t) => <label key={t} className="flex items-center gap-1.5"><input type="checkbox" checked={f.employmentTypes.includes(t)} onChange={() => setF({ ...f, employmentTypes: toggle(f.employmentTypes, t) })} />{TYPE_LABEL[t]}</label>)}</div>
             </div>
             {groups.length > 0 && <div>
-              <div className="text-[11px] text-[#737373] mb-1">WFM groups</div>
+              <div className="text-[11px] text-[#6B6B6B] mb-1">WFM groups</div>
               <div className="flex flex-wrap gap-3 text-[13px]">{groups.map((g) => <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={f.groupIds.includes(g.id)} onChange={() => setF({ ...f, groupIds: toggle(f.groupIds, g.id) })} />{g.name}</label>)}</div>
             </div>}
             {skills.length > 0 && <div>
-              <div className="text-[11px] text-[#737373] mb-1">Skills</div>
+              <div className="text-[11px] text-[#6B6B6B] mb-1">Skills</div>
               <div className="flex flex-wrap gap-3 text-[13px]">{skills.map((k) => <label key={k.id} className="flex items-center gap-1.5"><input type="checkbox" checked={f.skillIds.includes(k.id)} onChange={() => setF({ ...f, skillIds: toggle(f.skillIds, k.id) })} />{k.name}</label>)}</div>
             </div>}
           </div>

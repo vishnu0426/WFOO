@@ -87,7 +87,7 @@ export const ActivitiesPanel: React.FC = () => {
   };
 
   const companyCols = useMemo<ColDef<Activity>[]>(() => [
-    { headerName: 'Activity', field: 'name', flex: 1.4, minWidth: 180, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <div className="leading-tight py-1"><div className="font-semibold">{p.data.name}</div><div className="text-[11px] font-mono text-[#737373]">{p.data.code}</div></div> },
+    { headerName: 'Activity', field: 'name', flex: 1.4, minWidth: 180, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <div className="leading-tight py-1"><div className="font-semibold">{p.data.name}</div><div className="text-[11px] font-mono text-[#6B6B6B]">{p.data.code}</div></div> },
     { headerName: 'Type', field: 'category', width: 130, valueFormatter: (p) => ACTIVITY_CATEGORY_LABEL[p.value as Activity['category']] },
     { headerName: 'Label', field: 'shortCode', width: 100, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && swatch(p.data) },
     { headerName: 'Queue work', field: 'countsAsWork', width: 150, editable: w, cellRenderer: 'agCheckboxCellRenderer', cellEditor: 'agCheckboxCellEditor',
@@ -97,18 +97,18 @@ export const ActivitiesPanel: React.FC = () => {
     { headerName: 'Adherence', field: 'ignoreAdherence', width: 130, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <Pill tone={p.data.ignoreAdherence ? 'neutral' : 'good'}>{p.data.ignoreAdherence ? 'Ignored' : 'Tracked'}</Pill> },
     { headerName: 'Paid', field: 'paid', width: 100, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <Pill tone={p.data.paid ? 'good' : 'neutral'}>{p.data.paid ? 'Paid' : 'Unpaid'}</Pill> },
     { headerName: 'Status', field: 'status', width: 110, valueFormatter: (p) => (p.value === 'ACTIVE' ? 'Active' : 'Inactive') },
-    ...(w ? [{ headerName: '', width: 120, sortable: false, filter: false, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <span className="whitespace-nowrap"><button className="text-[12px] underline mr-3" onClick={() => edit(p.data!)}>Edit</button><button className="text-[12px] text-[#737373] hover:text-[#C84A4A]" onClick={() => del(p.data!)}>Delete</button></span> } as ColDef<Activity>] : []),
+    ...(w ? [{ headerName: '', width: 120, sortable: false, filter: false, cellRenderer: (p: ICellRendererParams<Activity>) => p.data && <span className="whitespace-nowrap"><button className="text-[12px] underline mr-3" onClick={() => edit(p.data!)}>Edit</button><button className="text-[12px] text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(p.data!)}>Delete</button></span> } as ColDef<Activity>] : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [w, list.data]);
 
   const groupCols = useMemo<ColDef<GroupActivity>[]>(() => [
-    { headerName: 'Activity', field: 'name', flex: 1.4, minWidth: 180, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <div className="leading-tight py-1"><div className="font-semibold">{p.data.name}</div><div className="text-[11px] font-mono text-[#737373]">{p.data.code}</div></div> },
+    { headerName: 'Activity', field: 'name', flex: 1.4, minWidth: 180, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <div className="leading-tight py-1"><div className="font-semibold">{p.data.name}</div><div className="text-[11px] font-mono text-[#6B6B6B]">{p.data.code}</div></div> },
     { headerName: 'Label', field: 'shortCode', width: 100, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && swatch(p.data) },
     { headerName: 'Used here', field: 'enabled', width: 130, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <Pill tone={p.data.enabled ? 'good' : 'neutral'}>{p.data.enabled ? 'Yes' : 'Switched off'}</Pill> },
     { headerName: 'Shrinkage', field: 'shrinkage', width: 140, valueFormatter: (p) => (p.value ? 'Counts' : 'No') },
     { headerName: 'Paid', field: 'paid', width: 110, valueFormatter: (p) => (p.value ? 'Paid' : 'Unpaid') },
     { headerName: 'Setting', field: 'overridden', width: 140, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <Pill tone={p.data.overridden ? 'warn' : 'neutral'}>{p.data.overridden ? 'This group only' : 'Company'}</Pill> },
-    ...(w ? [{ headerName: '', width: 130, sortable: false, filter: false, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <span className="whitespace-nowrap"><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF(null); setO({ activity: p.data!, enabled: p.data!.enabled, shrinkage: p.data!.overridden && p.data!.shrinkage !== p.data!.companyShrinkage ? (p.data!.shrinkage ? 'yes' : 'no') : 'company', paid: p.data!.overridden && p.data!.paid !== p.data!.companyPaid ? (p.data!.paid ? 'yes' : 'no') : 'company' }); }}>Change</button>{p.data.overridden && <button className="text-[12px] text-[#737373] hover:text-[#171717]" onClick={() => reset(p.data!)}>Reset</button>}</span> } as ColDef<GroupActivity>] : []),
+    ...(w ? [{ headerName: '', width: 130, sortable: false, filter: false, cellRenderer: (p: ICellRendererParams<GroupActivity>) => p.data && <span className="whitespace-nowrap"><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF(null); setO({ activity: p.data!, enabled: p.data!.enabled, shrinkage: p.data!.overridden && p.data!.shrinkage !== p.data!.companyShrinkage ? (p.data!.shrinkage ? 'yes' : 'no') : 'company', paid: p.data!.overridden && p.data!.paid !== p.data!.companyPaid ? (p.data!.paid ? 'yes' : 'no') : 'company' }); }}>Change</button>{p.data.overridden && <button className="text-[12px] text-[#6B6B6B] hover:text-[#171717]" onClick={() => reset(p.data!)}>Reset</button>}</span> } as ColDef<GroupActivity>] : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [w, scope]);
 

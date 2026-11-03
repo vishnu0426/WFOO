@@ -5,9 +5,9 @@
  */
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
-import { api, ShiftTemplate, when } from '../../services/api';
+import { api, dowOfDay, nextWeekStart, ShiftTemplate, WEEKDAY_NAMES, when } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
-import { useApi } from '../forecasting/hooks';
+import { useApi, usePayWeek } from '../forecasting/hooks';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
 
 type Pattern = { id: string; name: string; days: string[]; startTime: string; endTime: string; paidHours: number; capacity: number; templateName: string; firstChoices: number; canHold: number; awarded: number };
@@ -21,13 +21,15 @@ const STATUS: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 'i
 };
 const METHOD: Record<string, string> = { SENIORITY: 'Seniority', LOTTERY: 'Lottery', BALANCED: 'Best overall outcome' };
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const nextMonday = (plusDays: number) => { const d = new Date(); d.setDate(d.getDate() + plusDays); d.setDate(d.getDate() + ((8 - d.getDay()) % 7)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+/** Offsets from the first day of a round that land on Monday to Friday, whatever weekday the round starts on. */
+const weekdayOffsets = (startDow: number) => [0, 1, 2, 3, 4, 5, 6].filter((k) => (startDow + k) % 7 <= 4);
 
 type Draft = { name: string; method: string; periodStart: string; weeks: number; closesAt: string; fillUnranked: boolean; patterns: { name: string; templateId: string; startTime: string; workDays: number[]; capacity: number }[] };
 
 export const BidsPanel: React.FC = () => {
   const { group, can } = useForecast();
   const canEdit = can('schedule:generate');
+  const weekStart = usePayWeek(group?.id);                 // a round runs in whole pay weeks, from the day the group's pay week starts
   const [tick, setTick] = useState(0);
   const rounds = useApi<Round[]>('/scheduling/bids', [tick]);
   const templates = useApi<ShiftTemplate[]>('/scheduling/templates');
@@ -41,7 +43,7 @@ export const BidsPanel: React.FC = () => {
   const [busy, setBusy] = useState(false);
 
   const act = async (fn: () => Promise<void>) => { setBusy(true); setError(''); setNotice(''); try { await fn(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
-  const blank = (): Draft => ({ name: '', method: 'SENIORITY', periodStart: nextMonday(14), weeks: 4, closesAt: '', fillUnranked: true, patterns: [{ name: '', templateId: templates.data?.[0]?.id ?? '', startTime: '08:00', workDays: [0, 1, 2, 3, 4], capacity: 5 }] });
+  const blank = (): Draft => ({ name: '', method: 'SENIORITY', periodStart: nextWeekStart(weekStart, 14), weeks: 4, closesAt: '', fillUnranked: true, patterns: [{ name: '', templateId: templates.data?.[0]?.id ?? '', startTime: '08:00', workDays: weekdayOffsets(weekStart), capacity: 5 }] });
   const create = () => draft && group && act(async () => {
     const r = await api<Round>('/scheduling/bids', { method: 'POST', body: { groupId: group.id, name: draft.name, method: draft.method, periodStart: draft.periodStart, weeks: draft.weeks, fillUnranked: draft.fillUnranked, closesAt: draft.closesAt ? new Date(draft.closesAt).toISOString() : null, patterns: draft.patterns } });
     setDraft(null); setOpen(r.id); setNotice('Round created as a draft. Check the patterns, then open it for bids.');
@@ -70,7 +72,7 @@ export const BidsPanel: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
               <div className="xl:col-span-2"><Field label="Name"><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Winter shift bid" /></Field></div>
               <Field label="Decided by"><Select value={draft.method} onChange={(e) => setDraft({ ...draft, method: e.target.value })}>{Object.entries(METHOD).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
-              <Field label="First Monday" hint="The schedule starts here"><Input type="date" value={draft.periodStart} onChange={(e) => setDraft({ ...draft, periodStart: e.target.value })} /></Field>
+              <Field label={`First ${WEEKDAY_NAMES[weekStart]}`} hint={dowOfDay(draft.periodStart) === weekStart ? 'The schedule starts here' : `Must be a ${WEEKDAY_NAMES[weekStart]}: the day this group's pay week starts`}><Input type="date" value={draft.periodStart} onChange={(e) => setDraft((d) => d && ({ ...d, periodStart: e.target.value, patterns: e.target.value ? d.patterns.map((p) => ({ ...p, workDays: p.workDays.map((k) => (((dowOfDay(d.periodStart) + k - dowOfDay(e.target.value)) % 7) + 7) % 7).sort() })) : d.patterns }))} /></Field>
               <Field label="Weeks"><Input type="number" min={1} max={26} value={draft.weeks} onChange={(e) => setDraft({ ...draft, weeks: Math.max(1, Number(e.target.value)) })} /></Field>
               <Field label="Bidding closes" hint="Empty: you close it yourself"><Input type="datetime-local" value={draft.closesAt} onChange={(e) => setDraft({ ...draft, closesAt: e.target.value })} /></Field>
             </div>
@@ -83,12 +85,12 @@ export const BidsPanel: React.FC = () => {
                   <div className="md:col-span-2"><Field label="Starts"><Input type="time" step={900} value={p.startTime} onChange={(e) => setP(i, { startTime: e.target.value })} /></Field></div>
                   <div className="md:col-span-1"><Field label="Places"><Input type="number" min={1} value={p.capacity} onChange={(e) => setP(i, { capacity: Math.max(1, Number(e.target.value)) })} /></Field></div>
                   <div className="col-span-2 md:col-span-3 flex items-center gap-2">
-                    <div className="flex gap-1">{DAYS.map((d, k) => <button key={d} type="button" onClick={() => toggleDay(i, k)} className={`w-8 h-8 rounded text-[11px] font-semibold border ${p.workDays.includes(k) ? 'bg-[#171717] text-white border-[#171717]' : 'bg-white text-[#737373] border-[#E5E5E0]'}`}>{d[0]}</button>)}</div>
-                    <button aria-label="Remove pattern" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setDraft({ ...draft, patterns: draft.patterns.filter((_, j) => j !== i) })}><Trash2 className="w-4 h-4" /></button>
+                    <div className="flex gap-1">{DAYS.map((_, k) => DAYS[(dowOfDay(draft.periodStart) + k) % 7]).map((d, k) => <button key={d} type="button" onClick={() => toggleDay(i, k)} className={`w-8 h-8 rounded text-[11px] font-semibold border ${p.workDays.includes(k) ? 'bg-[#171717] text-white border-[#171717]' : 'bg-white text-[#6B6B6B] border-[#E5E5E0]'}`}>{d[0]}</button>)}</div>
+                    <button aria-label="Remove pattern" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setDraft({ ...draft, patterns: draft.patterns.filter((_, j) => j !== i) })}><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
               ))}
-              <Btn onClick={() => setDraft({ ...draft, patterns: [...draft.patterns, { name: '', templateId: templates.data?.[0]?.id ?? '', startTime: '08:00', workDays: [0, 1, 2, 3, 4], capacity: 5 }] })}><Plus className="w-3.5 h-3.5" />Add pattern</Btn>
+              <Btn onClick={() => setDraft({ ...draft, patterns: [...draft.patterns, { name: '', templateId: templates.data?.[0]?.id ?? '', startTime: '08:00', workDays: weekdayOffsets(weekStart), capacity: 5 }] })}><Plus className="w-3.5 h-3.5" />Add pattern</Btn>
             </div>
             <label className="flex items-center gap-2 text-[12px] text-[#525252]"><input type="checkbox" checked={draft.fillUnranked} onChange={(e) => setDraft({ ...draft, fillUnranked: e.target.checked })} />People who rank too few patterns get what is left over</label>
             <div className="flex gap-2"><Btn variant="primary" onClick={create} disabled={busy || !valid}>Create round</Btn><Btn onClick={() => setDraft(null)}>Cancel</Btn></div>
@@ -103,11 +105,11 @@ export const BidsPanel: React.FC = () => {
             return (
               <div key={r.id} className="border border-[#E5E5E0] rounded-lg">
                 <button className="w-full p-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-left" onClick={() => { setOpen(open === r.id ? null : r.id); setPreview(null); }}>
-                  {open === r.id ? <ChevronDown className="w-4 h-4 text-[#737373]" /> : <ChevronRight className="w-4 h-4 text-[#737373]" />}
+                  {open === r.id ? <ChevronDown className="w-4 h-4 text-[#6B6B6B]" /> : <ChevronRight className="w-4 h-4 text-[#6B6B6B]" />}
                   <Pill tone={st.tone}>{st.label}</Pill>
                   <span className="font-semibold text-[13px]">{r.name}</span>
                   <span className="text-[12px] text-[#525252]">{r.weeks} wk from {r.periodStart} · {METHOD[r.method]}</span>
-                  <span className="text-[12px] text-[#737373]">{r.submitted} ranked{r.closesAt ? ` · closes ${when(r.closesAt)}` : ''}</span>
+                  <span className="text-[12px] text-[#6B6B6B]">{r.submitted} ranked{r.closesAt ? ` · closes ${when(r.closesAt)}` : ''}</span>
                 </button>
                 {open === r.id && (
                   <div className="p-3 border-t border-[#E5E5E0] space-y-4">
@@ -115,7 +117,7 @@ export const BidsPanel: React.FC = () => {
                       <>
                         <div className="text-[12px] text-[#525252]">{d.submitted} of {d.eligible} eligible people have ranked their choices.</div>
                         <Table head={['Pattern', 'Days', 'Time', 'Paid', 'Places', 'First choice of', 'Can hold it', 'Awarded']} right={[3, 4, 5, 6, 7]}>
-                          {(d.patterns ?? []).map((p) => <tr key={p.id}><td className="p-2.5 font-medium">{p.name}<div className="text-[11px] text-[#737373]">{p.templateName}</div></td><td className="p-2.5">{p.days.join(' ')}</td><td className="p-2.5 font-mono">{p.startTime}–{p.endTime}</td><td className="p-2.5 text-right font-mono">{p.paidHours}h</td><td className="p-2.5 text-right font-mono">{p.capacity}</td><td className="p-2.5 text-right font-mono">{p.firstChoices}</td><td className="p-2.5 text-right font-mono">{p.canHold}</td><td className="p-2.5 text-right font-mono">{d.status === 'AWARDED' ? p.awarded : '–'}</td></tr>)}
+                          {(d.patterns ?? []).map((p) => <tr key={p.id}><td className="p-2.5 font-medium">{p.name}<div className="text-[11px] text-[#6B6B6B]">{p.templateName}</div></td><td className="p-2.5">{p.days.join(' ')}</td><td className="p-2.5 font-mono">{p.startTime}–{p.endTime}</td><td className="p-2.5 text-right font-mono">{p.paidHours}h</td><td className="p-2.5 text-right font-mono">{p.capacity}</td><td className="p-2.5 text-right font-mono">{p.firstChoices}</td><td className="p-2.5 text-right font-mono">{p.canHold}</td><td className="p-2.5 text-right font-mono">{d.status === 'AWARDED' ? p.awarded : '–'}</td></tr>)}
                         </Table>
                         {canEdit && (
                           <div className="flex flex-wrap items-center gap-2">
@@ -141,7 +143,7 @@ export const BidsPanel: React.FC = () => {
                           <>
                             <Banner kind="ok">Awarded. The draft schedule is in Schedule Timeline; review it and publish when it is right.</Banner>
                             <Table head={['Person', 'Pattern', 'Choice']} right={[2]}>
-                              {d.awards!.map((a) => <tr key={a.employeeId}><td className="p-2.5">{a.name} <span className="text-[11px] text-[#737373]">#{a.employeeNumber}</span></td><td className="p-2.5">{a.patternName ?? <span className="text-[#C84A4A]">None could be given</span>}</td><td className="p-2.5 text-right font-mono">{a.rank ?? (a.patternName ? 'left over' : '–')}</td></tr>)}
+                              {d.awards!.map((a) => <tr key={a.employeeId}><td className="p-2.5">{a.name} <span className="text-[11px] text-[#6B6B6B]">#{a.employeeNumber}</span></td><td className="p-2.5">{a.patternName ?? <span className="text-[#BC3F3F]">None could be given</span>}</td><td className="p-2.5 text-right font-mono">{a.rank ?? (a.patternName ? 'left over' : '–')}</td></tr>)}
                             </Table>
                           </>
                         )}

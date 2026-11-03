@@ -47,13 +47,13 @@ describe('employee profile: preferred shift template and single-employee rotatio
   });
 
   it('round-trips a preferred shift template on the employee record', async () => {
-    const set = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { preferredTemplateId: ctx.tpl1.id });
+    const set = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { reason: 'Test change', preferredTemplateId: ctx.tpl1.id });
     assert.equal(set.status, 200, set.text);
     assert.equal(set.json.preferredTemplateId, ctx.tpl1.id);
     assert.equal(set.json.preferredTemplateName, ctx.tpl1.name);
-    const changed = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { preferredTemplateId: ctx.tpl2.id });
+    const changed = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { reason: 'Test change', preferredTemplateId: ctx.tpl2.id });
     assert.equal(changed.json.preferredTemplateId, ctx.tpl2.id);
-    const cleared = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { preferredTemplateId: null });
+    const cleared = await call(admin, 'PUT', `/workforce/employees/${ctx.emp.id}`, { reason: 'Test change', preferredTemplateId: null });
     assert.equal(cleared.json.preferredTemplateId, null);
   });
 

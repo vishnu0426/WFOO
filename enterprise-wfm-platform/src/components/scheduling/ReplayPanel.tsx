@@ -38,9 +38,9 @@ export const ReplayPanel: React.FC<{ versions: ScheduleVersion[]; version: Sched
     <div className="space-y-6">
       <Card title="Schedule version" sub="Pick the version to replay. Only changes made since revision tracking began carry measured numbers."
         actions={<Select value={version?.id ?? ''} onChange={(e) => select(e.target.value)} className="!w-auto" aria-label="Schedule version">{versions.map((v) => <option key={v.id} value={v.id}>{v.name} · {v.status.toLowerCase()}</option>)}</Select>}>
-        {error && <p className="text-[13px] text-[#C84A4A]">{error}</p>}
-        {loading && !data && <p className="text-[13px] text-[#737373]">Loading history…</p>}
-        {data && !revs.length && <p className="text-[13px] text-[#737373]">Nothing has been recorded for this version.</p>}
+        {error && <p className="text-[13px] text-[#BC3F3F]">{error}</p>}
+        {loading && !data && <p className="text-[13px] text-[#6B6B6B]">Loading history…</p>}
+        {data && !revs.length && <p className="text-[13px] text-[#6B6B6B]">Nothing has been recorded for this version.</p>}
       </Card>
 
       {cur && (
@@ -55,7 +55,7 @@ export const ReplayPanel: React.FC<{ versions: ScheduleVersion[]; version: Sched
                 <button onClick={() => { setPlaying(false); setIdx(Math.min(revs.length - 1, idx + 1)); }} className="p-2 rounded border border-[#E5E5E0] bg-white hover:bg-[#F5F5F2]" title="Next step"><FastForward className="w-4 h-4" /></button>
                 <Pill>Step {cur.n} of {revs.length}</Pill>
               </div>
-              <div className="text-[12px] text-[#737373] flex items-center gap-2 font-mono"><Clock className="w-3.5 h-3.5" />{when(cur.at)}</div>
+              <div className="text-[12px] text-[#6B6B6B] flex items-center gap-2 font-mono"><Clock className="w-3.5 h-3.5" />{when(cur.at)}</div>
             </div>
             <input type="range" min={0} max={Math.max(0, revs.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(+e.target.value); }} className="w-full h-2 bg-[#E5E5E0] rounded-lg appearance-none cursor-pointer accent-[#171717]" aria-label="Replay position" />
           </div>
@@ -68,8 +68,8 @@ export const ReplayPanel: React.FC<{ versions: ScheduleVersion[]; version: Sched
                 {cur.reason && <p className="text-[13px] text-[#525252] mt-1 max-w-2xl">Reason given: {cur.reason}</p>}
               </div>
               <div className="text-right">
-                <div className="text-[12px] font-semibold text-[#171717] flex items-center gap-1.5 justify-end"><User className="w-3.5 h-3.5 text-[#737373]" />{cur.actorName}</div>
-                <div className="text-[11px] text-[#737373] font-mono">{cur.actorRole}</div>
+                <div className="text-[12px] font-semibold text-[#171717] flex items-center gap-1.5 justify-end"><User className="w-3.5 h-3.5 text-[#6B6B6B]" />{cur.actorName}</div>
+                <div className="text-[11px] text-[#6B6B6B] font-mono">{cur.actorRole}</div>
               </div>
             </div>
             <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
@@ -96,7 +96,7 @@ export const ReplayPanel: React.FC<{ versions: ScheduleVersion[]; version: Sched
               </div>
             </Card>
           )}
-          {!hasNumbers && <p className="text-[12px] text-[#737373]">This version was changed before results were recorded per step, so only who, when and what are shown.</p>}
+          {!hasNumbers && <p className="text-[12px] text-[#6B6B6B]">This version was changed before results were recorded per step, so only who, when and what are shown.</p>}
 
           <Card title="All steps">
             <Table head={['Step', 'When', 'Who', 'What', 'Reason', 'Coverage']} right={[5]}>
@@ -104,7 +104,7 @@ export const ReplayPanel: React.FC<{ versions: ScheduleVersion[]; version: Sched
                 <tr key={r.n} onClick={() => { setPlaying(false); setIdx(i); }} className={`cursor-pointer hover:bg-[#FAFAF8] ${i === idx ? 'bg-[#FAFAF8]' : ''}`}>
                   <td className="p-3 font-mono">{r.n}</td>
                   <td className="p-3 whitespace-nowrap text-[#525252]">{when(r.at)}</td>
-                  <td className="p-3">{r.actorName}<div className="text-[11px] text-[#737373]">{r.actorRole}</div></td>
+                  <td className="p-3">{r.actorName}<div className="text-[11px] text-[#6B6B6B]">{r.actorRole}</div></td>
                   <td className="p-3"><Pill tone={KIND[r.kind].tone}>{KIND[r.kind].label}</Pill> <span className="ml-1">{r.summary}</span></td>
                   <td className="p-3 text-[#525252]">{r.reason ?? '–'}</td>
                   <td className="p-3 text-right font-mono">{r.coverage == null ? '–' : `${dec(r.coverage)}%`}</td>

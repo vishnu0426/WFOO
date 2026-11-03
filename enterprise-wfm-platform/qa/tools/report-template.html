@@ -1,0 +1,264 @@
+<title>WFM Release Gate</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a left-aligned release-gate dossier — verdict stamp first, then scorecard, defects, evidence. One column, 1120px max, wide tables scroll in place. */
+:root {
+  --paper: #f6f7f9; --sheet: #ffffff; --ink: #151a22; --ink-2: #4a5361; --ink-3: #6b7482; --rule: #dde1e7; --rule-2: #eceff3;
+  --accent: #1f5c99; --accent-soft: #e6eef7;
+  --crit: #a3191b; --crit-bg: #fbe9e8; --high: #b4470c; --high-bg: #fdeee3; --med: #8a6100; --med-bg: #fbf3dc; --low: #3f6b2a; --low-bg: #ebf4e4; --info: #4f5a6b; --info-bg: #eef0f3;
+  --pass: #2f7a3a; --fail: #b3261e;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif; --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0f1318; --sheet: #161b22; --ink: #e8ecf1; --ink-2: #b4bcc8; --ink-3: #8b94a3; --rule: #2a313b; --rule-2: #20262e; --accent: #7fb2e8; --accent-soft: #1b2a3b;
+  --crit: #ff8a80; --crit-bg: #3a1716; --high: #ffab73; --high-bg: #3a2416; --med: #f0c75e; --med-bg: #342a12; --low: #9fd38a; --low-bg: #1d2e17; --info: #b4bcc8; --info-bg: #222932; --pass: #8fd49a; --fail: #ff8a80; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0f1318; --sheet: #161b22; --ink: #e8ecf1; --ink-2: #b4bcc8; --ink-3: #8b94a3; --rule: #2a313b; --rule-2: #20262e; --accent: #7fb2e8; --accent-soft: #1b2a3b;
+  --crit: #ff8a80; --crit-bg: #3a1716; --high: #ffab73; --high-bg: #3a2416; --med: #f0c75e; --med-bg: #342a12; --low: #9fd38a; --low-bg: #1d2e17; --info: #b4bcc8; --info-bg: #222932; --pass: #8fd49a; --fail: #ff8a80; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 40px }
+h1, h2, h3 { font-family: var(--display); font-stretch: 82%; letter-spacing: -0.01em; text-wrap: balance; margin: 0; line-height: 1.12 }
+h1 { font-size: clamp(30px, 5vw, 46px); font-weight: 800 }
+h2 { font-size: 24px; font-weight: 700 }
+h3 { font-size: 17px; font-weight: 700 }
+p { margin: 0; max-width: 72ch }
+.eyebrow { font: 600 11.5px/1 var(--body); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3) }
+.mono, code, .num { font-family: var(--mono); font-variant-numeric: tabular-nums }
+code { font-size: .88em; background: var(--rule-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere }
+a { color: var(--accent) }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+section { display: grid; gap: 16px; min-width: 0 }
+.sec-head { display: grid; gap: 6px; border-top: 2px solid var(--ink); padding-top: 12px }
+.sec-head p { color: var(--ink-2) }
+
+/* header + verdict */
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: start }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); font-size: 13.5px; margin-top: 10px }
+.stamp { border: 3px solid var(--crit); color: var(--crit); padding: 10px 18px 12px; border-radius: 6px; transform: rotate(-2deg); text-align: center; background: var(--sheet); min-width: 190px }
+.stamp.go { border-color: var(--pass); color: var(--pass) }
+.stamp.cond { border-color: var(--high); color: var(--high) }
+.stamp.cond b { font-size: 30px }
+.rt { display: inline-flex; align-items: center; font: 600 11.5px/1 var(--body); padding: 4px 8px; border-radius: 4px; white-space: nowrap; border: 1px solid currentColor }
+.rt-Fixed { color: var(--pass) } .rt-Partly { color: var(--med) } .rt-Still { color: var(--fail) } .rt-New { color: var(--accent) }
+.rtgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border: 1px solid var(--rule); background: var(--sheet); border-radius: 8px }
+.rtgrid .fig { border-right: 1px solid var(--rule-2) }
+.stamp b { display: block; font: 800 40px/1 var(--display); font-stretch: 75%; letter-spacing: .02em }
+.stamp span { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase }
+.lede { font-size: 17px; color: var(--ink); max-width: 80ch }
+.sevrow { display: flex; flex-wrap: wrap; gap: 8px }
+.sev { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 var(--body); padding: 5px 9px; border-radius: 999px; white-space: nowrap }
+.sev i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block }
+.s-Critical { color: var(--crit); background: var(--crit-bg) } .s-High { color: var(--high); background: var(--high-bg) } .s-Medium { color: var(--med); background: var(--med-bg) } .s-Low { color: var(--low); background: var(--low-bg) } .s-Info { color: var(--info); background: var(--info-bg) }
+
+/* figures */
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border: 1px solid var(--rule); background: var(--sheet); border-radius: 8px }
+.fig { padding: 16px 18px; border-right: 1px solid var(--rule-2); display: grid; gap: 4px; align-content: start }
+.fig:last-child { border-right: 0 }
+.fig b { font: 700 28px/1 var(--display); font-stretch: 85% }
+.fig small { color: var(--ink-2); font-size: 12.5px }
+
+/* must-fix */
+.mustfix { display: grid; gap: 0; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet); overflow: hidden }
+.mf { display: grid; grid-template-columns: 74px 92px minmax(0, 1fr); gap: 12px; padding: 11px 16px; border-top: 1px solid var(--rule-2); align-items: baseline }
+.mf:first-child { border-top: 0 }
+.mf .t { font-weight: 600 } .mf .a { color: var(--ink-3); font-size: 12.5px }
+
+/* tables */
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--sheet) }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px }
+th, td { text-align: left; padding: 9px 12px; border-top: 1px solid var(--rule-2); vertical-align: top }
+thead th { border-top: 0; font: 600 11.5px/1.2 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); background: var(--sheet); position: sticky; top: 0 }
+td.n, th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap }
+.ok { color: var(--pass); font-weight: 600 } .bad { color: var(--fail); font-weight: 600 }
+.bar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px; vertical-align: middle; margin-left: 6px; opacity: .75 }
+.bar.warn { background: var(--high) }
+
+/* defects */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.chip { font: 600 12.5px/1 var(--body); border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2); padding: 7px 11px; border-radius: 999px; cursor: pointer }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink) }
+.search { font: 14px var(--body); padding: 7px 11px; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); color: var(--ink); min-width: 0; flex: 1 1 220px; max-width: 340px }
+.defects { display: grid; gap: 8px }
+details.d { background: var(--sheet); border: 1px solid var(--rule); border-left: 4px solid var(--rule); border-radius: 6px }
+details.d.Critical { border-left-color: var(--crit) } details.d.High { border-left-color: var(--high) } details.d.Medium { border-left-color: var(--med) } details.d.Low { border-left-color: var(--low) } details.d.Info { border-left-color: var(--info) }
+details.d summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 70px 86px minmax(0, 1fr) auto; gap: 12px; padding: 11px 14px; align-items: baseline }
+details.d summary::-webkit-details-marker { display: none }
+details.d summary .area { color: var(--ink-3); font-size: 12.5px; text-align: right }
+details.d[open] summary { border-bottom: 1px solid var(--rule-2) }
+.dl { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; padding: 12px 14px 14px; font-size: 13.5px }
+.dl dt { color: var(--ink-3); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px }
+.dl dd { margin: 0; overflow-wrap: anywhere }
+
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+.list { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 90ch }
+.note { color: var(--ink-2); font-size: 13.5px }
+pre { font: 12.5px/1.5 var(--mono); background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; overflow-x: auto; margin: 0 }
+.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px }
+.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--rule) }
+.toc a:hover { color: var(--accent) }
+@media (max-width: 760px) {
+  .top { grid-template-columns: 1fr } .stamp { justify-self: start }
+  .two { grid-template-columns: 1fr }
+  .mf { grid-template-columns: 64px minmax(0, 1fr) } .mf .a { grid-column: 2 }
+  details.d summary { grid-template-columns: 62px minmax(0, 1fr) } details.d summary .sev { grid-column: 2; justify-self: start } details.d summary .area { grid-column: 2; text-align: left }
+  .dl { grid-template-columns: 1fr } .fig { border-right: 0; border-bottom: 1px solid var(--rule-2) }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+
+<div class="wrap" id="app">
+  <noscript>This report needs JavaScript to render its tables.</noscript>
+</div>
+
+<script id="report-data" type="application/json">/*__DATA__*/null</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('report-data').textContent.replace('/*__DATA__*/', ''));
+  const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const sev = (s) => `<span class="sev s-${s}"><i></i>${s}</span>`;
+  const okb = (b, y = 'Pass', n = 'Fail') => `<span class="${b ? 'ok' : 'bad'}">${b ? y : n}</span>`;
+  const n = (x) => (x == null || Number.isNaN(x) ? '—' : Number(x).toLocaleString('en-GB'));
+  const when = new Date(D.generatedAt);
+  const app = document.getElementById('app');
+  const sevs = ['Critical', 'High', 'Medium', 'Low', 'Info'];
+  const isOpen = (d) => d.retest?.status !== 'Fixed';
+  const blockers = D.defects.filter((d) => (d.sev === 'Critical' || d.sev === 'High') && isOpen(d));
+  const rtCls = (s) => 'rt-' + String(s ?? '').split(' ')[0];
+  const rt = (d) => d.retest ? `<span class="rt ${rtCls(d.retest.status)}">${esc(d.retest.status)}</span>` : '';
+  const RT = D.retest;
+  const C = D.counts;
+
+  app.append($(`
+  <header class="top">
+    <div style="display:grid;gap:10px;min-width:0">
+      <div class="eyebrow">Production readiness · Enterprise WFM Platform</div>
+      <h1>WFM Release Gate</h1>
+      <div class="meta"><span>${when.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</span><span>Admin app :3000 · Employee portal :3001 · Gateway :4000</span><span>Branch <code>qa/production-readiness</code></span></div>
+    </div>
+    <div class="stamp ${D.verdict === 'GO' ? 'go' : D.verdict === 'CONDITIONAL' ? 'cond' : ''}" role="img" aria-label="Release verdict ${D.verdict}"><span>${RT ? 'Re-test verdict' : 'Release verdict'}</span><b>${D.verdict === 'CONDITIONAL' ? 'CONDITIONAL GO' : D.verdict}</b><span>${D.bySev.Critical} critical · ${D.bySev.High} high open</span></div>
+  </header>`));
+
+  app.append($(`<section aria-label="Summary" style="gap:18px">
+    <p class="lede">${D.verdictLine ? esc(D.verdictLine) : D.verdict === 'GO' ? 'No blocking defects remain.' : `Do not ship yet. Fix the ${blockers.length} critical and high defects below, then re-run the suite. Access control, sign-in protection, scheduling rules and the main self-service flows held up well.`}</p>
+    <div class="sevrow">${sevs.map((s) => `<span class="sev s-${s}"><i></i>${D.bySev[s]} ${s.toLowerCase()}${RT ? ' open' : ''}</span>`).join('')}</div>
+    <div class="figs">
+      <div class="fig"><span class="eyebrow">Screens</span><b class="num">${C.adminScreens + C.portalSections}</b><small>${C.adminScreens} admin + ${C.portalSections} portal, each with a11y scan</small></div>
+      <div class="fig"><span class="eyebrow">Access checks</span><b class="num">${n(C.rbacChecks)}</b><small>role × route over ${C.guardedRoutes} guarded API routes · 0 leaks</small></div>
+      <div class="fig"><span class="eyebrow">Functional</span><b class="num">${C.functionalPass}/${C.functionalChecks}</b><small>API checks across 8 modules + self-service</small></div>
+      <div class="fig"><span class="eyebrow">UI journeys</span><b class="num">${C.uiPass}/${C.uiChecks}</b><small>admin + portal checks in Chrome</small></div>
+      <div class="fig"><span class="eyebrow">Security</span><b class="num">${C.securityPass}/${C.securityTests}</b><small>attack tests passed</small></div>
+    </div>
+    <nav class="toc" aria-label="Sections">${RT ? '<a href="#retest">Re-test</a>' : ''}<a href="#mustfix">Must fix</a><a href="#modules">Modules</a><a href="#defects">All defects</a><a href="#security">Security</a><a href="#access">Access control</a><a href="#a11y">Accessibility</a><a href="#perf">Performance</a><a href="#static">Builds &amp; suites</a><a href="#strengths">What works</a><a href="#method">Method</a></nav>
+  </section>`));
+
+  if (RT) {
+    const order = ['Fixed', 'Partly fixed', 'Still open', 'Still applies', 'New'];
+    const orig = D.defects.filter((d) => d.retest && d.retest.status !== 'New');
+    app.append($(`<section id="retest"><div class="sec-head"><div class="eyebrow">Re-test · ${new Date(RT.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div><h2>What changed since the first run</h2>
+      <p>Each of the ${orig.length} original defects was checked again directly against the running stack, alongside a full re-run of the Playwright suite (${RT.suite.passed} of ${RT.suite.total} tests passed). The first run's verdict was ${esc(RT.previousVerdict)} with ${RT.previousCounts.Critical} critical and ${RT.previousCounts.High} high defects.</p></div>
+      <div class="rtgrid">${order.filter((k) => RT.counts[k]).map((k) => `<div class="fig"><span class="eyebrow">${k}</span><b class="num ${rtCls(k)}">${RT.counts[k]}</b></div>`).join('')}</div>
+      <div class="tbl"><table><thead><tr><th>ID</th><th>Severity</th><th>Defect</th><th>Re-test</th><th>What we saw</th></tr></thead><tbody>
+      ${[...D.defects].sort((a, b) => a.id.localeCompare(b.id)).map((d) => `<tr><td class="mono">${d.id}</td><td>${sev(d.sev)}</td><td style="min-width:200px"><b>${esc(d.title)}</b></td><td>${rt(d)}</td><td style="min-width:260px">${esc(d.retest?.note)}</td></tr>`).join('')}
+      </tbody></table></div></section>`));
+  }
+
+  app.append($(`<section id="mustfix"><div class="sec-head"><div class="eyebrow">Gate</div><h2>${RT ? 'Still blocking launch' : 'Must fix before launch'}</h2><p>${RT ? 'Critical and high defects that are not yet fixed.' : 'Critical and high defects. Each one is reproducible and has a suggested fix in the defect list.'}</p></div>
+    <div class="mustfix">${blockers.map((d) => `<div class="mf"><span class="mono">${d.id}</span>${sev(d.sev)}<div style="min-width:0"><div class="t">${esc(d.title)} ${rt(d)}</div><div class="a">${esc(d.area)}${d.retest ? ' · ' + esc(d.retest.note) : ''}</div></div></div>`).join('')}</div></section>`));
+
+  app.append($(`<section id="modules"><div class="sec-head"><div class="eyebrow">Module by module</div><h2>Scorecard</h2><p>Every admin screen was opened by URL and checked for crashes, uncaught errors, failing API calls and WCAG issues. Functional checks drive each module's API end to end.</p></div>
+    <div class="tbl"><table><thead><tr><th>Module</th><th class="n">Screens</th><th class="n">Crashes</th><th class="n">5xx</th><th class="n">Avg load</th><th class="n">Functional</th><th>Worst open defect</th><th>Defects</th></tr></thead><tbody>
+    ${D.modules.map((m) => `<tr><td><b>${esc(m.name)}</b>${m.maxLoad && m.maxLoad.loadMs > 6000 ? `<div class="note">Slowest: <code>${esc(m.maxLoad.url)}</code> ${n(Math.round(m.maxLoad.loadMs / 100) / 10)} s</div>` : ''}</td><td class="n">${m.screens}</td><td class="n">${m.crashes ? `<span class="bad">${m.crashes}</span>` : '0'}</td><td class="n">${m.serverErrors ? `<span class="bad">${m.serverErrors}</span>` : '0'}</td><td class="n">${m.avgLoadMs ? n(m.avgLoadMs) + ' ms' : '—'}</td><td class="n">${m.fnTotal ? `<span class="${m.fnPass === m.fnTotal ? 'ok' : 'bad'}">${m.fnPass}/${m.fnTotal}</span>` : '—'}</td><td>${m.worst ? sev(m.worst) : '<span class="ok">None</span>'}</td><td class="mono" style="font-size:12px">${m.defects.join(' ') || '—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="note">Load times are from Vite dev servers (unbundled modules) and include waiting for every API call to finish. Accessibility defects DEF-05, 06 and 18 apply to all admin modules and are listed once.</p></section>`));
+
+  app.append($(`<section id="defects"><div class="sec-head"><div class="eyebrow">${D.defects.length} found</div><h2>All defects</h2><p>Click a defect for steps, expected and actual results, evidence and the suggested fix. The same list is in <code>qa/reports/defects.csv</code> for import into Jira or Azure DevOps.</p></div>
+    <div class="filters" role="group" aria-label="Filter by severity"><button class="chip" aria-pressed="true" data-sev="all" id="f-all">All</button>${sevs.map((s) => `<button class="chip" aria-pressed="false" data-sev="${s}" id="f-${s}">${s} · ${D.bySev[s]}</button>`).join('')}<input class="search" id="dq" type="search" placeholder="Search defects" aria-label="Search defects"></div>
+    <div class="defects" id="dlist">${D.defects.map((d) => `<details class="d ${d.sev}" data-sev="${d.sev}" data-q="${esc((d.id + ' ' + d.title + ' ' + d.area + ' ' + d.actual).toLowerCase())}"><summary><span class="mono">${d.id}</span>${sev(d.sev)}<span style="font-weight:600;min-width:0">${esc(d.title)} ${rt(d)}</span><span class="area">${esc(d.area)}</span></summary>
+      <dl class="dl">${d.retest ? `<dt>Re-test</dt><dd>${rt(d)} ${esc(d.retest.note)}</dd>` : ''}<dt>Steps</dt><dd>${esc(d.steps)}</dd><dt>Expected</dt><dd>${esc(d.expected)}</dd><dt>Actual</dt><dd>${esc(d.actual)}</dd><dt>Evidence</dt><dd>${esc(d.evidence)}</dd><dt>Fix</dt><dd>${esc(d.fix)}</dd></dl></details>`).join('')}</div></section>`));
+
+  app.append($(`<section id="security"><div class="sec-head"><div class="eyebrow">Attack tests against the live gateway</div><h2>Security</h2></div>
+    <div class="tbl"><table><thead><tr><th>Test</th><th>Result</th><th>What was checked</th><th>Evidence</th></tr></thead><tbody>
+    ${D.security.map((s) => `<tr><td class="mono">${s.id}</td><td>${okb(s.pass)}</td><td>${esc(s.title)}</td><td class="mono" style="font-size:12px;max-width:440px;overflow-wrap:anywhere">${esc(JSON.stringify(s.evidence).slice(0, 260))}</td></tr>`).join('')}
+    </tbody></table></div></section>`));
+
+  const roles = D.rbac.filter((r) => r.check === 'role');
+  const unauth = D.rbac.find((r) => r.check === 'unauthenticated');
+  app.append($(`<section id="access"><div class="sec-head"><div class="eyebrow">Role-based access control</div><h2>Access control</h2><p>Routes and their required permissions were read from the gateway source (352 routes, 327 guarded). Each role called every route it lacks permission for (must be 403) and every GET it is allowed (must not be 401/403 or 5xx).</p></div>
+    <div class="tbl"><table><thead><tr><th>Caller</th><th class="n">Calls</th><th class="n">Leaks</th><th class="n">Wrongly blocked</th><th class="n">5xx</th><th>Result</th></tr></thead><tbody>
+    ${unauth ? `<tr><td>Signed out</td><td class="n">${unauth.tested}</td><td class="n">${unauth.leaks.length}</td><td class="n">—</td><td class="n">—</td><td>${okb(!unauth.leaks.length)}</td></tr>` : ''}
+    ${roles.map((r) => `<tr><td class="mono">${r.role}</td><td class="n">${r.tested}</td><td class="n">${r.leaks.length}</td><td class="n">${r.wrongDeny.length}</td><td class="n">${r.errors5xx.length}</td><td>${okb(!r.leaks.length && !r.wrongDeny.length && !r.errors5xx.length)}</td></tr>`).join('')}
+    </tbody></table></div><p class="note">The WFM_ADMIN role holds every permission, so it has nothing to be denied; it is covered by the functional and crawl runs.</p></section>`));
+
+  app.append($(`<section id="a11y"><div class="sec-head"><div class="eyebrow">axe-core 4 · WCAG 2.1 A and AA</div><h2>Accessibility</h2><p>Automated scan of all ${C.adminScreens} admin screens plus the portal; keyboard reachability tested by hand in Chrome.</p></div>
+    <div class="tbl"><table><thead><tr><th>Rule</th><th>Impact</th><th class="n">Screens</th><th class="n">Elements</th><th>Meaning</th></tr></thead><tbody>
+    ${D.axe.map((a) => `<tr><td class="mono">${a.id}</td><td>${sev(a.impact === 'critical' ? 'Critical' : a.impact === 'serious' ? 'High' : 'Medium').replace(/>(Critical|High|Medium)</, '>' + a.impact + '<')}</td><td class="n">${a.screens}/${C.adminScreens}</td><td class="n">${n(a.nodes)}</td><td>${esc(a.help)}</td></tr>`).join('')}
+    </tbody></table></div></section>`));
+
+  const lat = (D.perf['api-latency'] ?? {}).rows ?? [], con = (D.perf.concurrency ?? {}).rows ?? [], pl = (D.perf['page-load'] ?? {}).rows ?? [];
+  const maxP95 = Math.max(1, ...lat.map((r) => r.p95));
+  const maxSet = Math.max(1, ...pl.map((r) => r.settledMs));
+  app.append($(`<section id="perf"><div class="sec-head"><div class="eyebrow">Baseline on one machine, dev servers</div><h2>Performance</h2><p>Indicative only: a production build behind a real web server will load pages faster, but slow endpoints stay slow.</p></div>
+    <div class="two">
+      <div class="tbl"><table><thead><tr><th>API read (15 calls each)</th><th class="n">p50</th><th class="n">p95</th><th class="n">Size</th></tr></thead><tbody>
+      ${lat.map((r) => `<tr><td class="mono" style="font-size:12px">${esc(r.endpoint)}</td><td class="n">${r.p50} ms</td><td class="n">${r.p95} ms<span class="bar" style="width:${Math.max(2, Math.round((r.p95 / maxP95) * 60))}px"></span></td><td class="n">${r.kb} kB</td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="tbl"><table><thead><tr><th>Screen</th><th class="n">First paint</th><th class="n">All data loaded</th><th class="n">API calls</th></tr></thead><tbody>
+      ${pl.map((r) => `<tr><td class="mono" style="font-size:12px">${esc(r.url)}</td><td class="n">${n(r.loadMs)} ms</td><td class="n">${n(r.settledMs)} ms<span class="bar ${r.settledMs > 10000 ? 'warn' : ''}" style="width:${Math.max(2, Math.round((r.settledMs / maxSet) * 60))}px"></span></td><td class="n">${r.apiCalls}</td></tr>`).join('')}
+      </tbody></table></div>
+    </div>
+    <div class="tbl"><table><thead><tr><th>Concurrency (25 parallel × 4 waves)</th><th class="n">Requests</th><th class="n">Req/s</th><th class="n">p50</th><th class="n">p95</th><th>Status codes</th></tr></thead><tbody>
+    ${con.map((r) => `<tr><td class="mono" style="font-size:12px">${esc(r.endpoint)}</td><td class="n">${r.requests}</td><td class="n">${r.rps ?? '—'}</td><td class="n">${r.p50 != null ? r.p50 + ' ms' : '—'}</td><td class="n">${r.p95} ms</td><td class="mono" style="font-size:12px">${esc(JSON.stringify(r.codes))}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="tbl"><table><thead><tr><th>Phone layout (412 px)</th><th class="n">Content width</th><th class="n">Sidebar</th><th>Result</th></tr></thead><tbody>
+    ${D.responsive.map((r) => { const v = r.detail.Home ?? r.detail['/overview']; return `<tr><td>${r.app === 'portal' ? 'Employee portal' : 'Admin app'}</td><td class="n">${v.mainW} px</td><td class="n">${v.asideW} px</td><td>${okb(v.mainW >= v.viewW * 0.7, 'Usable', 'Squeezed')}</td></tr>`; }).join('')}
+    </tbody></table></div></section>`));
+
+  const gs = D.gatewaySuite;
+  app.append($(`<section id="static"><div class="sec-head"><div class="eyebrow">Static checks and the project's own tests</div><h2>Builds &amp; suites</h2></div>
+    <div class="tbl"><table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
+    ${D.staticChecks.map((s) => `<tr><td>${esc(s.name)}</td><td>${okb(s.ok)}</td><td>${esc(s.detail)}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${gs && gs.failures.length ? `<details class="d Medium"><summary><span class="mono">suite</span>${sev('Medium')}<span style="font-weight:600">Gateway suite: ${gs.fail} failing test${gs.fail === 1 ? '' : 's'}</span><span class="area">backend/gateway/test</span></summary><div class="dl" style="grid-template-columns:1fr"><dd><ul class="list">${gs.failures.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></dd></div></details>` : ''}
+  </section>`));
+
+  app.append($(`<section id="strengths"><div class="sec-head"><div class="eyebrow">Keep these</div><h2>What works well</h2></div><ul class="list">${D.strengths.map((s) => `<li>${esc(s)}</li>`).join('')}</ul></section>`));
+
+  app.append($(`<section id="method"><div class="sec-head"><div class="eyebrow">How this was tested</div><h2>Method and limits</h2></div>
+    <div class="two">
+      <div style="display:grid;gap:10px"><h3>Coverage</h3><ul class="list">
+        <li>Manual and exploratory: every screen opened and reviewed in Chrome; findings confirmed by hand before logging.</li>
+        <li>Automated UI (Playwright + Chrome): ${C.adminScreens}-screen crawl, admin journeys, portal journeys, phone layout.</li>
+        <li>API: functional checks per module, role-based access over every guarded route, attack tests.</li>
+        <li>AI-assisted: route inventory and permission map generated from the gateway source; defect triage and root cause read from code.</li>
+        <li>Performance baseline, production builds, type checks, the engine's and the gateway's own test suites.</li>
+      </ul></div>
+      <div style="display:grid;gap:10px"><h3>Not covered</h3><ul class="list">
+        <li>Second tenant: row-level security is on, but cross-tenant isolation was not tested with two organisations.</li>
+        <li>Single sign-on, SCIM provisioning, e-mail/SMS delivery, webhooks and the native mobile app.</li>
+        <li>Production infrastructure: TLS, reverse proxy, backups, load beyond 25 concurrent requests.</li>
+        <li>Browsers other than Chrome; screen-reader walkthrough.</li>
+      </ul></div>
+    </div>
+    <h3>Re-run</h3>
+<pre>cd qa
+npm install
+$env:QA_ADMIN_PASSWORD='…'          # test stack only — the suite creates QA- data
+npx playwright test                  # all projects
+node tools/build-report.mjs          # rebuild this report into qa/reports</pre>
+    <p class="note">Environment: ${esc(D.environment.branch)}. Browser: ${esc(D.environment.browser)}. Data created by the run is named <code>QA-…</code>, <code>qa.*</code> users and the "Demo Support" group.</p>
+  </section>`));
+
+  // filters
+  const chips = [...document.querySelectorAll('.chip')], q = document.getElementById('dq');
+  let active = 'all';
+  const apply = () => { const t = q.value.trim().toLowerCase(); document.querySelectorAll('#dlist details').forEach((d) => { d.hidden = !((active === 'all' || d.dataset.sev === active) && (!t || d.dataset.q.includes(t))); }); };
+  chips.forEach((c) => c.addEventListener('click', () => { active = c.dataset.sev; chips.forEach((x) => x.setAttribute('aria-pressed', String(x === c))); apply(); }));
+  q.addEventListener('input', apply);
+  const h = location.hash.slice(1); if (h) document.getElementById(h)?.scrollIntoView();
+})();
+</script>

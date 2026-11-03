@@ -16,7 +16,7 @@ export const Card: React.FC<{
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           {title && <h2 className="text-[16px] font-semibold text-[#171717]">{title}</h2>}
-          {sub && <p className="text-[12px] text-[#737373] mt-0.5 max-w-3xl">{sub}</p>}
+          {sub && <p className="text-[12px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
@@ -27,9 +27,9 @@ export const Card: React.FC<{
 
 export const Kpi: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: 'good' | 'warn' | 'bad' }> = ({ label, value, sub, tone }) => (
   <div className="p-4 bg-[#FAFAF8] rounded-lg border border-[#E5E5E0]">
-    <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">{label}</div>
-    <div className={`text-[24px] font-bold tabular-nums mt-1 font-mono ${tone === 'good' ? 'text-[#2F7D5A]' : tone === 'warn' ? 'text-[#B7791F]' : tone === 'bad' ? 'text-[#C84A4A]' : 'text-[#171717]'}`}>{value}</div>
-    {sub && <div className="text-[12px] text-[#737373] mt-0.5">{sub}</div>}
+    <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider">{label}</div>
+    <div className={`text-[24px] font-bold tabular-nums mt-1 font-mono ${tone === 'good' ? 'text-[#2A7553]' : tone === 'warn' ? 'text-[#8F6200]' : tone === 'bad' ? 'text-[#BC3F3F]' : 'text-[#171717]'}`}>{value}</div>
+    {sub && <div className="text-[12px] text-[#6B6B6B] mt-0.5">{sub}</div>}
   </div>
 );
 
@@ -38,9 +38,9 @@ export const KpiRow: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 );
 
 const PILL: Record<string, string> = {
-  good: 'bg-[#EAF5EF] text-[#2F7D5A] border-[#2F7D5A]/20',
-  warn: 'bg-[#FFF5DD] text-[#B7791F] border-[#B7791F]/20',
-  bad: 'bg-[#FCEBEC] text-[#C84A4A] border-[#C84A4A]/20',
+  good: 'bg-[#EAF5EF] text-[#2A7553] border-[#2F7D5A]/20',
+  warn: 'bg-[#FFF5DD] text-[#8F6200] border-[#B7791F]/20',
+  bad: 'bg-[#FCEBEC] text-[#BC3F3F] border-[#C84A4A]/20',
   info: 'bg-[#EDF3F8] text-[#4F6F8F] border-[#4F6F8F]/20',
   neutral: 'bg-[#FAFAF8] text-[#525252] border-[#E5E5E0]',
 };
@@ -59,12 +59,12 @@ export const Banner: React.FC<{ kind: 'ok' | 'err' | 'info' | 'warn'; children: 
 export const Empty: React.FC<{ title: string; children?: React.ReactNode }> = ({ title, children }) => (
   <div className="border-2 border-dashed border-[#E5E5E0] rounded-lg p-8 text-center bg-[#FAFAF8]">
     <div className="text-[14px] font-semibold text-[#171717]">{title}</div>
-    {children && <div className="text-[12px] text-[#737373] mt-1">{children}</div>}
+    {children && <div className="text-[12px] text-[#6B6B6B] mt-1">{children}</div>}
   </div>
 );
 
 export const Busy: React.FC<{ text?: string }> = ({ text = 'Working…' }) => (
-  <span className="inline-flex items-center gap-2 text-[12px] text-[#737373] font-medium">
+  <span className="inline-flex items-center gap-2 text-[12px] text-[#6B6B6B] font-medium">
     <Loader2 className="w-3.5 h-3.5 animate-spin" />
     {text}
   </span>
@@ -93,11 +93,11 @@ export const Field: React.FC<{ label: string; hint?: string; children: React.Rea
   <label className="block text-[12px] font-semibold text-[#171717]">
     {label}
     <div className="mt-1 font-normal">{children}</div>
-    {hint && <div className="text-[12px] font-normal text-[#737373] mt-0.5">{hint}</div>}
+    {hint && <div className="text-[12px] font-normal text-[#6B6B6B] mt-0.5">{hint}</div>}
   </label>
 );
 
-export const inputCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#737373]';
+export const inputCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#6B6B6B]';
 
 export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className = '', ...rest }) => (
   <select {...rest} className={`${inputCls} ${className}`} />
@@ -110,7 +110,7 @@ export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ c
 export const Table: React.FC<{ head: React.ReactNode[]; children: React.ReactNode; right?: number[] }> = ({ head, children, right = [] }) => (
   <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
     <table className="w-full text-left text-[13px]">
-      <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+      <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
         <tr>{head.map((h, i) => <th key={i} className={`p-3 ${right.includes(i) ? 'text-right' : ''}`}>{h}</th>)}</tr>
       </thead>
       <tbody className="divide-y divide-[#E5E5E0] text-[#171717]">{children}</tbody>
@@ -125,7 +125,7 @@ export const PageHeader: React.FC<{ title: string; badge?: React.ReactNode; sub?
         <h1 className="text-[22px] font-semibold text-[#171717]">{title}</h1>
         {badge}
       </div>
-      {sub && <p className="text-[13px] text-[#737373] mt-0.5 max-w-3xl">{sub}</p>}
+      {sub && <p className="text-[13px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
     </div>
     {actions && <div className="flex items-center gap-2.5 flex-wrap">{actions}</div>}
   </div>

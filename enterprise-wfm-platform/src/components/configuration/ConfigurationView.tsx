@@ -44,12 +44,12 @@ export const ConfigurationView: React.FC<ConfigurationViewProps> = ({ activeSubS
             <h1 className="text-[22px] font-semibold text-[#171717]">Configuration & Optimization Policy</h1>
             <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-[#FAFAF8] text-[#525252] border border-[#E5E5E0]">Tenant-Scoped</span>
           </div>
-          <p className="text-[13px] text-[#737373] mt-0.5">WFM group service levels, activity definitions, scheduling rules, labour-law packs, what employees can do themselves, RTA state mapping and the weights the schedule generator balances.</p>
+          <p className="text-[13px] text-[#6B6B6B] mt-0.5">WFM group service levels, activity definitions, scheduling rules, labour-law packs, what employees can do themselves, RTA state mapping and the weights the schedule generator balances.</p>
         </div>
 
         <div className="flex rounded border border-[#E5E5E0] bg-[#FAFAF8] p-0.5 text-[12px]">
           {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded font-semibold transition-colors ${tab === t.id ? 'bg-[#FFFFFF] text-[#171717] shadow-xs' : 'text-[#737373]'}`}>
+            <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-1.5 rounded font-semibold transition-colors ${tab === t.id ? 'bg-[#FFFFFF] text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>
               {t.label}
             </button>
           ))}

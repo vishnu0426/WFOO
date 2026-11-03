@@ -15,7 +15,6 @@ type Offer = {
   waveSize: number; wave: number; closesAt: string; createdBy: string; invited: number; queued: number; declined: number; total: number;
 };
 type Detail = Offer & { invites: { employeeId: string; name: string; employeeNumber: string; rank: number; wave: number; status: string; warnings: string[] }[] };
-type Gaps = { from: string; days: number; unpublishedDays: string[]; totalShortHours: number; gaps: { day: string; startTime: string; endTime: string; spots: number; shortHours: number }[] };
 type Suggestion = { kind: 'VTO' | 'OVERTIME'; startTime: string; endTime: string; spots: number; reason: string };
 
 const ORDERINGS: [string, string][] = [
@@ -38,8 +37,6 @@ export const OffersPanel: React.FC = () => {
   const offers = useApi<Offer[]>('/scheduling/offers', [tick]);
   const [day, setDay] = useState(today());
   const sug = useApi<{ vto: Suggestion[]; overtime: Suggestion[]; reforecastApplied?: boolean }>(group ? `/scheduling/offers/suggestions?groupId=${group.id}&day=${day}` : null, [tick]);
-  const [horizon, setHorizon] = useState(7);
-  const gaps = useApi<Gaps>(group ? `/scheduling/offers/shortages?groupId=${group.id}&days=${horizon}` : null, [tick, horizon]);
   const [form, setForm] = useState({ kind: 'VTO' as 'VTO' | 'OVERTIME', startTime: '14:00', endTime: '16:00', spots: 1, ordering: '', note: '' });
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -59,7 +56,6 @@ export const OffersPanel: React.FC = () => {
   };
   const cancel = async (id: string) => { if (!confirm('Cancel this offer? Anyone who has not answered is released.')) return; try { await api(`/scheduling/offers/${id}/cancel`, { method: 'POST' }); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } };
   const fromSuggestion = (s: Suggestion) => setForm((f) => ({ ...f, kind: s.kind, startTime: s.startTime, endTime: s.endTime, spots: s.spots }));
-  const offerForGap = (g: Gaps['gaps'][number]) => { setDay(g.day); setForm((f) => ({ ...f, kind: 'OVERTIME', startTime: g.startTime, endTime: g.endTime, spots: g.spots })); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const mine = (offers.data ?? []).filter((o) => !group || o.groupId === group.id);
 
   return (
@@ -83,35 +79,12 @@ export const OffersPanel: React.FC = () => {
         {busy && <Busy text="Checking who can take it…" />}
       </Card>
 
-      <Card title="Gaps still to cover" sub={group ? `${group.name}: stretches in the coming days where the published schedule, rotation crews included, has fewer people than the forecast needs. Offer them as overtime and everyone who can take it without breaking a rule is asked, crew members on a day off too.` : undefined}>
-        <div className="flex items-center gap-2 mb-3 text-[12px] text-[#525252]">Look ahead
-          <Select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>{[3, 7, 14].map((d) => <option key={d} value={d}>{d} days</option>)}</Select>
-        </div>
-        {gaps.error ? <p className="text-[13px] text-[#737373]">{gaps.error}</p> : !gaps.data ? <Busy text="Looking for gaps…" /> : (
-          <div className="space-y-3">
-            {gaps.data.unpublishedDays.length > 0 && <p className="text-[12px] text-[#B7791F]">{gaps.data.unpublishedDays.length === gaps.data.days ? 'No schedule is published for these days, so there is nothing to offer yet. Publish one first.' : `No schedule is published on ${gaps.data.unpublishedDays.length} of these days (${gaps.data.unpublishedDays.slice(0, 3).join(', ')}${gaps.data.unpublishedDays.length > 3 ? ', …' : ''}).`}</p>}
-            {gaps.data.gaps.length === 0 && gaps.data.unpublishedDays.length < gaps.data.days && <p className="text-[13px] text-[#737373]">No gaps. The published schedule covers the forecast for the next {gaps.data.days} days.</p>}
-            {gaps.data.gaps.length > 0 && <>
-              <p className="text-[12px] text-[#525252]">{gaps.data.gaps.length} {gaps.data.gaps.length === 1 ? 'gap' : 'gaps'}, {gaps.data.totalShortHours} hours short in total.</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {gaps.data.gaps.map((g, i) => (
-                  <div key={i} className="p-3 border border-[#E5E5E0] rounded-lg flex items-center justify-between gap-3">
-                    <div><div className="flex items-center gap-2"><Pill tone="warn">Short</Pill><span className="font-semibold text-[13px]">{g.day} · {g.startTime} to {g.endTime}</span></div><div className="text-[11px] text-[#737373] mt-1">Up to {g.spots} {g.spots === 1 ? 'person' : 'people'} short, {g.shortHours} hours in all</div></div>
-                    {canEdit && <Btn onClick={() => offerForGap(g)}>Offer overtime</Btn>}
-                  </div>
-                ))}
-              </div>
-            </>}
-          </div>
-        )}
-      </Card>
-
       <Card title="Suggested from the forecast" sub={group ? `${group.name} on ${day}: where the published schedule has more or fewer people than ${sug.data?.reforecastApplied ? 'today is actually running' : 'the forecast needs'}.` : undefined}>
-        {sug.error ? <p className="text-[13px] text-[#737373]">{sug.error}</p> : !sug.data ? <Busy text="Looking at the forecast…" /> : sug.data.vto.length + sug.data.overtime.length === 0 ? <p className="text-[13px] text-[#737373]">The schedule matches the forecast on this day. Nothing to suggest.</p> : (
+        {sug.error ? <p className="text-[13px] text-[#6B6B6B]">{sug.error}</p> : !sug.data ? <Busy text="Looking at the forecast…" /> : sug.data.vto.length + sug.data.overtime.length === 0 ? <p className="text-[13px] text-[#6B6B6B]">The schedule matches the forecast on this day. Nothing to suggest.</p> : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[...sug.data.vto, ...sug.data.overtime].map((s, i) => (
               <div key={i} className="p-3 border border-[#E5E5E0] rounded-lg flex items-center justify-between gap-3">
-                <div><div className="flex items-center gap-2"><Pill tone={s.kind === 'VTO' ? 'info' : 'warn'}>{kindLabel(s.kind)}</Pill><span className="font-semibold text-[13px]">{s.startTime} to {s.endTime}, {s.spots} {s.spots === 1 ? 'place' : 'places'}</span></div><div className="text-[11px] text-[#737373] mt-1">{s.reason}</div></div>
+                <div><div className="flex items-center gap-2"><Pill tone={s.kind === 'VTO' ? 'info' : 'warn'}>{kindLabel(s.kind)}</Pill><span className="font-semibold text-[13px]">{s.startTime} to {s.endTime}, {s.spots} {s.spots === 1 ? 'place' : 'places'}</span></div><div className="text-[11px] text-[#6B6B6B] mt-1">{s.reason}</div></div>
                 {canEdit && <Btn onClick={() => fromSuggestion(s)}>Use</Btn>}
               </div>
             ))}
@@ -128,12 +101,12 @@ export const OffersPanel: React.FC = () => {
             return (
               <div key={o.id} className="border border-[#E5E5E0] rounded-lg">
                 <button className="w-full p-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-left" onClick={() => setOpen(open === o.id ? null : o.id)}>
-                  {open === o.id ? <ChevronDown className="w-4 h-4 text-[#737373]" /> : <ChevronRight className="w-4 h-4 text-[#737373]" />}
+                  {open === o.id ? <ChevronDown className="w-4 h-4 text-[#6B6B6B]" /> : <ChevronRight className="w-4 h-4 text-[#6B6B6B]" />}
                   <Pill tone={st.tone}>{st.label}</Pill>
                   <span className="font-semibold text-[13px]">{kindLabel(o.kind)} · {o.day} · {o.startTime} to {o.endTime}</span>
                   <span className="text-[12px] text-[#525252]">{o.filled} of {o.spots} taken</span>
-                  <span className="text-[12px] text-[#737373]">{o.total} eligible · {ORDER_LABEL[o.ordering] ?? o.ordering}{o.waveSize ? ` · waves of ${o.waveSize}` : ''}</span>
-                  {o.status === 'OPEN' && <span className="text-[12px] text-[#737373] ml-auto">closes {when(o.closesAt)}</span>}
+                  <span className="text-[12px] text-[#6B6B6B]">{o.total} eligible · {ORDER_LABEL[o.ordering] ?? o.ordering}{o.waveSize ? ` · waves of ${o.waveSize}` : ''}</span>
+                  {o.status === 'OPEN' && <span className="text-[12px] text-[#6B6B6B] ml-auto">closes {when(o.closesAt)}</span>}
                 </button>
                 {open === o.id && (
                   <div className="p-3 border-t border-[#E5E5E0] space-y-3">
@@ -142,7 +115,7 @@ export const OffersPanel: React.FC = () => {
                       <Table head={['#', 'Person', 'Answer', 'Notes']}>
                         {detail.data.invites.map((i) => {
                           const s = INV[i.status] ?? { label: i.status, tone: 'neutral' as const };
-                          return <tr key={i.employeeId}><td className="p-2.5 font-mono text-[#737373]">{i.rank}</td><td className="p-2.5">{i.name} <span className="text-[#737373] text-[11px]">#{i.employeeNumber}</span></td><td className="p-2.5"><Pill tone={s.tone}>{s.label}</Pill></td><td className="p-2.5 text-[12px] text-[#B7791F]">{i.warnings[0] ?? ''}</td></tr>;
+                          return <tr key={i.employeeId}><td className="p-2.5 font-mono text-[#6B6B6B]">{i.rank}</td><td className="p-2.5">{i.name} <span className="text-[#6B6B6B] text-[11px]">#{i.employeeNumber}</span></td><td className="p-2.5"><Pill tone={s.tone}>{s.label}</Pill></td><td className="p-2.5 text-[12px] text-[#8F6200]">{i.warnings[0] ?? ''}</td></tr>;
                         })}
                       </Table>
                     ) : <Busy text="Loading…" />}

@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { withTenant } from '../db.ts';
 import { me, requires } from '../auth.ts';
+import { inScope } from './approvals.ts';
 import { audit } from '../audit.ts';
 import { bad, parse, isoDay } from '../http.ts';
 import { addDays, loadGroup, todayIn } from './forecast/service.ts';
@@ -101,6 +102,7 @@ intraday.post('/gap-fixes/apply', requires('intraday:act'), async (req, res) => 
     for (const f of b.fixes) {
       const person = people.get(f.employeeId);
       if (!person) { refused.push({ employeeId: f.employeeId, name: 'Unknown', why: 'They are not in this group.' }); continue; }
+      if (!(await inScope(tx, p, f.employeeId))) { refused.push({ employeeId: f.employeeId, name: person.name, why: 'They are not in a team you supervise.' }); continue; }
       const why = fixProblem(person, f.kind, f.newStart, f.newLength, { nowSlot });
       if (why) { refused.push({ employeeId: f.employeeId, name: person.name, why }); continue; }
       const row = st.rows.find((r: any) => r.employeeId === f.employeeId && r.day === b.day);

@@ -11,21 +11,33 @@ import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
 import { me, requires, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
-import { HttpError, bad, conflict, isoDay, notFound, parse } from '../http.ts';
+import { HttpError, bad, conflict, isoDay, notFound, parse, safeCsvCell } from '../http.ts';
 import { dropCache, engine, publish } from '../infra.ts';
 import { addDays, dayRange, loadGroup, versionRecords, riskRequired, todayIn, synthesizeLongRangeRequirement } from './forecast/service.ts';
 import { hhmm } from './workforceRoutes.ts';
 import { loadPolicy } from './policyRoutes.ts';
 import { payWeekFor } from './payWeek.ts';
+import { clockChanges, shiftDelta } from './clockChange.ts';
 import { loadRuleSets, type RuleSets } from './compliance/routes.ts';
 import { checkPerson, limitsFrom, premiumHours, shiftBlocked } from './compliance/rules.ts';
-import { analyseShortage, buildReport, crewSizeNote, evaluateSchedule, explainInterval, optimizeBreaks, staleReasons, type QShift } from './scheduleQuality.ts';
+import { notify, usersOf } from '../notify.ts';
+import { analyseShortage, buildReport, crewSizeNote, evaluateSchedule, explainInterval, optimizeBreaks, staleReasons, underContractNote, type QShift } from './scheduleQuality.ts';
 import { loadSkillWork, splitBySkill } from './skillRequirements.ts';
 import { boundaryFrom, historyNote, mergeCarry, netRequired, spillOver, type Boundary, type PriorState } from './boundaryHistory.ts';
 import { contractFit, contractFitNote, weeklyCapHours } from './contractFit.ts';
+import { partitionIndexes, splitRequirement, stratifiedIndexes } from './partition.ts';
+import { partParallelFor } from '../autosize.ts';
+import { pickRepresentatives, type Representatives } from './representatives.ts';
 import { checkTemplate, lengthsOf, offeredLengths, paidSlots, rulesFor, startsFor, unpaidMeal, whyNotOffered, type DayWindow, type LengthRule } from './templateRules.ts';
 
 export const scheduling = Router();
+/** Seconds a plan is expected to take: each window's search time plus preparing its model, which grows with the crew. A rough guide, not a promise. */
+export function estimateSolveSeconds(people: number, b: { weeks: number; windowWeeks: number; timeLimitSec: number; solveWeeks?: number }) {
+  const solve = Math.min(b.weeks, b.solveWeeks ?? Math.min(b.weeks, 13));
+  let sec = 10;
+  for (let w = 0; w < solve; w += b.windowWeeks) { const n = Math.min(b.windowWeeks, solve - w); sec += b.timeLimitSec * 1.1 + 0.02 * people * n + 3; }
+  return Math.round(sec + (b.weeks > solve ? 5 + people * 0.01 : 0));
+}
 const uuid = z.string().uuid();
 const SPD = 96;
 /** The earlier-days fields the solver takes for one person; all zero when there is no history. */
@@ -149,15 +161,24 @@ scheduling.delete('/templates/:id', requires('workforce:write'), async (req, res
 
 export interface Ctx { group: any; employees: any[]; templates: any[]; timeOff: any[]; avail: any[]; tz: string; rules: RuleSets; skillBased: boolean; weekStart: number; others: { employeeId: string; day: string; startSlot: number; lengthSlots: number; groupName: string }[] }
 
+/** Who can work for a group ($1 is the group): a group with required skills draws on everyone who has them all at the level asked, in any group; otherwise on its own and eligible people. */
+export const POOL_WHERE = `(
+       (NOT EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND (e.primary_group_id = $1 OR e.eligible_group_ids @> ARRAY[$1::uuid]))
+       OR (EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND NOT EXISTS (
+             SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1 AND NOT EXISTS (SELECT 1 FROM employee_skills es WHERE es.employee_id = e.id AND es.skill_id = gs.skill_id AND es.proficiency >= gs.min_proficiency))))`;
+
 export async function loadCtx(tx: Tx, groupId: string, from: string, to: string): Promise<Ctx> {
+  const t0 = Date.now(), marks: string[] = [];
+  const mark = (what: string) => marks.push(`${what} ${((Date.now() - t0) / 1000).toFixed(2)}`);
   const group = await loadGroup(tx, groupId);
   const pol = await loadPolicy(tx);
   const rules = await loadRuleSets(tx, groupId);
+  mark('group+policy+rules');
   // company-wide scheduling policy and the compliance pack that applies to the person: the strictest of them and the employee's own contract wins
   const employees = (await tx.q<any>(
     // a group with required skills draws its pool from everyone who has them all at the required level, in any group; otherwise from its own and eligible people
     `SELECT e.* FROM employees e WHERE e.tenant_id = :t AND (
-       (NOT EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND (e.primary_group_id = $1 OR $1 = ANY(e.eligible_group_ids)))
+       (NOT EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND (e.primary_group_id = $1 OR e.eligible_group_ids @> ARRAY[$1::uuid]))
        OR (EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND NOT EXISTS (
              SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1 AND NOT EXISTS (SELECT 1 FROM employee_skills es WHERE es.employee_id = e.id AND es.skill_id = gs.skill_id AND es.proficiency >= gs.min_proficiency))))
      ORDER BY e.last_name, e.first_name, e.employee_number`, [groupId]))
@@ -171,37 +192,72 @@ export async function loadCtx(tx: Tx, groupId: string, from: string, to: string)
         workDaysPerWeek: Math.min(e.workDaysPerWeek, pol.maxDaysPerWeek ?? Infinity),
       };
     });
+  mark('people');
   const templates = await tx.q<any>(`SELECT * FROM shift_templates WHERE tenant_id = :t ORDER BY earliest_start, name`);
-  const timeOff = await tx.q<any>(`SELECT employee_id, start_day::text AS start_day, end_day::text AS end_day FROM time_off WHERE tenant_id = :t AND status = 'APPROVED' AND end_day >= $1 AND start_day <= $2`, [from, to]);
-  const avail = await tx.q<any>(`SELECT employee_id, day_of_week, start_slot, end_slot, kind, effective_from::text AS effective_from, effective_to::text AS effective_to FROM availability WHERE tenant_id = :t`);
+  // only the people this group can draw on matter below: the rest of the company's time off, availability and shifts elsewhere would only make every check slower
+  const ids = employees.map((e) => e.id);
+  const timeOff = await tx.q<any>(`SELECT employee_id, start_day::text AS start_day, end_day::text AS end_day FROM time_off WHERE tenant_id = :t AND status = 'APPROVED' AND end_day >= $1 AND start_day <= $2 AND employee_id = ANY($3::uuid[])`, [from, to, ids]);
+  const avail = await tx.q<any>(`SELECT employee_id, day_of_week, start_slot, end_slot, kind, effective_from::text AS effective_from, effective_to::text AS effective_to FROM availability WHERE tenant_id = :t AND employee_id = ANY($1::uuid[])`, [ids]);
   const skillBased = !!(await tx.one('SELECT 1 FROM group_skills WHERE tenant_id = :t AND wfm_group_id = $1 LIMIT 1', [groupId]));
   // what the same people are already doing for other groups: nobody can be in two places at once
   const others = await tx.q<any>(
     `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, g.name AS group_name FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id JOIN wfm_groups g ON g.id = v.wfm_group_id
-     WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND v.wfm_group_id <> $1 AND s.day >= $2::date AND s.day <= $3::date`, [groupId, from, to]);
-  return { group, employees, templates, timeOff, avail, tz: group.timezone, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, others };
+     WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND v.wfm_group_id <> $1 AND s.day >= $2::date AND s.day <= $3::date AND s.employee_id = ANY($4::uuid[])`, [groupId, from, to, ids]);
+  mark('time off+availability+others');
+  const out = { group, employees, templates, timeOff, avail, tz: group.timezone, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, others };
+  if (Date.now() - t0 > 1000) console.log(`[loadCtx] ${employees.length} people: ${marks.join(', ')}, done ${((Date.now() - t0) / 1000).toFixed(2)} (seconds, running)`);
+  return out;
 }
 
-const eligible = (e: any, groupId: string, skillBased = false) => e.status === 'ACTIVE' && (skillBased || e.primaryGroupId === groupId || (e.eligibleGroupIds ?? []).includes(groupId));
+export const eligible = (e: any, groupId: string, skillBased = false) => e.status === 'ACTIVE' && (skillBased || e.primaryGroupId === groupId || (e.eligibleGroupIds ?? []).includes(groupId));
+
+/**
+ * The context's lists grouped by person, built once per context. The candidate-shift loop asks "is this person blocked then?" millions of times; scanning every
+ * person's time off, availability and shifts in other groups for each ask made a build's cost grow with the size of the whole company's published schedules.
+ */
+interface CtxIndex { timeOff: Map<string, any[]>; avail: Map<string, Map<number, any[]>>; others: Map<string, Map<string, Ctx['others']>> }
+const indexes = new WeakMap<Ctx, CtxIndex>();
+function indexOf(ctx: Ctx): CtxIndex {
+  let ix = indexes.get(ctx);
+  if (ix) return ix;
+  ix = { timeOff: new Map(), avail: new Map(), others: new Map() };
+  for (const o of ctx.timeOff) { const l = ix.timeOff.get(o.employeeId); if (l) l.push(o); else ix.timeOff.set(o.employeeId, [o]); }
+  for (const a of ctx.avail) {
+    const byDow = ix.avail.get(a.employeeId) ?? new Map<number, any[]>(); ix.avail.set(a.employeeId, byDow);
+    const l = byDow.get(a.dayOfWeek); if (l) l.push(a); else byDow.set(a.dayOfWeek, [a]);
+  }
+  for (const o of ctx.others) {
+    const byDay = ix.others.get(o.employeeId) ?? new Map<string, Ctx['others']>(); ix.others.set(o.employeeId, byDay);
+    const l = byDay.get(o.day); if (l) l.push(o); else byDay.set(o.day, [o]);
+  }
+  indexes.set(ctx, ix);
+  return ix;
+}
+/** Whether the person has approved time off on `day`. */
+export function hasTimeOff(ctx: Ctx, employeeId: string, day: string): boolean {
+  return !!indexOf(ctx).timeOff.get(employeeId)?.some((o) => o.startDay <= day && o.endDay >= day);
+}
+const availOn = (ctx: Ctx, employeeId: string, dow: number, day: string) =>
+  (indexOf(ctx).avail.get(employeeId)?.get(dow) ?? []).filter((a) => (!a.effectiveFrom || a.effectiveFrom <= day) && (!a.effectiveTo || a.effectiveTo >= day));
 
 /** Why a person cannot work a shift starting at `start` (slot) for `len` slots on `day`, or null when they can. */
 export function blockedReason(ctx: Ctx, e: any, day: string, start: number, len: number): string | null {
-  if (ctx.timeOff.some((o) => o.employeeId === e.id && o.startDay <= day && o.endDay >= day)) return 'has approved time off';
+  if (hasTimeOff(ctx, e.id, day)) return 'has approved time off';
   const dow = dowOf(day);
   if (dow >= 5 && !e.allowWeekend) return 'does not work weekends';
   if (start + len > SPD && !e.allowOvernight) return 'is not allowed overnight shifts';
   const end = Math.min(SPD, start + len);
-  const w = ctx.avail.filter((a) => a.employeeId === e.id && a.dayOfWeek === dow && (!a.effectiveFrom || a.effectiveFrom <= day) && (!a.effectiveTo || a.effectiveTo >= day));
+  const w = availOn(ctx, e.id, dow, day);
   const open = w.filter((a) => a.kind === 'AVAILABLE');
   if (open.length && !open.some((a) => a.startSlot <= start && a.endSlot >= end)) return 'is outside their available hours';
   if (w.some((a) => a.kind === 'UNAVAILABLE' && a.startSlot < end && a.endSlot > start)) return 'is during a time they are unavailable';
-  const clash = ctx.others.find((o) => o.employeeId === e.id && o.day === day && o.startSlot < start + len && o.startSlot + o.lengthSlots > start);
+  const clash = indexOf(ctx).others.get(e.id)?.get(day)?.find((o) => o.startSlot < start + len && o.startSlot + o.lengthSlots > start);
   if (clash) return `is already scheduled for ${clash.groupName} then`;
   return null;
 }
 function preferenceFor(ctx: Ctx, e: any, day: string, start: number, len: number): number {
   const dow = dowOf(day), end = Math.min(SPD, start + len);
-  const pref = ctx.avail.filter((a) => a.employeeId === e.id && a.dayOfWeek === dow && a.kind === 'PREFERRED' && (!a.effectiveFrom || a.effectiveFrom <= day) && (!a.effectiveTo || a.effectiveTo >= day));
+  const pref = availOn(ctx, e.id, dow, day).filter((a) => a.kind === 'PREFERRED');
   const overlap = pref.reduce((s, a) => s + Math.max(0, Math.min(end, a.endSlot) - Math.max(start, a.startSlot)), 0);
   return overlap * 2 >= end - start && overlap > 0 ? 1 : 0;
 }
@@ -315,6 +371,14 @@ export function placeActivities(shifts: PlacedShift[], total: number): Map<Place
 
 // ---------------------------------------------------------------- validation (independent of the solver)
 
+/** People by id for a context (built once): finding each person by scanning the list made every check cost people x shifts. */
+const peopleById = new WeakMap<any[], Map<string, any>>();
+function employeeOf(ctx: Ctx, id: string): any | undefined {
+  let m = peopleById.get(ctx.employees);
+  if (!m) { m = new Map(ctx.employees.map((e) => [e.id, e])); peopleById.set(ctx.employees, m); }
+  return m.get(id);
+}
+
 export interface ShiftRow { id?: string; employeeId: string; day: string; startSlot: number; lengthSlots: number; templateId: string | null; activities?: { type: string; slots: number }[] }
 export function validateShifts(ctx: Ctx, shifts: ShiftRow[]) {
   const v: { type: string; employeeId: string; employeeName: string; day: string; message: string; severity?: 'BLOCK' | 'WARN' }[] = [];
@@ -323,7 +387,7 @@ export function validateShifts(ctx: Ctx, shifts: ShiftRow[]) {
   const tpl = new Map(ctx.templates.map((t) => [t.id, t]));
   const paid = (s: ShiftRow) => paidSlots(tpl.get(s.templateId!), s.lengthSlots) / 4;
   for (const [id, list] of byE) {
-    const e = ctx.employees.find((x) => x.id === id);
+    const e = employeeOf(ctx, id);
     if (!e) { v.push({ type: 'ELIGIBILITY', employeeId: id, employeeName: 'Unknown', day: list[0].day, message: 'This person is not eligible for this WFM group' }); continue; }
     const name = `${e.firstName} ${e.lastName}`;
     const add = (type: string, day: string, message: string) => v.push({ type, employeeId: id, employeeName: name, day, message });
@@ -365,7 +429,8 @@ export function validateShifts(ctx: Ctx, shifts: ShiftRow[]) {
 
 // ---------------------------------------------------------------- stats
 
-export function computeStats(ctx: Ctx, days: string[], required: number[], shifts: ShiftRow[], solver: any, extra: any = {}) {
+/** `checked` is the result of validateShifts for the same shifts when the caller already has it (it is the slowest part, so it is never done twice). */
+export function computeStats(ctx: Ctx, days: string[], required: number[], shifts: ShiftRow[], solver: any, extra: any = {}, checked?: ReturnType<typeof validateShifts>) {
   const tpl = new Map(ctx.templates.map((t) => [t.id, t]));
   const sched = new Array(days.length * SPD).fill(0);
   const di = new Map(days.map((d, i) => [d, i]));
@@ -379,20 +444,20 @@ export function computeStats(ctx: Ctx, days: string[], required: number[], shift
     const h = (s.lengthSlots - mealSlots) / 4;
     paidH += h; const k = `${s.employeeId}|${mondayOf(s.day, ctx.weekStart)}`; wk.set(k, (wk.get(k) ?? 0) + h);
   }
-  for (const [k, h] of wk) { const e = ctx.employees.find((x) => x.id === k.split('|')[0]); if (e && h > e.weeklyContractHours) overtimeH += h - e.weeklyContractHours; }
+  for (const [k, h] of wk) { const e = employeeOf(ctx, k.split('|')[0]); if (e && h > e.weeklyContractHours) overtimeH += h - e.weeklyContractHours; }
   let need = 0, under = 0, over = 0, underIntervals = 0, criticalIntervals = 0;
   for (let g = 0; g < sched.length; g++) {
     need += required[g];
     if (sched[g] < required[g]) { under += required[g] - sched[g]; underIntervals++; if (required[g] > 0 && sched[g] < required[g] * 0.8) criticalIntervals++; }
     else over += sched[g] - required[g];
   }
-  const all = validateShifts(ctx, shifts);
+  const all = checked ?? validateShifts(ctx, shifts);
   const violations = all.filter((x) => x.severity !== 'WARN');
   let premium = 0;
   const byPerson = new Map<string, ShiftRow[]>();
   for (const s of shifts) byPerson.set(s.employeeId, [...(byPerson.get(s.employeeId) ?? []), s]);
   for (const [id, list] of byPerson) {
-    const e = ctx.employees.find((x) => x.id === id);
+    const e = employeeOf(ctx, id);
     if (e) premium += premiumHours(ctx.rules.forTeam(e.teamId, e.id), list.map((s) => ({ day: s.day, startSlot: s.startSlot, lengthSlots: s.lengthSlots, mealSlots: unpaidMeal(tpl.get(s.templateId!), s.lengthSlots) })), ctx.weekStart).hours;
   }
   return {
@@ -414,9 +479,9 @@ export async function revision(tx: Tx, p: Principal, versionId: string, kind: 'G
 // ---------------------------------------------------------------- generate
 
 const Weights = z.object({ understaffing: z.number().int().min(0).max(100).default(90), overstaffing: z.number().int().min(0).max(100).default(30), contractHours: z.number().int().min(0).max(100).default(50), preferences: z.number().int().min(0).max(100).default(20), fairness: z.number().int().min(0).max(100).default(30) });
-const GenBody = z.object({
+export const GenBody = z.object({
   groupId: uuid, from: z.string().regex(isoDay), weeks: z.number().int().min(1).max(4).default(1), forecastVersionId: uuid.optional(), templateIds: z.array(uuid).optional(),
-  employeeIds: z.array(uuid).optional(), teamIds: z.array(uuid).optional(), coverageSource: z.enum(['FORECAST', 'MANUAL']).default('FORECAST'),
+  employeeIds: z.array(uuid).optional(), excludeEmployeeIds: z.array(uuid).max(5000).optional(), teamIds: z.array(uuid).optional(), coverageSource: z.enum(['FORECAST', 'MANUAL']).default('FORECAST'),
   weights: Weights.default({ understaffing: 90, overstaffing: 30, contractHours: 50, preferences: 20, fairness: 30 }),
   // everyone keeps one usual start and end time for the whole period (within a tolerance). PREFER trades it off against coverage, REQUIRE never does.
   // Left out, the company default (Configuration > Scheduling Rules) applies. A person's own setting always wins over it.
@@ -432,42 +497,118 @@ const GenBody = z.object({
   weekStart: z.number().int().min(0).max(6).optional(),   // weekday a pay week begins on: Monday 0 ... Sunday 6. Omitted: the group's setting, else the company's, else Monday
   // how sure to be of having enough people: 50 plans to the central forecast, 90 to its upper (P90) volume. Forecast-based schedules only.
   confidence: z.number().int().min(50).max(95).default(50),
-
+  // which solver to use: AUTO tries CP-SAT first and falls back to HiGHS, SCIP and the greedy roster if it fails; the others force one
+  solver: z.enum(['AUTO', 'CPSAT', 'HIGHS', 'SCIP', 'GREEDY', 'TIMEFOLD']).default('AUTO'),
+  // a group with more candidate shifts than this is split into parts solved side by side (default 120,000). Lower it to try the split on a small group.
+  splitAbove: z.number().int().min(500).max(900_000).optional(),
+  representativesAbove: z.number().int().min(20).max(1_000_000).optional(),   // a group with more people than this is solved through representatives (default 6,000); tests lower it
+  representativeCount: z.number().int().min(10).max(5000).optional(),
 });
+export type GenInput = z.infer<typeof GenBody>;
+
+/** What a long plan hands to each window it solves: the windows before it (not yet published), people already pinned, and the way out. */
+export interface GenExtras {
+  historyVersionId?: string;                                   // read the 7 days before `from` from this schedule instead of from published ones
+  priorWeekend?: Map<string, number>;                          // weekend shifts each person has already worked earlier in the plan
+  pinned?: { employeeId: string; day: string; startSlot: number; lengthSlots: number }[];   // shifts that stay as they are; those people-days are not offered and their cover counts
+  signal?: AbortSignal;                                        // aborts the solve inside the engine
+  interactive?: boolean;                                       // a person is waiting on this request: refuse what is too big to answer while they wait
+  onProgress?: (done: number, total: number, note: string) => void;
+}
 
 /** Why a schedule no longer matches the forecast it was built from: edited, withdrawn or replaced by a newer published one. Archived schedules are history, never stale. */
 const staleOf = (v: any): string[] => v.status === 'ARCHIVED' || v.kind === 'ROTATION' || !v.forecastVersionId ? [] : staleReasons({ settings: v.settings, forecastId: v.forecastVersionId, forecastRevNow: v.forecastRevNow ?? null, forecastStatusNow: v.forecastStatusNow ?? null, newerPublishedForecast: v.newerForecast ?? null });
-export const verDto = (v: any) => ({ id: v.id, seq: v.seq, wfmGroupId: v.wfmGroupId, groupName: v.groupName ?? null, name: v.name, status: v.status, kind: v.kind ?? 'DEMAND', coverageSource: v.coverageSource ?? 'FORECAST', periodStart: v.periodStart, periodEnd: v.periodEnd, forecastVersionId: v.forecastVersionId, forecastName: v.forecastName ?? null, rev: v.rev, hasChanges: v.status === 'PUBLISHED' && v.rev !== v.publishedRev, settings: v.settings, stats: v.stats, createdBy: v.createdBy, createdAt: v.createdAt, publishedBy: v.publishedBy, publishedAt: v.publishedAt, stale: staleOf(v), acknowledged: v.ack ?? null });
-const VER_SQL = `SELECT v.*, v.period_start::text AS period_start, v.period_end::text AS period_end, f.name AS forecast_name, g.name AS group_name,
+export const verDto = (v: any) => ({ id: v.id, seq: v.seq, wfmGroupId: v.wfmGroupId, groupName: v.groupName ?? null, name: v.name, status: v.status, kind: v.kind ?? 'DEMAND', coverageSource: v.coverageSource ?? 'FORECAST', periodStart: v.periodStart, periodEnd: v.periodEnd, forecastVersionId: v.forecastVersionId, forecastName: v.forecastName ?? null, rev: v.rev, hasChanges: v.status === 'PUBLISHED' && v.rev !== v.publishedRev, settings: v.settings, stats: v.stats, createdBy: v.createdBy, createdAt: v.createdAt, publishedBy: v.publishedBy, publishedAt: v.publishedAt, publishThrough: v.publishThrough ?? null, stale: staleOf(v), acknowledged: v.ack ?? null });
+export const VER_SQL = `SELECT v.*, v.period_start::text AS period_start, v.period_end::text AS period_end, f.name AS forecast_name, g.name AS group_name,
     f.rev AS forecast_rev_now, f.status AS forecast_status_now,
     (SELECT json_build_object('id', n.id, 'name', n.name) FROM forecast_versions n WHERE n.tenant_id = v.tenant_id AND n.wfm_group_id = v.wfm_group_id AND n.kind = 'SHORT' AND n.status = 'PUBLISHED' AND f.id IS NOT NULL AND n.id <> f.id AND n.seq > f.seq ORDER BY n.seq DESC LIMIT 1) AS newer_forecast
   FROM schedule_versions v LEFT JOIN forecast_versions f ON f.id = v.forecast_version_id LEFT JOIN wfm_groups g ON g.id = v.wfm_group_id WHERE v.tenant_id = :t`;
 
+// The weekday a group's pay week starts on (Monday 0 ... Sunday 6), so every screen can show weeks the way the group is paid.
+scheduling.get('/pay-week', requires('schedule:read'), async (req, res) => {
+  const p = me(req), groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
+  res.json(await withTenant(p.tenantId, (tx) => payWeekFor(tx, groupId)));
+});
+
 // What the staffing target for these dates looks like, before spending solver time: hours needed, which days have no target, and the busiest hour.
+// For a long range it also says which forecast covers each week, how far to trust it, and roughly how long building the plan will take.
 scheduling.get('/readiness', requires('schedule:read'), async (req, res) => {
   const p = me(req);
   const groupId = parse(uuid, req.query.groupId), from = parse(z.string().regex(isoDay), req.query.from);
-  const weeks = parse(z.coerce.number().int().min(1).max(4), req.query.weeks ?? 1);
+  const weeks = parse(z.coerce.number().int().min(1).max(52), req.query.weeks ?? 1);
   const manual = req.query.coverageSource === 'MANUAL';
+  const timeLimit = parse(z.coerce.number().int().min(3).max(120), req.query.timeLimitSec ?? 30), windowWeeks = parse(z.coerce.number().int().min(1).max(4), req.query.windowWeeks ?? 4);
+  const solveWeeks = req.query.solveWeeks ? parse(z.coerce.number().int().min(1).max(52), req.query.solveWeeks) : undefined;
   const days = dayRange(from, addDays(from, weeks * 7 - 1));
-  const payWeek = await withTenant(p.tenantId, (tx) => payWeekFor(tx, groupId));
+  const { payWeek, group, people } = await withTenant(p.tenantId, async (tx) => ({
+    payWeek: await payWeekFor(tx, groupId), group: await loadGroup(tx, groupId),
+    people: (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM employees WHERE tenant_id = :t AND status = 'ACTIVE' AND (primary_group_id = $1 OR eligible_group_ids @> ARRAY[$1::uuid])`, [groupId]))?.n ?? 0,
+  }));
+  const today = todayIn(group.timezone ?? 'UTC');
+  const estimate = { people, windows: Math.ceil(Math.min(weeks, solveWeeks ?? Math.min(weeks, 13)) / windowWeeks), seconds: estimateSolveSeconds(people, { weeks, windowWeeks, timeLimitSec: timeLimit, solveWeeks }) };
   try {
     const r = manual ? await requirementForManual(p.tenantId, groupId, days) : await requirementFor(p.tenantId, groupId, days, undefined, parse(z.coerce.number().int().min(50).max(95), req.query.confidence ?? 50));
     let peak = 0;
     for (const v of r.required) peak = Math.max(peak, v);
-    res.json({ requiredHours: r.required.reduce((n: number, v: number) => n + v, 0) / 4, peakPeople: peak, uncoveredDays: r.uncovered, projectedDays: r.projected, problem: null, payWeek });
+    const unc = new Set(r.uncovered), proj = new Set(r.projected), horizon: any[] = [];
+    for (let w = 0; w < weeks; w++) {
+      const wd = days.slice(w * 7, w * 7 + 7), none = wd.filter((d) => unc.has(d)).length, long = wd.filter((d) => proj.has(d)).length;
+      const source = manual ? 'MANUAL' : none === wd.length ? 'NONE' : long === wd.length ? 'LONG' : long ? 'MIXED' : 'SHORT';
+      const ahead = Math.max(0, Math.floor((new Date(wd[0]).getTime() - new Date(today).getTime()) / 604_800_000));
+      horizon.push({ weekStart: wd[0], source, confidence: source === 'NONE' ? 'NONE' : source === 'MANUAL' ? 'HIGH' : source === 'LONG' ? 'LOW' : ahead <= 6 ? 'HIGH' : ahead <= 18 ? 'MEDIUM' : 'LOW' });
+    }
+    const firstLow = horizon.findIndex((h) => h.confidence === 'LOW');
+    res.json({ requiredHours: r.required.reduce((n: number, v: number) => n + v, 0) / 4, peakPeople: peak, uncoveredDays: r.uncovered, projectedDays: r.projected, problem: null, payWeek, horizon, estimate,
+      confidenceNote: firstLow > 0 ? `Confidence is lower from week ${firstLow + 1} (${horizon[firstLow].weekStart}): the forecast is less certain that far out, so those weeks are planned as a pattern and re-solved as they come closer.` : firstLow === 0 && weeks > 1 ? 'The forecast is a long-range projection for the whole range, so confidence is lower throughout.' : null });
   } catch (e: any) {
-    res.json({ requiredHours: null, peakPeople: null, uncoveredDays: [], projectedDays: [], problem: e?.message ?? 'The staffing target could not be worked out.', payWeek });
+    res.json({ requiredHours: null, peakPeople: null, uncoveredDays: [], projectedDays: [], problem: e?.message ?? 'The staffing target could not be worked out.', payWeek, horizon: [], estimate, confidenceNote: null });
   }
 });
 
+/** The list of schedules, newest first, a page at a time: `limit` (up to 200, default 100), `offset`, `status` and `groupIds` (comma-separated), and `q` (name, v-number or group). X-Total-Count says how many match. */
 scheduling.get('/versions', requires('schedule:read'), async (req, res) => {
-  const groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
-  res.json((await withTenant(me(req).tenantId, (tx) => tx.q<any>(`${VER_SQL} AND ($1::uuid IS NULL OR v.wfm_group_id = $1) ORDER BY v.seq DESC LIMIT 100`, [groupId]))).map(verDto));
+  const q = parse(z.object({
+    groupId: uuid.optional(), groupIds: z.string().optional().transform((v) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined)).pipe(z.array(uuid).max(50).optional()),
+    status: z.string().optional().transform((v) => (v ? v.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean) : undefined)).pipe(z.array(z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED'])).max(3).optional()),
+    q: z.string().trim().max(80).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional(),
+  }), req.query);
+  const groups = q.groupIds ?? (q.groupId ? [q.groupId] : null);
+  const filter = `AND ($1::uuid[] IS NULL OR v.wfm_group_id = ANY($1)) AND ($2::text[] IS NULL OR v.status = ANY($2))
+                  AND ($3::text IS NULL OR v.name ILIKE '%' || $3 || '%' OR ('v' || v.seq) = lower($3) OR g.name ILIKE '%' || $3 || '%')`;
+  const args = [groups, q.status ?? null, q.q || null];
+  const out = await withTenant(me(req).tenantId, async (tx) => ({
+    total: (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM schedule_versions v LEFT JOIN wfm_groups g ON g.id = v.wfm_group_id WHERE v.tenant_id = :t ${filter}`, args))!.n,
+    rows: await tx.q<any>(`${VER_SQL} ${filter} ORDER BY coalesce(v.published_at, v.created_at) DESC, v.seq DESC LIMIT $4 OFFSET $5`, [...args, q.limit ?? 100, q.offset ?? 0]),
+  }));
+  res.setHeader('X-Total-Count', String(out.total)); res.setHeader('X-Page-Limit', String(q.limit ?? 100));
+  res.json(out.rows.map((v) => {
+    // the list is for choosing a schedule: the full report each one carries (the long text about every person and exception) is fetched with the schedule itself, not 100 times here
+    const d = verDto(v) as any;
+    if (d.settings && typeof d.settings === 'object' && 'report' in d.settings) { const { report: _report, ...rest } = d.settings; d.settings = rest; }
+    return d;
+  }));
 });
 
-scheduling.post('/versions', requires('schedule:generate'), async (req, res) => {
-  const p = me(req), b = parse(GenBody, req.body);
+/** Work out a schedule for up to four weeks and return it, without saving anything. Used by the generate route and, window by window, by long plans. */
+/** People x days a request may cover while the person waits for the answer; more than this is a background plan. */
+/** Crews above this many people are solved in parts. */
+const SPLIT_PEOPLE = Number(process.env.SPLIT_PEOPLE || 800);
+/** How many parts of one build are with the engine at the same time. */
+/** Parts of one build with the engines at once: SCHEDULE_PART_PARALLEL, or worked out from how many engines there are right now. */
+const partParallel = () => Math.max(1, Number(process.env.SCHEDULE_PART_PARALLEL || partParallelFor(engine.count)));
+/** More possible shifts than this (before any thinning) and a request is refused at once. */
+const MAX_DETAIL = Number(process.env.SCHEDULE_MAX_DETAIL || 8_000_000);
+/** Groups with more people than this are solved through representatives. */
+const REPRESENTATIVES_ABOVE = Number(process.env.SCHEDULE_REPRESENTATIVES_ABOVE || 6000);
+/** How many people are solved when they are. */
+const REPRESENTATIVE_COUNT = Number(process.env.SCHEDULE_REPRESENTATIVE_COUNT || 1600);
+const INTERACTIVE_MAX_PERSON_DAYS = Number(process.env.INTERACTIVE_MAX_PERSON_DAYS || 20_000);
+
+export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) {
+  // how long each stage took, logged as it ends (so a stage that never ends is visible) and kept with the schedule's solver details
+  const phases: Record<string, number> = {};
+  let lapAt = Date.now();
+  const lap = (name: string) => { const sec = (Date.now() - lapAt) / 1000; lapAt = Date.now(); phases[name] = Math.round(sec * 10) / 10; if (sec >= 1) console.log(`[build] ${name}: ${sec.toFixed(1)} s`); };
   const to = addDays(b.from, b.weeks * 7 - 1), days = dayRange(b.from, to);
   if (b.assumeRepeat && b.weeks !== 1) throw bad('"Assume the week repeats" works for one-week schedules');
   const { ctx: baseCtx, pol, skillRows } = await withTenant(p.tenantId, async (tx) => ({
@@ -476,6 +617,7 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
   }));
   const weekStart = b.weekStart ?? baseCtx.weekStart;   // asked for, else the group's pay week, else the company's
   const ctx = { ...baseCtx, weekStart };
+  lap('load people and rules');
   // same start and end every day: the request wins, else the company default; a person's own setting then wins over both
   const consist = b.consistentTimes ?? pol.scheduling.consistentTimes;
   const startTol = Math.round(consist.startToleranceMin / 15), endTol = Math.round(consist.endToleranceMin / 15);
@@ -498,14 +640,25 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
     }
     fill = { id: loaded.v.id, name: loaded.v.name, headcount: [...cover].sort((x, y) => x[0] - y[0]), crew: new Set(loaded.crew.map((r) => r.employeeId)) };
   }
-  const people = ctx.employees.filter((e) => eligible(e, b.groupId, ctx.skillBased) && (!b.employeeIds || b.employeeIds.includes(e.id)) && (!b.teamIds || (e.teamId && b.teamIds.includes(e.teamId))) && (b.employeeIds || !fill || !fill.crew.has(e.id)));
+  const pinnedKey = new Set((x.pinned ?? []).map((s) => `${s.employeeId}|${s.day}`));
+  const pinnedCover = new Map<number, number>();
+  for (const sh of x.pinned ?? []) {
+    const i = days.indexOf(sh.day);
+    if (i < 0) continue;
+    for (let g = i * SPD + sh.startSlot; g < Math.min(days.length * SPD, i * SPD + sh.startSlot + sh.lengthSlots); g++) pinnedCover.set(g, (pinnedCover.get(g) ?? 0) + 1);
+  }
+  const excluded = b.excludeEmployeeIds?.length ? new Set(b.excludeEmployeeIds) : null;
+  let people = ctx.employees.filter((e) => eligible(e, b.groupId, ctx.skillBased) && (!b.employeeIds || b.employeeIds.includes(e.id)) && !excluded?.has(e.id) && (!b.teamIds || (e.teamId && b.teamIds.includes(e.teamId))) && (b.employeeIds || !fill || !fill.crew.has(e.id)));
   if (!people.length) throw bad(b.employeeIds || b.teamIds ? 'No active employees match the people or teams you chose to include.' : fill ? `Everyone in this group is in a crew of "${fill.name}", so nobody is left to fill its gaps. Add people to the group, or choose who to include.` : 'No active employees are assigned to this WFM group. Add them under Workforce › Employees.');
+  // someone waiting on a web request cannot be kept waiting for minutes (the connection drops): big builds belong to the background plan
+  if (x.interactive && people.length * days.length > INTERACTIVE_MAX_PERSON_DAYS) throw bad(`This is too big to build while you wait (${people.length.toLocaleString('en-US')} people for ${days.length} days). Start it as a background plan instead (Generate Schedule › build in the background), or choose fewer people.`);
   // what the chosen people worked just before this schedule starts, from the published schedule(s)
   let boundary: Boundary | null = null, previousName: string | null = null;
   if (b.useHistory) {
     const rows = await withTenant(p.tenantId, (tx) => tx.q<{ employeeId: string; day: string; startSlot: number; lengthSlots: number; templateId: string | null; name: string }>(
       `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, s.template_id, v.name FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
-        WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.day >= $1::date - 7 AND s.day < $1::date AND s.employee_id = ANY($2::uuid[])`, [b.from, people.map((e) => e.id)]));
+        WHERE s.tenant_id = :t AND (($3::uuid IS NULL AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through)) OR v.id = $3::uuid)
+          AND s.day >= $1::date - 7 AND s.day < $1::date AND s.employee_id = ANY($2::uuid[])`, [b.from, people.map((e) => e.id), x.historyVersionId ?? null]));
     const tplById = new Map(ctx.templates.map((t) => [t.id, t]));
     boundary = boundaryFrom(rows.map((r) => ({ employeeId: r.employeeId, day: r.day, startSlot: r.startSlot, lengthSlots: r.lengthSlots, paidSlots: paidSlots(tplById.get(r.templateId ?? ''), r.lengthSlots) })), b.from, (dowOf(b.from) - weekStart + 7) % 7, days.length * SPD);
     previousName = rows[0]?.name ?? null;
@@ -515,9 +668,10 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
     : await requirementFor(p.tenantId, b.groupId, days, b.forecastVersionId, b.confidence);
   // earlier shifts that run past midnight into the first day still cover its first hours
   // people already scheduled (the day before, or in the schedule being filled in) count as covering their hours
-  const baseCarry = mergeCarry(boundary?.carryOver ?? [], fill?.headcount ?? []);
+  const baseCarry = mergeCarry(mergeCarry(boundary?.carryOver ?? [], fill?.headcount ?? []), [...pinnedCover].sort((a, c) => a[0] - c[0]));
   const required = netRequired(requiredGross, baseCarry);
 
+  lap('load forecast');
   // requirement per skill, when the group's queues need different skills: coverage is then judged skill by skill
   let skillSplit: { id: string; name: string; required: number[] }[] | null = null;
   if (fv && b.coverageSource !== 'MANUAL') {
@@ -528,6 +682,23 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
   const skillsOf = new Map<string, number[]>();
   for (const r of skillRows) { const k = skillIdx.get(r.skillId); if (k) skillsOf.set(r.employeeId, [...(skillsOf.get(r.employeeId) ?? []), k]); }
 
+  // A group too large to weigh person by person: solve a sample of each kind of person with the demand scaled to the sample's share, then give everyone else the roster of a
+  // sample member of their own kind (see representatives.ts). Everyone is still checked against their own time off, availability and rules afterwards.
+  const allPeople = people;
+  const repsAbove = b.representativesAbove ?? REPRESENTATIVES_ABOVE;
+  let rep: Representatives | null = null;
+  let solveRequired = required, solveSkillRequired: number[][] | null = skillSplit ? skillSplit.map((sk) => sk.required) : null;
+  if (people.length > repsAbove) {
+    const tol0 = pol.scheduling.partTimeToleranceHours ?? null;
+    const sigOf = (i: number) => { const e = allPeople[i]; return [e.employmentType, e.weeklyContractHours, weeklyCapHours({ employmentType: e.employmentType, contractHours: Number(e.weeklyContractHours), maxHours: Number(e.maxWeeklyHours) }, tol0), e.workDaysPerWeek,
+      e.maxConsecutiveDays, e.minRestHours, e.shiftConsistency ?? '', e.fixedStartSlot ?? '', e.allowWeekend ? 1 : 0, e.allowOvernight ? 1 : 0, e.nightShiftConsent ? 1 : 0, e.preferredTemplateId ?? '', (skillsOf.get(e.id) ?? []).join(',')].join('|'); };
+    rep = pickRepresentatives(allPeople.length, sigOf, b.representativeCount ?? REPRESENTATIVE_COUNT);
+    const sizes = [rep.reps.length, allPeople.length - rep.reps.length];
+    solveRequired = splitRequirement(required, sizes)[0];
+    solveSkillRequired = skillSplit ? skillSplit.map((sk) => splitRequirement(sk.required, sizes)[0]) : null;
+    people = rep.reps.map((i) => allPeople[i]);
+  }
+
   // candidate shifts: employee x day x template x start, minus everything the rules already forbid. What rules a person out is counted for the report.
   let options: any[] = [];
   const optionsByPerson = new Map<string, number>(), blockedByPerson = new Map<string, Map<string, number>>();
@@ -537,14 +708,23 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
   const skillsByPerson = new Map<string, string[]>();
   for (const r of skillRows) skillsByPerson.set(r.employeeId, [...(skillsByPerson.get(r.employeeId) ?? []), r.skillId]);
   // every length and start time is one more candidate shift per person and day; past about 120,000 the solver needs more memory than it should have, so the choices are thinned
-  const buildOptions = (maxLengths: number, startStride: number) => {
+  // building the choices for thousands of people is a long stretch of plain computing; letting other requests in every few people keeps the API answering
+  const OVER = Symbol('too many candidate shifts');
+  /** Build the candidate shifts for one thinning setting. Stops (returns false) the moment there are more than `cap`, so an absurd request never builds millions of them. */
+  const buildOptions = async (maxLengths: number, startStride: number, cap = Infinity, subset?: number[]): Promise<boolean> => {
   options = []; optionsByPerson.clear(); blockedByPerson.clear();
+  let sliceStart = Date.now();
+  try {
   const lengthsByTemplate = new Map(templates.map((t) => [t.id, offeredLengths(t, maxLengths)]));
-  people.forEach((e, ei) => {
+  for (const ei of subset ?? people.keys()) {
+    const e = people[ei];
     // an assigned usual start time applies unless the person is set to vary freely
     const fixed = e.fixedStartSlot != null && e.shiftConsistency !== 'OFF' ? (e.fixedStartSlot as number) : null;
     const who = { groupIds: [e.primaryGroupId, ...(e.eligibleGroupIds ?? [])].filter(Boolean) as string[], employmentType: e.employmentType as string, skillIds: skillsByPerson.get(e.id) ?? [] };
-    days.forEach((day, d) => {
+    for (const [d, day] of days.entries()) {
+      // never hold the API for more than a few milliseconds at a time: checked for every person-day, since one person can have thousands of candidate shifts a day
+      if (Date.now() - sliceStart > 8) { await new Promise<void>((r) => setImmediate(r)); sliceStart = Date.now(); }
+      if (pinnedKey.has(`${e.id}|${day}`)) continue;
       const dow = dowOf(day);
       templates.forEach((t, ti) => {
         if (!t.workDays.includes(dow)) { tally(e.id, 'shift templates that do not run on their days'); return; }
@@ -559,19 +739,71 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
             if (shiftBlocked(ctx.rules.forTeam(e.teamId, e.id), { nightConsent: !!e.nightShiftConsent }, { startSlot: s, lengthSlots: len, mealSlots: meal })) { tally(e.id, 'a labour-law rule'); continue; }
             options.push({ employee: ei + 1, day: d, template: ti, start_slot: s, length_slots: len, paid_slots: paid, preference: preferenceFor(ctx, e, day, s, len) });
             optionsByPerson.set(e.id, (optionsByPerson.get(e.id) ?? 0) + 1);
+            if (options.length > cap) throw OVER;
           }
         }
       });
-    });
-  });
-  };
-  const MAX_CANDIDATES = 120_000;
-  let thinned: string | null = null;
-  for (const [maxLengths, stride] of [[5, 1], [3, 1], [3, 2], [2, 2], [1, 2], [1, 4]] as const) {
-    buildOptions(maxLengths, stride);
-    if (options.length <= MAX_CANDIDATES) { if (maxLengths < 5 || stride > 1) thinned = `${(options.length).toLocaleString('en-US')} candidate shifts after keeping ${maxLengths === 1 ? 'only the longest length' : `${maxLengths} lengths per template`}${stride > 1 ? ` and every ${stride === 2 ? 'second' : 'fourth'} start time` : ''}`; break; }
+    }
   }
-  if (options.length > MAX_CANDIDATES) throw bad(`There are ${options.length.toLocaleString('en-US')} possible shifts, more than the solver can take. Choose fewer people, fewer templates or shorter start windows.`);
+  } catch (e) { if (e === OVER) return false; throw e; }
+  return true;
+  };
+  // by team where possible; but when the queues need different skills each part gets its fair share of every combination of skills, so every part can cover its share of every skill
+  const splitPeopleInto = (n: number) => (skillSplit ? stratifiedIndexes(people.map((e) => (skillsOf.get(e.id) ?? []).join(',')), n) : partitionIndexes(people.map((e) => e.teamId ?? ''), n));
+  const MAX_CANDIDATES = b.splitAbove ?? 120_000, PART_TARGET = Math.round(MAX_CANDIDATES * 0.75), MAX_TOTAL = 900_000;
+  let thinned: string | null = null, partitions: number[][] | null = null;
+  const thinText = (maxLengths: number, stride: number) => `${(options.length).toLocaleString('en-US')} candidate shifts after keeping ${maxLengths === 1 ? 'only the longest length' : `${maxLengths} lengths per template`}${stride > 1 ? ` and every ${stride === 2 ? 'second' : 'fourth'} start time` : ''}`;
+  // A quick upper bound first: even with only the longest length and every fourth start, how many shifts could this request ever have? Beyond what the
+  // engine can take in parts the answer is no, at once, instead of after minutes of building them.
+  const thinnestBound = people.length * days.reduce((n, day) => n + templates.reduce((m, tp) => m + (tp.workDays.includes(dowOf(day)) ? Math.ceil(startsFor(tp, dowOf(day)).length / 4) : 0), 0), 0);
+  if (thinnestBound > MAX_TOTAL * 4) throw bad(`This request could produce about ${thinnestBound.toLocaleString('en-US')} possible shifts, more than can be handled even in parts. Choose fewer people, fewer templates, or narrower start windows.`);
+  let fits = false, built = '';
+  const settings = [[5, 1], [3, 1], [3, 2], [2, 2], [1, 2], [1, 4]] as const;
+  const counts = new Map<string, number>(), exact = new Set<string>();          // what each thinning setting gave (a lower bound when building stopped at the cap), so none is built twice
+  // How many shifts a thinning setting could have, by arithmetic (lengths x start times x days x templates x people, before anyone's own limits take some away).
+  const lengthsAt = new Map<string, number>();
+  const perPersonAt = (maxLengths: number, stride: number) => days.reduce((n, day) => n + templates.reduce((m, tp) => {
+    const dow = dowOf(day);
+    if (!tp.workDays.includes(dow)) return m;
+    const lk = `${tp.id}|${maxLengths}`;
+    let nl = lengthsAt.get(lk); if (nl === undefined) { nl = offeredLengths(tp, maxLengths).length; lengthsAt.set(lk, nl); }
+    return m + nl * Math.ceil(startsFor(tp, dow).length / stride);
+  }, 0), 0);
+  // Far beyond what thinning can make sense of (every 15-minute start and every length for thousands of people): say so at once, with the numbers, before any work is done.
+  const fullDetail = people.length * perPersonAt(5, 1);
+  if (fullDetail > MAX_DETAIL) throw bad(`This request has about ${fullDetail.toLocaleString('en-US')} possible shifts (${people.length.toLocaleString('en-US')} people, ${days.length} days, ${templates.length} shift template${templates.length === 1 ? '' : 's'} with many start times and lengths). That is more than can be narrowed down sensibly. Use shift templates with fewer start times (every 30 or 60 minutes) or fewer lengths, or choose fewer people.`);
+  // A big request is not built at every setting to see which one fits (that is minutes of work and gigabytes for a request that is far over the limit). A small sample of
+  // people, at the thinnest setting, says what share of the possible shifts survive their own limits; the arithmetic then predicts every setting, and settings predicted
+  // to be well over the limit are skipped without being built.
+  let keepShare: number | null = null;
+  if (people.length * perPersonAt(5, 1) > MAX_CANDIDATES) {
+    const k = Math.min(people.length, 24), sample = Array.from({ length: k }, (_, i) => Math.floor((i * people.length) / k));
+    await buildOptions(1, 4, Infinity, sample);
+    keepShare = Math.max(0.02, options.length / Math.max(1, k * perPersonAt(1, 4)));
+    built = '';
+  }
+  const predicted = (maxLengths: number, stride: number) => (keepShare === null ? 0 : people.length * perPersonAt(maxLengths, stride) * keepShare);
+  const tryBuild = async (maxLengths: number, stride: number, cap: number) => {
+    const k = `${maxLengths}/${stride}`;
+    if (keepShare !== null && predicted(maxLengths, stride) > cap * 1.6) { counts.set(k, cap + 1); return false; }       // far over: not worth building to find out
+    if ((counts.get(k) ?? 0) > cap) return false;
+    if (built !== k || !exact.has(k)) { const ok = await buildOptions(maxLengths, stride, cap); built = k; counts.set(k, ok ? options.length : cap + 1); if (ok) exact.add(k); else return false; }
+    return options.length <= cap;
+  };
+  for (const [maxLengths, stride] of settings.slice(0, 2)) {         // one solve if the choices fit in it
+    if (await tryBuild(maxLengths, stride, MAX_CANDIDATES)) { if (maxLengths < 5 || stride > 1) thinned = thinText(maxLengths, stride); fits = true; break; }
+  }
+  if (!fits) {                                                            // too many for one solve: keep as many choices as memory allows and split the people into parts solved side by side
+    let ok = false;
+    for (const [maxLengths, stride] of settings) {
+      if (await tryBuild(maxLengths, stride, MAX_TOTAL)) { if (maxLengths < 5 || stride > 1) thinned = thinText(maxLengths, stride); ok = true; break; }
+    }
+    if (!ok) throw bad(`There are more than ${MAX_TOTAL.toLocaleString('en-US')} possible shifts even with the choices thinned, more than can be handled in parts. Choose fewer people, fewer templates or shorter start windows.`);
+    partitions = splitPeopleInto(Math.max(2, Math.ceil(options.length / PART_TARGET), Math.ceil(people.length / SPLIT_PEOPLE)));
+  }
+  // One model for thousands of people finds nothing better than the starting roster in the time it has; several smaller ones solved side by side each improve. So a big crew
+  // is split by team into parts of about SPLIT_PEOPLE even when all its candidate shifts would fit in one solve.
+  if (!partitions && people.length > SPLIT_PEOPLE) partitions = splitPeopleInto(Math.ceil(people.length / SPLIT_PEOPLE));
   if (!options.length) throw bad('Every possible shift is ruled out by availability, time off or template days. Check availability and shift templates.');
 
   // part-time, contract and temporary staff are held to their contract plus a tolerance; say so plainly when their shift lengths cannot make it
@@ -587,20 +819,78 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
     if (!f.ok) misfits.push({ name: `${e.firstName} ${e.lastName}`, contractHours: contract, closestHours: f.closest === null ? null : f.closest / 4 });
   });
 
+  lap('candidate shifts');
   const W = b.weights;
-  const res1 = await engine.schedule({
-    days: days.length, first_dow: dowOf(b.from), week_start: weekStart, required,
-    employees: people.map((e, i) => ({
-      id: i + 1, max_week_slots: Math.round(capHoursOf(e) * 4), min_week_slots: Math.round(e.weeklyContractHours * 4), max_consecutive: e.maxConsecutiveDays, rest_slots: Math.round(e.minRestHours * 4), max_days_week: e.workDaysPerWeek,
-      consist_mode: { DEFAULT: 0, OFF: 1, PREFER: 2, REQUIRE: 3 }[(e.shiftConsistency ?? 'DEFAULT') as 'DEFAULT'], skill_ids: skillsOf.get(e.id) ?? [],
-      ...priorFields(boundary?.byEmployee.get(e.id)),
-    })),
-    options, time_limit_sec: b.timeLimitSec, w_under: W.understaffing * 10, w_over: W.overstaffing, w_hours: W.contractHours, w_pref: W.preferences, w_fair: W.fairness, workers: 8,
-    consistency_mode: { OFF: 0, PREFER: 1, REQUIRE: 2 }[consist.mode], start_tol_slots: startTol, end_tol_slots: endTol, w_consist: 200,
-    skill_requirements: (skillSplit ?? []).map((s, i) => ({ id: i + 1, required: s.required })), wrap: b.assumeRepeat,
-  }, (b.timeLimitSec + 60 + 45 * b.weeks) * 1000);   // preparing each week's model takes time on top of the search
+  const optionsOf: any[][] = people.map(() => []);
+  for (const o of options) optionsOf[o.employee - 1].push(o);
+  const everyone = people.map((_, i) => i);
+  const reqs = partitions ? splitRequirement(solveRequired, partitions.map((q) => q.length)) : [solveRequired];
+  const skillReqs = partitions && skillSplit ? skillSplit.map((sk, i) => splitRequirement(solveSkillRequired![i], partitions!.map((q) => q.length))) : null;
+  const progress = (partitions ?? [everyone]).map(() => 0);
+  const solvePart = (who: number[], k: number) => {
+    const local = new Map(who.map((gi, j) => [gi + 1, j + 1]));
+    return engine.scheduleStream({
+      days: days.length, first_dow: dowOf(b.from), week_start: weekStart, required: reqs[k],
+      employees: who.map((gi, j) => { const e = people[gi]; return {
+        id: j + 1, max_week_slots: Math.round(capHoursOf(e) * 4), min_week_slots: Math.round(e.weeklyContractHours * 4), max_consecutive: e.maxConsecutiveDays, rest_slots: Math.round(e.minRestHours * 4), max_days_week: e.workDaysPerWeek,
+        consist_mode: { DEFAULT: 0, OFF: 1, PREFER: 2, REQUIRE: 3 }[(e.shiftConsistency ?? 'DEFAULT') as 'DEFAULT'], skill_ids: skillsOf.get(e.id) ?? [],
+        ...priorFields(boundary?.byEmployee.get(e.id)), prior_weekend: x.priorWeekend?.get(e.id) ?? 0,
+      }; }),
+      options: who.flatMap((gi) => optionsOf[gi].map((o) => ({ ...o, employee: local.get(gi + 1)! }))),
+      time_limit_sec: b.timeLimitSec, w_under: W.understaffing * 10, w_over: W.overstaffing, w_hours: W.contractHours, w_pref: W.preferences, w_fair: W.fairness, workers: 8,
+      consistency_mode: { OFF: 0, PREFER: 1, REQUIRE: 2 }[consist.mode], start_tol_slots: startTol, end_tol_slots: endTol, w_consist: 200,
+      skill_requirements: (skillSplit ?? []).map((sk, i) => ({ id: i + 1, required: skillReqs ? skillReqs[i][k] : solveSkillRequired![i] })), wrap: b.assumeRepeat,
+      backend: b.solver === 'AUTO' ? '' : b.solver.toLowerCase(),
+    }, { timeoutMs: (b.timeLimitSec + 60 + 45 * b.weeks) * 1000 * 3 * Math.max(1, Math.ceil((partitions?.length ?? 1) / (2 * engine.count))), signal: x.signal,
+      onEvent: (ev) => { progress[k] = ev.chunks ? ev.chunk / ev.chunks : 0; const mean = progress.reduce((a, c) => a + c, 0) / progress.length; x.onProgress?.(Math.round(mean * 1000), 1000, ev.note); } });   // preparing each week's model takes time on top of the search, and a fallback solver gets a second go
+  };
+  // a few parts at a time, not all at once: every part sent to the engine waits there for the solver, holding a thread, and a build of ten parts next to another build would otherwise
+  // leave no thread free for the short calls (staffing, forecasts) that other screens and builds make
+  const parts = partitions ?? [everyone], results: any[] = new Array(parts.length);
+  let nextPart = 0, failedPart = false;
+  await Promise.all(Array.from({ length: Math.min(partParallel(), parts.length) }, async () => {
+    for (;;) {
+      const k = nextPart++;
+      if (k >= parts.length || failedPart) return;
+      try { results[k] = await solvePart(parts[k], k); } catch (e) { failedPart = true; throw e; }
+    }
+  }));
+  // one answer from the parts: the worst status wins, the gap is the widest, times and sizes add up or take the longest
+  const res1: any = results.length === 1 ? results[0] : {
+    status: results.some((r) => r.status === 'INFEASIBLE') ? 'INFEASIBLE' : results.every((r) => r.status === 'OPTIMAL') ? 'OPTIMAL' : results.every((r) => r.status === 'OPTIMAL' || r.status === 'FEASIBLE') ? 'FEASIBLE' : 'UNKNOWN',
+    gap: Math.max(...results.map((r) => r.gap)), wall_sec: Math.max(...results.map((r) => r.wall_sec)), variables: results.reduce((n, r) => n + r.variables, 0), constraints: results.reduce((n, r) => n + r.constraints, 0),
+    objective: results.reduce((n, r) => n + r.objective, 0), backend: [...new Set(results.map((r) => r.backend).filter(Boolean))].join('+'), attempts: results.flatMap((r, k) => (r.attempts ?? []).map((a: string) => `part ${k + 1}: ${a}`)),
+    assignments: results.flatMap((r, k) => r.assignments.map((a: any) => ({ ...a, employee: partitions![k][a.employee - 1] + 1 }))),
+  };
+  lap('solve');
   if (res1.status === 'INFEASIBLE') throw bad('The rules cannot all be met with these people. Relax availability, contract limits or add people.');
   if (res1.status !== 'OPTIMAL' && res1.status !== 'FEASIBLE') throw bad(`The solver did not return a schedule in the ${b.timeLimitSec} seconds it was given (${res1.status.toLowerCase()}). Try a longer solver time, fewer people or fewer shift templates.`);
+
+  let repNote: string | null = null;
+  if (rep) {
+    // everyone takes the roster of their representative, minus whatever their own time off, availability, labour-law rules or last shift before this schedule rule out
+    const byRep = new Map<number, any[]>();
+    for (const a of res1.assignments) { const l = byRep.get(a.employee - 1); if (l) l.push(a); else byRep.set(a.employee - 1, [a]); }
+    const out: any[] = []; let dropped = 0, copied = 0, sliceAt = Date.now();
+    for (const [pi, e] of allPeople.entries()) {
+      if (Date.now() - sliceAt > 8) { await new Promise<void>((r) => setImmediate(r)); sliceAt = Date.now(); }
+      const r = rep.repOf[pi], list = byRep.get(r);
+      if (!list) continue;
+      if (rep.reps[r] === pi) { for (const a of list) out.push({ ...a, employee: pi + 1 }); continue; }
+      const prior = boundary?.byEmployee.get(e.id), restSlots = Math.round(e.minRestHours * 4);
+      for (const a of list) {
+        copied++;
+        const why = blockedReason(ctx, e, days[a.day], a.start_slot, a.length_slots);
+        const restBroken = a.day === 0 && prior && prior.endSlot !== null && prior.endSlot - SPD > a.start_slot - restSlots;
+        if (why || restBroken || shiftBlocked(ctx.rules.forTeam(e.teamId, e.id), { nightConsent: !!e.nightShiftConsent }, { startSlot: a.start_slot, lengthSlots: a.length_slots, mealSlots: rulesFor(templates[a.template], a.length_slots).mealSlots })) { dropped++; continue; }
+        out.push({ ...a, employee: pi + 1 });
+      }
+    }
+    for (const e of allPeople) if (!optionsByPerson.has(e.id)) optionsByPerson.set(e.id, 1);
+    res1.assignments = out;
+    repNote = `This group has ${allPeople.length.toLocaleString('en-US')} people, too many to weigh one by one. ${rep.reps.length.toLocaleString('en-US')} of them, in proportion to each kind of contract, were solved against their share of the demand, and everyone else was given the roster of one of those of their own kind. ${dropped.toLocaleString('en-US')} of ${copied.toLocaleString('en-US')} copied shifts were left out because that person's own time off, availability, rest or labour-law rules did not allow them, so cover can be a little below what the solve reached. Names and teams are not matched, so people in one team can have identical days off.`;
+    people = allPeople;
+  }
 
   const chosen: PlacedShift[] = res1.assignments.map((a: any) => ({ employeeId: people[a.employee - 1].id, day: days[a.day], dayIdx: a.day, startSlot: a.start_slot, length: a.length_slots, template: templates[a.template] }));
   // when the week is assumed to repeat, what the last night's shifts leave running past midnight covers the first hours: the requirement shown and judged is net of it
@@ -608,6 +898,7 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
   const requiredFinal = netRequired(required, repeatSpill);
   const carryOver = mergeCarry(baseCarry, repeatSpill);
   const acts = placeActivities(chosen, days.length * SPD);
+  lap('place meals and breaks');
   // meals and breaks: move each within its slack to where the phones need people most
   const slackMin = b.breakSlackMin ?? pol.scheduling.breakSlackMin;
   let breakResult: { shiftsChanged: number; phoneShortfallBefore: number; phoneShortfallAfter: number } | null = null;
@@ -617,24 +908,57 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
     for (const m of r.moved) acts.set((m.shift as any).placed, m.activities as any);
     breakResult = { shiftsChanged: r.shiftsChanged, phoneShortfallBefore: r.phoneShortfallBefore, phoneShortfallAfter: r.phoneShortfallAfter };
   }
+  lap('optimise breaks');
   const rows: ShiftRow[] = chosen.map((s) => ({ employeeId: s.employeeId, day: s.day, startSlot: s.startSlot, lengthSlots: s.length, templateId: s.template.id }));
-  const solver = { status: res1.status, gap: res1.gap, wallSec: res1.wall_sec, variables: res1.variables, constraints: res1.constraints, objective: res1.objective, candidates: options.length, people: people.length };
+  const solver = { status: res1.status, gap: res1.gap, wallSec: res1.wall_sec, variables: res1.variables, constraints: res1.constraints, objective: res1.objective, candidates: options.length, people: people.length, backend: res1.backend || 'cpsat', attempts: res1.attempts ?? [], parts: partitions ? partitions.map((q) => q.length) : null, phasesSec: phases };
+  // parts where the optimiser found nothing better than the plain starting roster (or placed nobody): said plainly, not left for someone to notice in the solver details
+  const rosterOnlyParts = (res1.attempts ?? []).filter((a: string) => /cpsat: .*(starting roster only|placed nobody|failed|ended without)/.test(a)).length;
+  const rosterOnly = rosterOnlyParts ? `${rosterOnlyParts === 1 && !partitions ? 'The optimiser' : `The optimiser, for ${rosterOnlyParts} of ${partitions?.length ?? 1} part${(partitions?.length ?? 1) === 1 ? '' : 's'}`} could not improve on the plain starting roster in the time it had, so that part of the schedule is that roster. It is valid (every rule is met) but not tuned to the forecast. Give the solver more time, use fewer people or fewer shift choices, or build in the background with a longer solver time.` : null;
   const stats = computeStats(ctx, days, requiredFinal, rows, solver, { uncoveredDays: uncovered, projectedDays: projected });
+  lap('check rules and coverage');
   const modeText = { OFF: 'Off', PREFER: 'Preferred', REQUIRE: 'Required' };
   const personal = people.filter((e) => e.shiftConsistency && e.shiftConsistency !== 'DEFAULT').length, fixedN = people.filter((e) => e.fixedStartSlot != null).length;
   const report = buildReport({
     pool: people, requested: { employeeIds: b.employeeIds, teamIds: b.teamIds }, poolSize: people.length, shifts: rows.map((r, i) => ({ ...r, activities: acts.get(chosen[i]) ?? [] })), optionsByPerson, blockedByPerson,
-    uncoveredDays: uncovered, projectedDays: projected, coveragePercent: stats.coverage.percent, targetCoverage: pol.scheduling.targetCoverage, violations: stats.violations, solverStatus: res1.status,
+    uncoveredDays: uncovered, projectedDays: projected, coveragePercent: stats.coverage.percent, targetCoverage: pol.scheduling.targetCoverage, violations: stats.violations, solverStatus: res1.status === 'OPTIMAL' && res1.gap > 0.0005 ? 'FEASIBLE' : res1.status,     // stopped once proven close enough is still "not proven best"
     allEmployees: ctx.employees, groupId: b.groupId, templatesUsed: templates.length,
     consistencyNote: consist.mode !== 'OFF' || personal || fixedN ? `Company setting: ${modeText[consist.mode]}${consist.mode !== 'OFF' ? `, start may vary ${consist.startToleranceMin} min, end ${consist.endToleranceMin} min` : ''}. ${personal} ${personal === 1 ? 'person has' : 'people have'} their own setting and ${fixedN} ${fixedN === 1 ? 'has' : 'have'} an assigned start time.` : null,
     historyNote: boundary ? historyNote(boundary, previousName) : null,
+    partNote: partitions ? `This group is too large for one solve, so its ${people.length.toLocaleString('en-US')} people were split into ${partitions.length} parts of about ${Math.round(people.length / partitions.length).toLocaleString('en-US')} (by team where possible, or an even share of every skill combination when the queues need different skills), each given its share of the demand in every quarter-hour and solved side by side. Cover is judged on the whole group. People cannot be lent from one part to another, so a little pooling benefit is given up.` : null,
+    rosterOnlyNote: rosterOnly,
+    representativeNote: repNote,
     thinNote: thinned ? `The choices were thinned to keep the problem a size the solver handles well: ${thinned}. Fewer people, fewer templates or narrower start windows keep every option.` : null,
     repeatNote: b.assumeRepeat ? `Assuming the week repeats: ${repeatSpill.length ? `the shifts that run past the last midnight cover the first hours of Monday${repeatSpill[0] ? ` (up to ${Math.max(...repeatSpill.map((x) => x[1]))} people)` : ''}` : 'no shift runs past the last midnight, so the first hours get no help'}. Check this against the week before when you publish.` : null,
     crewNote: crewSizeNote({ people: people.length, contractHours: people.reduce((n, e) => n + Number(e.weeklyContractHours), 0) * b.weeks, requiredSlots: requiredFinal.reduce((n, x) => n + x, 0) }),
     contractNote: contractFitNote(misfits, tolerance),
+    hoursNote: (() => { const paidBy = new Map<string, number>(); for (const s of chosen) paidBy.set(s.employeeId, (paidBy.get(s.employeeId) ?? 0) + paidSlots(s.template, s.length)); const crew = crewSizeNote({ people: people.length, contractHours: people.reduce((n, e) => n + Number(e.weeklyContractHours), 0) * b.weeks, requiredSlots: requiredFinal.reduce((n, x) => n + x, 0) }); return underContractNote({ people: people as any, paidSlotsByPerson: paidBy, weeks: days.length / 7, crewIsLarge: !!crew }); })(),
     skillNote: skillSplit ? `Requirement split between ${skillSplit.map((s) => s.name).join(', ')} by workload; each skill is covered by the people who hold it.` : null,
   });
 
+  lap('write the report');
+  return { b, to, days, fv, W, consist, templates, carryOver, weekStart, fill, boundary, slackMin, breakResult, skillSplit, report, stats, chosen, acts, rows, solver, required: requiredFinal, uncovered, projected };
+}
+export type Generated = Awaited<ReturnType<typeof runGenerate>>;
+
+/** The settings stored with a generated schedule. */
+export const settingsOf = (g: Generated) => ({ weights: g.W, consistentTimes: g.consist, timeLimitSec: g.b.timeLimitSec, templateIds: g.templates.map((t) => t.id), forecastRev: g.fv?.rev ?? null, carryOver: g.carryOver, assumeRepeat: g.b.assumeRepeat, weekStart: g.weekStart,
+  request: { employeeIds: g.b.employeeIds ?? null, excludeEmployeeIds: g.b.excludeEmployeeIds ?? null, teamIds: g.b.teamIds ?? null, solver: g.b.solver },   // what a regenerate needs to repeat this run
+  fillsFrom: g.fill ? { versionId: g.fill.id, name: g.fill.name, people: g.fill.crew.size } : null, confidence: g.b.coverageSource === 'MANUAL' ? 50 : g.b.confidence,
+  history: g.boundary ? { people: g.boundary.people, shifts: g.boundary.shifts, carriedPeople: g.boundary.carriedPeople } : null, breakSlackMin: g.slackMin, breaks: g.breakResult, skills: g.skillSplit?.map((s) => ({ id: s.id, name: s.name })) ?? null, report: g.report,
+  solverChoice: g.b.solver });
+
+/** Write the shifts of a generated window into a schedule. */
+export async function insertGenerated(tx: Tx, versionId: string, g: Generated, source: 'SOLVER' | 'PATTERN' = 'SOLVER') {
+  if (!g.chosen.length) return;
+  await tx.exec(
+    `INSERT INTO schedule_shifts (tenant_id, version_id, employee_id, day, template_id, start_slot, length_slots, activities, source)
+     SELECT :t, $1, x.e, x.d, x.tp, x.s, x.l, x.a::jsonb, $8 FROM unnest($2::uuid[], $3::date[], $4::uuid[], $5::int[], $6::int[], $7::text[]) AS x(e, d, tp, s, l, a)`,
+    [versionId, g.chosen.map((s) => s.employeeId), g.chosen.map((s) => s.day), g.chosen.map((s) => s.template.id), g.chosen.map((s) => s.startSlot), g.chosen.map((s) => s.length), g.chosen.map((s) => JSON.stringify(g.acts.get(s) ?? [])), source]);
+}
+
+/** Save a generated schedule as the next numbered version. */
+export async function saveGenerated(p: Principal, req: any, g: Generated) {
+  const { b, to, fv, stats, solver, rows } = g;
   const out = await withTenant(p.tenantId, async (tx) => {
     await tx.exec('SELECT pg_advisory_xact_lock(hashtext($1))', [`sv:${b.groupId}`]);
     const seq = (await tx.one<{ n: number }>('SELECT coalesce(max(seq), 0) + 1 AS n FROM schedule_versions WHERE tenant_id = :t AND wfm_group_id = $1', [b.groupId]))!.n;
@@ -642,17 +966,19 @@ scheduling.post('/versions', requires('schedule:generate'), async (req, res) => 
     const v = await tx.one<any>(
       `INSERT INTO schedule_versions (tenant_id, wfm_group_id, seq, name, period_start, period_end, forecast_version_id, coverage_source, settings, stats, created_by)
        VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-      [b.groupId, seq, name, b.from, to, fv?.id ?? null, b.coverageSource, JSON.stringify({ weights: W, consistentTimes: consist, timeLimitSec: b.timeLimitSec, templateIds: templates.map((t) => t.id), forecastRev: fv?.rev ?? null, carryOver, assumeRepeat: b.assumeRepeat, weekStart, fillsFrom: fill ? { versionId: fill.id, name: fill.name, people: fill.crew.size } : null, confidence: b.coverageSource === 'MANUAL' ? 50 : b.confidence, history: boundary ? { people: boundary.people, shifts: boundary.shifts, carriedPeople: boundary.carriedPeople } : null, breakSlackMin: slackMin, breaks: breakResult, skills: skillSplit?.map((s) => ({ id: s.id, name: s.name })) ?? null, report }), JSON.stringify(stats), p.name]);
-    if (chosen.length) await tx.exec(
-      `INSERT INTO schedule_shifts (tenant_id, version_id, employee_id, day, template_id, start_slot, length_slots, activities)
-       SELECT :t, $1, x.e, x.d, x.tp, x.s, x.l, x.a::jsonb FROM unnest($2::uuid[], $3::date[], $4::uuid[], $5::int[], $6::int[], $7::text[]) AS x(e, d, tp, s, l, a)`,
-      [v!.id, chosen.map((s) => s.employeeId), chosen.map((s) => s.day), chosen.map((s) => s.template.id), chosen.map((s) => s.startSlot), chosen.map((s) => s.length), chosen.map((s) => JSON.stringify(acts.get(s) ?? []))]);
-    await audit(tx, p, req, { action: 'GENERATE', entityType: 'SCHEDULE_VERSION', entityId: v!.id, entityName: name, after: { coverage: stats.coverage.percent, shifts: rows.length, solver: solver.status, gap: solver.gap } });
-    await revision(tx, p, v!.id, 'GENERATE', `Schedule generated by the solver (${solver.status})`, null, stats);
+      [b.groupId, seq, name, b.from, to, fv?.id ?? null, b.coverageSource, JSON.stringify(settingsOf(g)), JSON.stringify(stats), p.name]);
+    await insertGenerated(tx, v!.id, g);
+    await audit(tx, p, req, { action: 'GENERATE', entityType: 'SCHEDULE_VERSION', entityId: v!.id, entityName: name, after: { coverage: stats.coverage.percent, shifts: rows.length, solver: solver.status, backend: solver.backend, gap: solver.gap } });
+    await revision(tx, p, v!.id, 'GENERATE', `Schedule generated by the solver (${solver.status}${solver.backend !== 'cpsat' ? `, ${solver.backend}` : ''})`, null, stats);
     return (await tx.q<any>(`${VER_SQL} AND v.id = $1`, [v!.id]))[0];
   });
   publish(p.tenantId, ['schedule', 'generated'], { id: out.id, name: out.name, by: p.name });
-  res.status(201).json(verDto(out));
+  return out;
+}
+
+scheduling.post('/versions', requires('schedule:generate'), async (req, res) => {
+  const p = me(req), b = parse(GenBody, req.body);
+  res.status(201).json(verDto(await saveGenerated(p, req, await runGenerate(p, b, { interactive: true }))));
 });
 
 // ---------------------------------------------------------------- read a version
@@ -665,17 +991,62 @@ export async function loadVersion(tx: Tx, id: string) {
 export async function shiftsOf(tx: Tx, versionId: string): Promise<(ShiftRow & { id: string; activities: any[]; source: string })[]> {
   return tx.q<any>('SELECT id, employee_id, day::text AS day, template_id, start_slot, length_slots, activities, source FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 ORDER BY day, start_slot', [versionId]);
 }
-/** Recompute requirement, coverage and violations from what is stored now (after manual edits or changed employee data). */
-export async function liveStats(tenantId: string, v: any) {
+/**
+ * Recompute requirement, coverage and violations from what is stored now (after manual edits or changed employee data).
+ * A screen asks for this several ways at once (the schedule, its coverage, its plan, its quality); asks made while one is being worked out share its answer
+ * instead of each repeating the work. Nothing is kept after it finishes, so a later ask always sees current data.
+ */
+const liveInFlight = new Map<string, Promise<Awaited<ReturnType<typeof computeLive>>>>();
+type Live = Awaited<ReturnType<typeof computeLive>>;
+/** The last few results, kept for a few seconds so a person moving between screens of one schedule does not make the server work it all out again. Any change made through the API clears them. */
+const liveKept = new Map<string, { at: number; value: Live }>();
+const LIVE_KEEP_MS = Number(process.env.LIVE_STATS_KEEP_SECONDS || 20) * 1000, LIVE_KEEP_MAX = 4;
+export function invalidateLive() { liveKept.clear(); }
+export function liveStats(tenantId: string, v: any, fresh = false): Promise<Live> {
+  if (fresh) return computeLive(tenantId, v);          // right after a change, or to decide whether a change is allowed: never reuse work that began before it
+  const key = `${tenantId}|${v.id}|${v.rev}|${v.forecastVersionId ?? ''}|${v.status}|${v.publishThrough ?? ''}`;
+  const kept = liveKept.get(key);
+  if (kept && Date.now() - kept.at < LIVE_KEEP_MS) return Promise.resolve(kept.value);
+  let p = liveInFlight.get(key);
+  if (!p) {
+    p = computeLive(tenantId, v).then((value) => {
+      liveKept.set(key, { at: Date.now(), value });
+      while (liveKept.size > LIVE_KEEP_MAX) liveKept.delete(liveKept.keys().next().value!);
+      return value;
+    }).finally(() => liveInFlight.delete(key));
+    liveInFlight.set(key, p);
+  }
+  return p;
+}
+
+/** What the coverage views need from a schedule: the requirement, the shifts and the group, without loading every person's rules and re-checking every shift. */
+export async function lightLive(tenantId: string, v: any) {
+  const days = dayRange(v.periodStart, v.periodEnd);
+  const empty = () => ({ required: new Array(days.length * SPD).fill(0), uncovered: days, projected: [] as string[] });
+  const [{ group, shifts }, gross] = await Promise.all([
+    withTenant(tenantId, async (tx) => ({ group: await loadGroup(tx, v.wfmGroupId), shifts: await shiftsOf(tx, v.id) })),
+    (v.coverageSource === 'MANUAL' ? requirementForManual(tenantId, v.wfmGroupId, days) : requirementFor(tenantId, v.wfmGroupId, days, v.forecastVersionId ?? undefined, v.settings?.confidence ?? 50)).catch(empty),
+  ]);
+  return { days, shifts, group, gross: gross.required as number[], required: netRequired(gross.required, v.settings?.carryOver), uncovered: gross.uncovered as string[], projected: gross.projected as string[] };
+}
+async function computeLive(tenantId: string, v: any) {
+  const t0 = Date.now(), marks: string[] = [];
+  const mark = (what: string) => { marks.push(`${what} ${((Date.now() - t0) / 1000).toFixed(1)}`); };
   const days = dayRange(v.periodStart, v.periodEnd);
   const { ctx, shifts } = await withTenant(tenantId, async (tx) => ({ ctx: { ...(await loadCtx(tx, v.wfmGroupId, v.periodStart, v.periodEnd)), weekStart: v.settings?.weekStart ?? 0 }, shifts: await shiftsOf(tx, v.id) }));
+  mark('load');
   const gross = v.coverageSource === 'MANUAL'
     ? await requirementForManual(tenantId, v.wfmGroupId, days).catch(() => ({ required: new Array(days.length * SPD).fill(0), uncovered: days, projected: [] as string[] }))
     : await requirementFor(tenantId, v.wfmGroupId, days, v.forecastVersionId ?? undefined, v.settings?.confidence ?? 50).catch(() => ({ required: new Array(days.length * SPD).fill(0), uncovered: days, projected: [] as string[] }));
   const { uncovered, projected } = gross;
+  mark('forecast');
   const required = netRequired(gross.required, v.settings?.carryOver);   // shifts from the previous schedule that run past midnight into the first day
-  const stats = computeStats(ctx, days, required, shifts, v.stats?.solver ?? null, { uncoveredDays: uncovered, projectedDays: projected });
-  return { ctx, shifts, days, required, gross: gross.required as number[], stats, violations: validateShifts(ctx, shifts) };
+  const violations = validateShifts(ctx, shifts);
+  mark('rules');
+  const stats = computeStats(ctx, days, required, shifts, v.stats?.solver ?? null, { uncoveredDays: uncovered, projectedDays: projected }, violations);
+  mark('stats');
+  if (Date.now() - t0 > 2000) console.log(`[live] ${shifts.length} shifts, ${ctx.employees.length} people: ${marks.join(', ')} (seconds, running)`);
+  return { ctx, shifts, days, required, gross: gross.required as number[], stats, violations };
 }
 
 scheduling.get('/versions/:id', requires('schedule:read'), async (req, res) => {
@@ -691,12 +1062,12 @@ scheduling.get('/versions/:id/shifts', requires('schedule:read'), async (req, re
   const rows = await withTenant(p.tenantId, async (tx) => {
     await loadVersion(tx, id);
     return tx.q<any>(
-      `SELECT s.id, s.employee_id, e.first_name || ' ' || e.last_name AS employee_name, e.employee_number, s.day::text AS day, s.template_id, t.name AS template_name, s.start_slot, s.length_slots, s.activities, s.source
-       FROM schedule_shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_templates t ON t.id = s.template_id
+      `SELECT s.id, s.employee_id, e.first_name || ' ' || e.last_name AS employee_name, e.employee_number, tm.name AS team_name, s.day::text AS day, s.template_id, t.name AS template_name, s.start_slot, s.length_slots, s.activities, s.source
+       FROM schedule_shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN teams tm ON tm.id = e.team_id LEFT JOIN shift_templates t ON t.id = s.template_id
        WHERE s.tenant_id = :t AND s.version_id = $1 AND ($2::date IS NULL OR s.day >= $2) AND ($3::date IS NULL OR s.day <= $3) AND ($4::uuid IS NULL OR s.employee_id = $4)
        ORDER BY e.last_name, e.first_name, s.day`, [id, q.from ?? null, q.to ?? null, q.employeeId ?? null]);
   });
-  res.json(rows.map((s) => ({ id: s.id, employeeId: s.employeeId, employeeName: s.employeeName, employeeNumber: s.employeeNumber, day: s.day, templateId: s.templateId, templateName: s.templateName,
+  res.json(rows.map((s) => ({ id: s.id, employeeId: s.employeeId, employeeName: s.employeeName, employeeNumber: s.employeeNumber, teamName: s.teamName ?? null, day: s.day, templateId: s.templateId, templateName: s.templateName,
     startTime: hhmm(s.startSlot), endTime: hhmm(s.startSlot + s.lengthSlots), startSlot: s.startSlot, lengthSlots: s.lengthSlots, overnight: s.startSlot + s.lengthSlots > SPD,
     activities: (s.activities ?? []).map((a: any) => ({ ...a, startTime: hhmm(a.startSlot), endTime: hhmm(a.startSlot + a.slots) })), source: s.source })));
 });
@@ -705,16 +1076,16 @@ scheduling.get('/versions/:id/coverage', requires('schedule:read'), async (req, 
   const p = me(req), id = parse(uuid, req.params.id);
   const q = parse(z.object({ day: z.string().regex(isoDay).optional(), grain: z.enum(['15', '30', '60']).default('60'), compare: uuid.optional() }), req.query);
   const v = await withTenant(p.tenantId, (tx) => loadVersion(tx, id));
-  const live = await liveStats(p.tenantId, v);
+  const live = await lightLive(p.tenantId, v);
   const sched = new Array(live.days.length * SPD).fill(0), di = new Map(live.days.map((d, i) => [d, i]));
   for (const s of live.shifts) { const i = di.get(s.day)!; for (let g = i * SPD + s.startSlot; g < Math.min(sched.length, i * SPD + s.startSlot + s.lengthSlots); g++) sched[g]++; }
   // the need is netted against the previous schedule's overnight shifts, so judge it gross and count those people as covering it
   for (const [g, n] of (v.settings?.carryOver ?? []) as [number, number][]) if (g < sched.length) sched[g] += n;
-  live.required = live.gross;
-  const projectedSet = new Set<string>(live.stats.projectedDays ?? []);
+  const required = live.gross;                              // judged gross here (the shared result is never changed: other screens may be using it)
+  const projectedSet = new Set<string>(live.projected);
   const daily = live.days.map((day, i) => {
     let need = 0, under = 0, have = 0;
-    for (let s = 0; s < SPD; s++) { const g = i * SPD + s; need += live.required[g]; have += sched[g]; under += Math.max(0, live.required[g] - sched[g]); }
+    for (let s = 0; s < SPD; s++) { const g = i * SPD + s; need += required[g]; have += sched[g]; under += Math.max(0, required[g] - sched[g]); }
     return { day, requiredHours: r1(need / 4), scheduledHours: r1(have / 4), coveragePercent: need ? r1((1 - under / need) * 100) : 100, shifts: live.shifts.filter((s) => s.day === day).length, projected: projectedSet.has(day) };
   });
   let slots: any[] = [];
@@ -723,19 +1094,19 @@ scheduling.get('/versions/:id/coverage', requires('schedule:read'), async (req, 
     const step = q.grain === '15' ? 1 : q.grain === '30' ? 2 : 4;
     for (let s = 0; s < SPD; s += step) {
       let need = 0, have = Infinity;   // an hour needs its busiest quarter and is only as covered as its weakest
-      for (let k = 0; k < step; k++) { need = Math.max(need, live.required[i * SPD + s + k]); have = Math.min(have, sched[i * SPD + s + k]); }
+      for (let k = 0; k < step; k++) { need = Math.max(need, required[i * SPD + s + k]); have = Math.min(have, sched[i * SPD + s + k]); }
       slots.push({ day, slot: s, time: hhmm(s), required: need, scheduled: have, delta: have - need });
     }
   }
   // the whole period at a glance: hour by hour, an hour needs its busiest quarter and is only as covered as its weakest
   const heat = live.days.map((d, di2) => ({ day: d, hours: Array.from({ length: 24 }, (_, h) => {
     let need = 0, have = Infinity;
-    for (let k = 0; k < 4; k++) { const g = di2 * SPD + h * 4 + k; need = Math.max(need, live.required[g]); have = Math.min(have, sched[g]); }
+    for (let k = 0; k < 4; k++) { const g = di2 * SPD + h * 4 + k; need = Math.max(need, required[g]); have = Math.min(have, sched[g]); }
     return { need, have };
   }) }));
   let reqH = 0, haveH = 0, shortH = 0, overH = 0, worstShort: { day: string; time: string; short: number } | null = null, worstOver: { day: string; time: string; over: number } | null = null;
   for (let g = 0; g < sched.length; g++) {
-    const need = live.required[g], have = sched[g], d = live.days[Math.floor(g / SPD)], t = hhmm(g % SPD);
+    const need = required[g], have = sched[g], d = live.days[Math.floor(g / SPD)], t = hhmm(g % SPD);
     reqH += need; haveH += have;
     if (have < need) { shortH += need - have; if (!worstShort || need - have > worstShort.short) worstShort = { day: d, time: t, short: need - have }; }
     else if (have > need) { overH += have - need; if (!worstOver || have - need > worstOver.over) worstOver = { day: d, time: t, over: have - need }; }
@@ -755,7 +1126,7 @@ scheduling.get('/versions/:id/coverage', requires('schedule:read'), async (req, 
     const step2 = q.grain === '15' ? 1 : q.grain === '30' ? 2 : 4;
     compare = { id: other.id, name: other.name, seq: other.seq, scheduled: Array.from({ length: SPD / step2 }, (_, k) => Math.min(...per.slice(k * step2, k * step2 + step2))) };
   }
-  res.json({ versionId: id, day, grain: q.grain, daily, slots, heat, summary, compare, shrinkage: live.ctx.group.shrinkage ?? 0, uncoveredDays: live.stats.uncoveredDays, projectedDays: live.stats.projectedDays ?? [], projected: projectedSet.has(day) });
+  res.json({ versionId: id, day, grain: q.grain, daily, slots, heat, summary, compare, shrinkage: live.group.shrinkage ?? 0, uncoveredDays: live.uncovered, projectedDays: live.projected, projected: projectedSet.has(day) });
 });
 
 /** Click an interval: who is working it, and for everyone who is not, why not. */
@@ -799,7 +1170,7 @@ scheduling.get('/versions/:id/revisions', requires('schedule:read'), async (req,
 
 const qHelpers = { blockedReason, dowOf, mondayOf, addDays };
 const toQ = (shifts: any[]): QShift[] => shifts.map((s) => ({ employeeId: s.employeeId, day: s.day, startSlot: s.startSlot, lengthSlots: s.lengthSlots, templateId: s.templateId, activities: s.activities ?? [] }));
-const csvCell = (v: unknown) => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const csvCell = safeCsvCell;
 
 /** What happened in the generation run: the status, who was and was not scheduled, and why. Versions made before reports existed have none. */
 scheduling.get('/versions/:id/report', requires('schedule:read'), async (req, res) => {
@@ -807,6 +1178,40 @@ scheduling.get('/versions/:id/report', requires('schedule:read'), async (req, re
   const v = await withTenant(p.tenantId, (tx) => loadVersion(tx, id));
   const r = v.settings?.report;
   res.json(r ? { available: true, versionId: id, name: v.name, ...r, consistentTimes: v.settings.consistentTimes ?? null, breaks: v.settings.breaks ?? null } : { available: false, versionId: id, name: v.name });
+});
+/** How much the demand changed since this schedule was built: the hours the forecast asked for then (kept with the schedule) against the newest published forecast now,
+ *  and how well the shifts as they stand would cover the new need. Nothing is changed. */
+scheduling.get('/versions/:id/forecast-change', requires('schedule:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const v = await withTenant(p.tenantId, (tx) => loadVersion(tx, id));
+  if (v.kind === 'ROTATION' || v.coverageSource === 'MANUAL' || !v.forecastVersionId) return void res.json({ available: false });
+  const days = dayRange(v.periodStart, v.periodEnd);
+  const now = await requirementFor(p.tenantId, v.wfmGroupId, days, undefined, v.settings?.confidence ?? 50).catch(() => null);
+  if (!now || !now.v) return void res.json({ available: false });
+  const needNow = netRequired(now.required, v.settings?.carryOver);
+  const live = await liveStats(p.tenantId, v);
+  const st = computeStats(live.ctx, days, needNow, live.shifts, null, {});
+  const builtHours = v.stats?.hours?.required ?? null, nowHours = r1(needNow.reduce((n: number, x: number) => n + x, 0) / 4);
+  const changePercent = builtHours ? r1(((nowHours - builtHours) / builtHours) * 100) : null;
+  res.json({ available: true, forecastName: now.v.name, builtHours, nowHours, changePercent, coverageBefore: v.stats?.coverage?.percent ?? null, coverageNow: st.coverage.percent, underSlotsNow: st.coverage.underSlots, material: changePercent !== null && Math.abs(changePercent) >= 2 });
+});
+/** Shifts that run over a daylight-saving change: scheduled for one length, really worked for another (an hour less in spring, an hour more in autumn). Nothing is changed. */
+scheduling.get('/versions/:id/clock-changes', requires('schedule:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const { v, tz, shifts, names } = await withTenant(p.tenantId, async (tx) => {
+    const v = await loadVersion(tx, id);
+    const emps = await tx.q<any>('SELECT id, first_name, last_name FROM employees WHERE tenant_id = :t');
+    return { v, tz: (await loadGroup(tx, v.wfmGroupId)).timezone ?? 'UTC', shifts: await shiftsOf(tx, id), names: new Map(emps.map((e) => [e.id as string, `${e.firstName} ${e.lastName}`])) };
+  });
+  const changes = clockChanges(dayRange(addDays(v.periodStart, -1), v.periodEnd), tz);
+  const hm = (slot: number) => `${String(Math.floor(slot / 4) % 24).padStart(2, '0')}:${String((slot % 4) * 15).padStart(2, '0')}`;
+  const out = changes.map((c) => {
+    const people = shifts.filter((s) => s.day === c.day || s.day === addDays(c.day, -1)).map((s) => ({ s, d: shiftDelta(s.day, s.startSlot, s.lengthSlots, tz) })).filter((x) => x.d.deltaMinutes !== 0)
+      .map(({ s, d }) => ({ employeeId: s.employeeId, name: names.get(s.employeeId) ?? '', day: s.day, start: hm(s.startSlot), end: hm(s.startSlot + s.lengthSlots), scheduledHours: r1(d.scheduledSlots / 4), workedHours: r1(d.elapsedSlots / 4) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { day: c.day, kind: c.kind, minutes: Math.abs(c.deltaMinutes), at: c.atWall, people };
+  }).filter((c) => c.day >= v.periodStart || c.people.length);
+  res.json({ timezone: tz, changes: out });
 });
 scheduling.get('/versions/:id/report.csv', requires('schedule:read'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
@@ -878,7 +1283,7 @@ scheduling.post('/versions/:id/optimize-breaks', requires('schedule:edit'), asyn
  * "enforce publish checks" on, publishing needs a reason when any is open; otherwise they are returned as warnings. Returns the record of who
  * accepted them, or null.
  */
-async function publishChecks(p: Principal, v: any, live: { stats: any }, ackReason: unknown) {
+export async function publishChecks(p: Principal, v: any, live: { stats: any }, ackReason: unknown) {
   const pol = await withTenant(p.tenantId, (tx) => loadPolicy(tx));
   const issues: string[] = [];
   if (live.stats.coverage.percent < pol.scheduling.targetCoverage) issues.push(`Coverage is ${live.stats.coverage.percent}% against a target of ${pol.scheduling.targetCoverage}%.`);
@@ -909,7 +1314,7 @@ async function editable(tx: Tx, id: string) {
 }
 export async function refreshStats(tenantId: string, id: string) {
   const v = await withTenant(tenantId, (tx) => loadVersion(tx, id));
-  const live = await liveStats(tenantId, v);
+  const live = await liveStats(tenantId, v, true);
   await withTenant(tenantId, (tx) => tx.exec('UPDATE schedule_versions SET stats = $2, rev = rev + 1 WHERE tenant_id = :t AND id = $1', [id, JSON.stringify(live.stats)]));
   return live;
 }
@@ -1010,7 +1415,7 @@ scheduling.post('/versions/:id/publish', requires('schedule:publish'), async (re
   const p = me(req), id = parse(uuid, req.params.id);
   const v0 = await withTenant(p.tenantId, (tx) => loadVersion(tx, id));
   if (v0.status !== 'DRAFT') throw conflict(`Only a draft can be published (this one is ${v0.status.toLowerCase()}).`);
-  const live = await liveStats(p.tenantId, v0);
+  const live = await liveStats(p.tenantId, v0, true);
   const blocking = live.violations.filter((x) => x.severity !== 'WARN');
   if (blocking.length) throw new HttpError(409, 'RULE_VIOLATIONS', `${blocking.length} rule violations must be fixed before publishing. First: ${blocking[0].message}`, blocking.slice(0, 20));
   const checks = await publishChecks(p, v0, live, req.body?.acknowledgeReason);
@@ -1024,14 +1429,24 @@ scheduling.post('/versions/:id/publish', requires('schedule:publish'), async (re
   await dropCache(p.tenantId, 'sched:*');
   publish(p.tenantId, ['schedule', 'publish'], { id, name: out.name, by: p.name });
   res.json({ ...verDto(out), checks: checks.issues });
+  void notifyScheduled(p.tenantId, out, 'published').catch((e) => console.error('[schedule] could not notify the people on', out.name, e.message));
 });
+
+/** Tell everyone who has a shift in a schedule that it is live (in the app, and by email or SMS for those who asked). */
+async function notifyScheduled(tenantId: string, v: any, what: 'published'): Promise<void> {
+  await withTenant(tenantId, async (tx) => {
+    const ids = (await tx.q<{ employeeId: string }>('SELECT DISTINCT employee_id FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND ($2::date IS NULL OR day <= $2::date)', [v.id, v.publishThrough ?? null])).map((r) => r.employeeId);
+    const users = await usersOf(tx, ids);
+    await notify(tx, users, { kind: 'SCHEDULE', title: 'Your schedule is ready', body: `${v.periodStart} to ${v.periodEnd}: open Schedule to see your shifts.`, data: { screen: 'schedule', versionId: v.id } });
+  });
+}
 
 /** Re-check a published schedule after direct edits and re-stamp it as the live version. Blocks on rule violations, like publish. */
 scheduling.post('/versions/:id/republish', requires('schedule:publish'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   const v0 = await withTenant(p.tenantId, (tx) => loadVersion(tx, id));
   if (v0.status !== 'PUBLISHED') throw conflict(`Only a published schedule can be republished (this one is ${v0.status.toLowerCase()}).`);
-  const live = await liveStats(p.tenantId, v0);
+  const live = await liveStats(p.tenantId, v0, true);
   const blocking = live.violations.filter((x) => x.severity !== 'WARN');
   if (blocking.length) throw new HttpError(409, 'RULE_VIOLATIONS', `${blocking.length} rule violations must be fixed before republishing. First: ${blocking[0].message}`, blocking.slice(0, 20));
   const checks = await publishChecks(p, v0, live, req.body?.acknowledgeReason);
@@ -1087,7 +1502,7 @@ scheduling.get('/mine', requires('schedule:read'), async (req, res) => {
     if (!u?.employeeId) return [];
     return tx.q<any>(
       `SELECT s.day::text AS day, s.start_slot, s.length_slots, s.activities, t.name AS template_name, v.name AS version_name FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
-       LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = $1 AND ($2::date IS NULL OR s.day >= $2) AND ($3::date IS NULL OR s.day <= $3) ORDER BY s.day`,
+       LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = $1 AND ($2::date IS NULL OR s.day >= $2) AND ($3::date IS NULL OR s.day <= $3) ORDER BY s.day`,
       [u.employeeId, q.from ?? null, q.to ?? null]);
   });
   res.json(rows.map((s) => ({ day: s.day, startTime: hhmm(s.startSlot), endTime: hhmm(s.startSlot + s.lengthSlots), template: s.templateName, schedule: s.versionName, activities: (s.activities ?? []).map((a: any) => ({ ...a, startTime: hhmm(a.startSlot), endTime: hhmm(a.startSlot + a.slots) })) })));

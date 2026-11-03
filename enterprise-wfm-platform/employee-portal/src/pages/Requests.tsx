@@ -16,7 +16,7 @@ export const Requests: React.FC<{ prefill?: RequestPrefill | null; onPrefillCons
     <div className="space-y-4">
       <div className="flex gap-1 bg-[#F0F0EC] rounded-md p-1">
         {SUBS.map((s) => (
-          <button key={s.id} onClick={() => setSub(s.id)} className={`flex-1 text-[12px] font-semibold py-1.5 rounded ${sub === s.id ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>{s.label}</button>
+          <button key={s.id} onClick={() => setSub(s.id)} className={`flex-1 text-[12px] font-semibold py-1.5 rounded ${sub === s.id ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>{s.label}</button>
         ))}
       </div>
       {sub === 'timeoff' && <TimeOff initialDate={prefill?.tab === 'timeoff' ? prefill.date : undefined} onConsumed={onPrefillConsumed} />}

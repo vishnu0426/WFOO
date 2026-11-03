@@ -55,6 +55,16 @@ class EngineStub:
                 request_serializer=wfm__pb2.ScheduleRequest.SerializeToString,
                 response_deserializer=wfm__pb2.ScheduleResponse.FromString,
                 _registered_method=True)
+        self.ScheduleStream = channel.unary_stream(
+                '/wfm.Engine/ScheduleStream',
+                request_serializer=wfm__pb2.ScheduleRequest.SerializeToString,
+                response_deserializer=wfm__pb2.ScheduleEvent.FromString,
+                _registered_method=True)
+        self.Simulate = channel.unary_unary(
+                '/wfm.Engine/Simulate',
+                request_serializer=wfm__pb2.SimRequest.SerializeToString,
+                response_deserializer=wfm__pb2.SimResponse.FromString,
+                _registered_method=True)
 
 
 class EngineServicer:
@@ -87,6 +97,20 @@ class EngineServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ScheduleStream(self, request, context):
+        """Same solve, but reports progress window by window and stops when the caller cancels the call.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Simulate(self, request, context):
+        """Plays random call arrivals against a schedule's staffing and reports what customers would experience.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_EngineServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -109,6 +133,16 @@ def add_EngineServicer_to_server(servicer, server):
                     servicer.Schedule,
                     request_deserializer=wfm__pb2.ScheduleRequest.FromString,
                     response_serializer=wfm__pb2.ScheduleResponse.SerializeToString,
+            ),
+            'ScheduleStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.ScheduleStream,
+                    request_deserializer=wfm__pb2.ScheduleRequest.FromString,
+                    response_serializer=wfm__pb2.ScheduleEvent.SerializeToString,
+            ),
+            'Simulate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Simulate,
+                    request_deserializer=wfm__pb2.SimRequest.FromString,
+                    response_serializer=wfm__pb2.SimResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -220,6 +254,60 @@ class Engine:
             '/wfm.Engine/Schedule',
             wfm__pb2.ScheduleRequest.SerializeToString,
             wfm__pb2.ScheduleResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ScheduleStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/wfm.Engine/ScheduleStream',
+            wfm__pb2.ScheduleRequest.SerializeToString,
+            wfm__pb2.ScheduleEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Simulate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/wfm.Engine/Simulate',
+            wfm__pb2.SimRequest.SerializeToString,
+            wfm__pb2.SimResponse.FromString,
             options,
             channel_credentials,
             insecure,

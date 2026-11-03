@@ -14,7 +14,7 @@ export type Category = 'ACD' | 'CRM' | 'HRMS' | 'DATABASE' | 'ONPREM' | 'SFTP';
 export type Method = 'API_PULL' | 'STREAM_SUBSCRIBE' | 'WEBHOOK' | 'ONPREM_RELAY' | 'DATABASE' | 'FILE_SFTP';
 export type AuthType = 'API_KEY_HEADER' | 'BEARER_STATIC' | 'OAUTH2_CLIENT_CREDENTIALS' | 'AWS_SIGV4' | 'MUTUAL_TLS' | 'BASIC' | 'NONE';
 
-export interface FieldSpec { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select'; options?: string[]; help?: string; required?: boolean }
+export interface FieldSpec { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean }
 export interface DefaultMap { targetField: string; sourcePath: string; transform?: string }
 
 export interface Preset {
@@ -124,6 +124,21 @@ export const PRESETS: Preset[] = [
   { id: 'GENERIC_HRMS_API', category: 'HRMS', method: 'API_PULL', label: 'Generic HRMS', authType: 'BEARER_STATIC', writesTo: 'employees', fields: [...authField('BEARER_STATIC'), { key: 'baseUrl', label: 'Base URL', kind: 'text', required: true }] },
 
   // ---------------------------------------------------------------- Database (relay-family: the reader runs on the customer's side)
+  { id: 'DATABASE_POSTGRES_PULL', category: 'DATABASE', method: 'DATABASE', label: 'PostgreSQL (we read it on a schedule)', authType: 'NONE', writesTo: 'interval_history',
+    fields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, help: 'The server must be reachable from this platform.' },
+      { key: 'port', label: 'Port', kind: 'text', help: '5432 if blank' },
+      { key: 'database', label: 'Database name', kind: 'text', required: true },
+      { key: 'username', label: 'Read-only username', kind: 'text', required: true },
+      { key: 'password', label: 'Password', kind: 'password', required: true },
+      { key: 'ssl', label: 'Encrypt the connection', kind: 'select', options: ['off', 'require'] },
+      { key: 'intervalMinutes', label: 'Interval length in the data', kind: 'select', options: ['15', '30', '60'], help: '15 if blank' },
+      { key: 'backfillWeeks', label: 'Weeks of history to load', kind: 'text', help: '8 if blank. Forecasts need at least 4, and 8 or more is comfortable.' },
+      { key: 'query', label: 'Query', kind: 'textarea', required: true, help: 'One SELECT that returns queue, day, time, volume and, if you have them, ahtSec and abandoned. Use {from} and {to} (inclusive dates) to limit the range. Return day as text YYYY-MM-DD and time as text HH24:MI in your local time.' },
+    ],
+    defaultMaps: [{ targetField: 'day', sourcePath: 'day' }, { targetField: 'time', sourcePath: 'time' }, { targetField: 'volume', sourcePath: 'volume' }, { targetField: 'ahtSec', sourcePath: 'ahtSec' }, { targetField: 'abandoned', sourcePath: 'abandoned' }],
+    note: 'We connect to your database ourselves, with a login that can only read, and run your query inside a read-only transaction. For other database engines, or a database we cannot reach, use the relay connector below.',
+  },
   { id: 'GENERIC_DATABASE', category: 'DATABASE', method: 'DATABASE', label: 'Oracle / SQL Server / Postgres / Informix', authType: 'NONE', writesTo: 'interval_history',
     fields: [{ key: 'engine', label: 'Database engine', kind: 'select', options: ['oracle', 'sqlserver', 'postgres', 'informix'], required: true }, { key: 'host', label: 'Host', kind: 'text', required: true }, { key: 'port', label: 'Port', kind: 'text', required: true }, { key: 'database', label: 'Database name', kind: 'text', required: true }, { key: 'table', label: 'Table / view', kind: 'text', required: true }, { key: 'watermarkColumn', label: 'Watermark column (e.g. updated_at)', kind: 'text', required: true }],
     note: 'No password stored here: the reader runs on the customer\'s own network against a read-only login they hold, not us reaching into their network.',
@@ -133,7 +148,7 @@ export const PRESETS: Preset[] = [
   { id: 'GENERIC_ONPREM', category: 'ONPREM', method: 'ONPREM_RELAY', label: 'Generic / custom on-prem system', authType: 'NONE', writesTo: 'interval_history', fields: [], note: 'We issue an API key; your team\'s connector posts to our documented ingest endpoint.' },
 
   // ---------------------------------------------------------------- File/SFTP
-  { id: 'GENERIC_SFTP', category: 'SFTP', method: 'FILE_SFTP', label: 'Scheduled export file', authType: 'NONE', writesTo: 'interval_history', fields: [{ key: 'direction', label: 'Who hosts the SFTP endpoint', kind: 'select', options: ['we_host', 'they_host'], required: true }, { key: 'remotePath', label: 'Remote path / filename pattern', kind: 'text' }] },
+  { id: 'GENERIC_SFTP', category: 'SFTP', method: 'FILE_SFTP', label: 'Scheduled export file', authType: 'NONE', writesTo: 'interval_history', fields: [{ key: 'direction', label: 'Who hosts the SFTP endpoint', kind: 'select', options: ['we_host', 'they_host'], required: true, help: 'They host: we sign in to your server and pick up new files on a schedule. We host is not available yet.' }, { key: 'host', label: 'SFTP host (when they host)', kind: 'text' }, { key: 'port', label: 'Port', kind: 'text', help: '22 if blank' }, { key: 'username', label: 'Username', kind: 'text' }, { key: 'password', label: 'Password', kind: 'password' }, { key: 'remotePath', label: 'Folder or filename pattern', kind: 'text', help: 'e.g. /exports or /exports/queue_*.csv. Every new CSV found is staged for review.' }] },
 ];
 
 export const presetById = (id: string): Preset | undefined => PRESETS.find((p) => p.id === id);

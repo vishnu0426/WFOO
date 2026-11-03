@@ -3,21 +3,25 @@
  * person (their login must be linked to an employee). Simple requests are decided by rules the organisation sets; the rest go to a manager.
  */
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
+import { hashPassword } from '../passwordHash.ts';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { withTenant, type Tx } from '../db.ts';
-import { me, requires, type Principal } from '../auth.ts';
+import { raw, withTenant, type Tx } from '../db.ts';
+import { signInLink, welcomeMessage } from './orgLogin.ts';
+import { dropUserState, me, requires, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { changeOwnPassword } from './authRoutes.ts';
+import { approvalAudience, waitingFor } from './approvals.ts';
 import { config } from '../config.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
-import { dropCache } from '../infra.ts';
+import { dropCache, publish } from '../infra.ts';
 import { notify, usersOf } from '../notify.ts';
 import { addDays, loadGroup, todayIn } from './forecast/service.ts';
 import { hhmm } from './workforceRoutes.ts';
 import { reconcileForEmployee } from './rotations.ts';
+import { payWeekFloor, payWeekFor } from './payWeek.ts';
 import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
+import { balanceOf, ruleVerdict } from './timeOffRules.ts';
 
 export const selfService = Router();   // mounted at /me
 export const selfAdmin = Router();     // mounted at /self-service (policy and logins, for managers)
@@ -30,17 +34,23 @@ const slotOf = (s: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(s); return 
 export interface Policy {
   timeOffAutoApprove: boolean; timeOffMinNoticeDays: number; timeOffMaxOffPercent: number; entitlements: Record<string, number>; agentCanEditAvailability: boolean;
   swapAutoApprove: boolean; swapMaxExtraGapSlots: number; swapMinNoticeHours: number; swapBoardHours: number;
+  accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>;
+  /** The team's supervisor decides first; escalateHours later the managers are told. Supervisors limited to their own teams' people when asked. */
+  supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
 }
 export async function loadSelfPolicy(tx: Tx): Promise<Policy> {
   await tx.exec('INSERT INTO self_service_policy (tenant_id) VALUES (:t) ON CONFLICT (tenant_id) DO NOTHING');
   const r = (await tx.one<any>('SELECT * FROM self_service_policy WHERE tenant_id = :t'))!;
   return { timeOffAutoApprove: r.timeOffAutoApprove, timeOffMinNoticeDays: r.timeOffMinNoticeDays, timeOffMaxOffPercent: r.timeOffMaxOffPercent, entitlements: r.entitlements ?? {}, agentCanEditAvailability: r.agentCanEditAvailability,
-    swapAutoApprove: r.swapAutoApprove, swapMaxExtraGapSlots: r.swapMaxExtraGapSlots, swapMinNoticeHours: r.swapMinNoticeHours, swapBoardHours: r.swapBoardHours };
+    swapAutoApprove: r.swapAutoApprove, swapMaxExtraGapSlots: r.swapMaxExtraGapSlots, swapMinNoticeHours: r.swapMinNoticeHours, swapBoardHours: r.swapBoardHours,
+    accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false };
 }
 const PolicyBody = z.object({
   timeOffAutoApprove: z.boolean(), timeOffMinNoticeDays: z.number().int().min(0).max(365), timeOffMaxOffPercent: z.number().int().min(0).max(100),
   entitlements: z.record(z.enum(TYPES), z.number().min(0).max(366)), agentCanEditAvailability: z.boolean(),
   swapAutoApprove: z.boolean(), swapMaxExtraGapSlots: z.number().int().min(0).max(96), swapMinNoticeHours: z.number().int().min(0).max(720), swapBoardHours: z.number().int().min(1).max(720),
+  accrualMode: z.enum(['UPFRONT', 'MONTHLY']).default('UPFRONT'), carryOverDays: z.record(z.enum(TYPES), z.number().min(0).max(366)).default({}),
+  supervisorFirst: z.boolean().default(true), escalateHours: z.number().int().min(1).max(720).default(24), limitSupervisorsToTeams: z.boolean().default(false),
 });
 selfAdmin.get('/policy', requires('config:read'), async (req, res) => { res.json(await withTenant(me(req).tenantId, loadSelfPolicy)); });
 selfAdmin.put('/policy', requires('config:write'), async (req, res) => {
@@ -49,12 +59,50 @@ selfAdmin.put('/policy', requires('config:write'), async (req, res) => {
     const before = await loadSelfPolicy(tx);
     await tx.exec(
       `UPDATE self_service_policy SET time_off_auto_approve = $1, time_off_min_notice_days = $2, time_off_max_off_percent = $3, entitlements = $4, agent_can_edit_availability = $5,
-         swap_auto_approve = $6, swap_max_extra_gap_slots = $7, swap_min_notice_hours = $8, swap_board_hours = $9, updated_at = now() WHERE tenant_id = :t`,
-      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours]);
+         swap_auto_approve = $6, swap_max_extra_gap_slots = $7, swap_min_notice_hours = $8, swap_board_hours = $9, accrual_mode = $10, carry_over_days = $11,
+         supervisor_first = $12, escalate_hours = $13, limit_supervisors_to_teams = $14, updated_at = now() WHERE tenant_id = :t`,
+      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours, b.accrualMode, JSON.stringify(b.carryOverDays), b.supervisorFirst, b.escalateHours, b.limitSupervisorsToTeams]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SELF_SERVICE_POLICY', entityId: 'policy', entityName: 'Self-service rules', before, after: b });
     return loadSelfPolicy(tx);
   });
   res.json(out);
+});
+
+// ---------------------------------------------------------------- blackout dates and daily limits
+
+const RuleBody = z.object({
+  kind: z.enum(['BLACKOUT', 'CAP']), groupId: uuid.nullable().default(null), startDate: z.string().regex(isoDay), endDate: z.string().regex(isoDay), maxOff: z.number().int().min(0).max(10000).nullable().default(null),
+  types: z.array(z.enum(TYPES)).max(7).default([]), strict: z.boolean().default(false), reason: z.string().trim().max(200).default(''),
+}).refine((b) => b.endDate >= b.startDate, { message: 'The end date is before the start date', path: ['endDate'] }).refine((b) => b.kind !== 'CAP' || b.maxOff !== null, { message: 'Say how many people may be off at once', path: ['maxOff'] });
+const ruleDto = (r: any) => ({ id: r.id, kind: r.kind, groupId: r.wfmGroupId, groupName: r.groupName ?? null, startDate: r.startDay, endDate: r.endDay, maxOff: r.maxOff, types: r.types ?? [], strict: r.strict, reason: r.reason, createdBy: r.createdBy });
+selfAdmin.get('/time-off-rules', requires('config:read'), async (req, res) => {
+  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>(
+    `SELECT r.*, r.start_day::text AS start_day, r.end_day::text AS end_day, g.name AS group_name FROM time_off_rules r LEFT JOIN wfm_groups g ON g.id = r.wfm_group_id
+      WHERE r.tenant_id = :t AND r.end_day >= current_date - 30 ORDER BY r.start_day, r.created_at`));
+  res.json(rows.map(ruleDto));
+});
+selfAdmin.post('/time-off-rules', requires('config:write'), async (req, res) => {
+  const p = me(req), b = parse(RuleBody, req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    if (b.groupId && !(await tx.one('SELECT 1 FROM wfm_groups WHERE tenant_id = :t AND id = $1', [b.groupId]))) throw notFound('WFM group');
+    const id = (await tx.one<{ id: string }>(
+      `INSERT INTO time_off_rules (tenant_id, wfm_group_id, kind, start_day, end_day, max_off, types, strict, reason, created_by) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [b.groupId, b.kind, b.startDate, b.endDate, b.kind === 'CAP' ? b.maxOff : null, b.types.length ? b.types : null, b.strict, b.reason, p.name]))!.id;
+    const row = (await tx.q<any>(`SELECT r.*, r.start_day::text AS start_day, r.end_day::text AS end_day, g.name AS group_name FROM time_off_rules r LEFT JOIN wfm_groups g ON g.id = r.wfm_group_id WHERE r.tenant_id = :t AND r.id = $1`, [id]))[0];
+    await audit(tx, p, req, { action: 'CREATE', entityType: 'TIME_OFF_RULE', entityId: id, entityName: `${b.kind === 'BLACKOUT' ? 'Blackout' : 'Daily limit'} ${b.startDate} to ${b.endDate}`, after: ruleDto(row) });
+    return ruleDto(row);
+  });
+  res.status(201).json(out);
+});
+selfAdmin.delete('/time-off-rules/:id', requires('config:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  await withTenant(p.tenantId, async (tx) => {
+    const r = await tx.one<any>('SELECT kind, start_day::text AS start_day, end_day::text AS end_day FROM time_off_rules WHERE tenant_id = :t AND id = $1', [id]);
+    if (!r) throw notFound('Rule');
+    await tx.exec('DELETE FROM time_off_rules WHERE tenant_id = :t AND id = $1', [id]);
+    await audit(tx, p, req, { action: 'DELETE', entityType: 'TIME_OFF_RULE', entityId: id, entityName: `${r.kind} ${r.startDay} to ${r.endDay}` });
+  });
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- logins for employees
@@ -64,6 +112,13 @@ selfAdmin.get('/logins', requires('users:read'), async (req, res) => {
   res.json(rows.map((r) => ({ userId: r.id, username: r.username, role: r.role, status: r.status, employeeId: r.employeeId, lastLoginAt: r.lastLoginAt })));
 });
 /** Give an employee a login for the app. The temporary password is shown once; they should change it. */
+/** The organisation code and the sign-in link to hand over with a username and temporary password. */
+async function signInDetails(tenantId: string, username: string, password: string) {
+  const t = (await raw<{ code: string; name: string }>('SELECT code, name FROM tenants WHERE id = $1', [tenantId]))[0];
+  const link = signInLink(t.code);
+  return { organisation: { code: t.code, name: t.name }, signInUrl: link, welcomeMessage: welcomeMessage({ organisation: t.name, code: t.code, link, username, password }) };
+}
+
 selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
   const p = me(req);
   const b = parse(z.object({ employeeId: uuid, username: z.string().min(3).max(60).regex(/^[a-zA-Z0-9._-]+$/).optional(), password: z.string().min(8).max(100).optional(), role: z.enum(['AGENT', 'SUPERVISOR_RTA', 'SCHEDULER']).default('AGENT') }), req.body);
@@ -74,11 +129,11 @@ selfAdmin.post('/logins', requires('users:write'), async (req, res) => {
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND employee_id = $1', [b.employeeId])) throw conflict('This employee already has a login');
     const username = b.username ?? String(e.employeeNumber).toLowerCase().replace(/[^a-z0-9._-]+/g, '');
     if (await tx.one('SELECT 1 FROM users WHERE tenant_id = :t AND lower(username) = lower($1)', [username])) throw conflict(`The username "${username}" is taken. Choose another.`);
-    const u = await tx.one<any>('INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id', [username, `${e.firstName} ${e.lastName}`, e.email, b.role, await bcrypt.hash(password, 12), b.employeeId, config.forcePasswordChange]);
+    const u = await tx.one<any>('INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id', [username, `${e.firstName} ${e.lastName}`, e.email, b.role, await hashPassword(password, 12), b.employeeId, config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u!.id, entityName: username, after: { username, role: b.role, employeeId: b.employeeId } });
     return { userId: u!.id, username };
   });
-  res.status(201).json({ ...out, password });
+  res.status(201).json({ ...out, password, ...(await signInDetails(p.tenantId, out.username, password)) });
 });
 
 /** Issues a new temporary password for an existing login (e.g. the person forgot it, or it was never delivered). Shown once, same as creation. */
@@ -89,11 +144,12 @@ selfAdmin.put('/logins/:userId/reset-password', requires('users:write'), async (
   const out = await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>('SELECT id, username FROM users WHERE tenant_id = :t AND id = $1 AND employee_id IS NOT NULL', [userId]);
     if (!u) throw notFound('Login');
-    await tx.exec(`UPDATE users SET password_hash = $2, status = 'ACTIVE', must_change_password = $3::boolean WHERE tenant_id = :t AND id = $1`, [userId, await bcrypt.hash(password, 12), config.forcePasswordChange]);
+    await tx.exec(`UPDATE users SET password_hash = $2, status = 'ACTIVE', must_change_password = $3::boolean WHERE tenant_id = :t AND id = $1`, [userId, await hashPassword(password, 12), config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: userId, entityName: u.username, diffSummary: 'Password reset' });
     return { userId: u.id, username: u.username };
   });
-  res.json({ ...out, password });
+  await dropUserState(p.tenantId, userId);
+  res.json({ ...out, password, ...(await signInDetails(p.tenantId, out.username, password)) });
 });
 
 // ---------------------------------------------------------------- who am I
@@ -148,7 +204,7 @@ export async function myShifts(tx: Tx, employeeId: string, from: string, to: str
   return (await tx.q<any>(
     `SELECT s.id, s.day::text AS day, s.start_slot, s.length_slots, s.activities, s.version_id, t.name AS template_name, ${TPL_JOIN_COLS}, v.name AS version_name
      FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id LEFT JOIN shift_templates t ON t.id = s.template_id
-     WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = $1 AND s.day >= $2::date AND s.day <= $3::date ORDER BY s.day, s.start_slot`, [employeeId, from, to])).map(shiftDto);
+     WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = $1 AND s.day >= $2::date AND s.day <= $3::date ORDER BY s.day, s.start_slot`, [employeeId, from, to])).map(shiftDto);
 }
 
 // ---------------------------------------------------------------- profile, schedule, home
@@ -198,9 +254,9 @@ selfService.get('/home', requires('self:use'), async (req, res) => {
     const w = await whoAmI(tx, p);
     const colors = await categoryColors(tx);
     const upcoming = (await myShifts(tx, w.employeeId, w.today, addDays(w.today, 45))).map((s) => colorShift(s, colors));
-    const dow = (new Date(`${w.today}T00:00:00Z`).getUTCDay() + 6) % 7; // Monday = 0
-    const monday = addDays(w.today, -dow), sunday = addDays(monday, 6);
-    const weekShifts = await myShifts(tx, w.employeeId, monday, sunday);
+    const payWeek = await payWeekFor(tx, w.emp.primaryGroupId);          // the week this person is paid by, not always Monday to Sunday
+    const weekFrom = payWeekFloor(w.today, payWeek.start), weekTo = addDays(weekFrom, 6);
+    const weekShifts = await myShifts(tx, w.employeeId, weekFrom, weekTo);
     const weekHours = Math.round(weekShifts.reduce((n, s) => n + s.paidHours, 0) * 10) / 10;
     const unread = (await tx.one<{ n: number }>('SELECT count(*)::int AS n FROM notifications WHERE tenant_id = :t AND user_id = $1 AND read_at IS NULL', [p.userId]))!.n;
     const pendingTimeOff = (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM time_off WHERE tenant_id = :t AND employee_id = $1 AND status = 'REQUESTED'`, [w.employeeId]))!.n;
@@ -211,22 +267,26 @@ selfService.get('/home', requires('self:use'), async (req, res) => {
     const offersOpen = (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM offer_invites i JOIN offers o ON o.id = i.offer_id WHERE i.tenant_id = :t AND i.employee_id = $1 AND i.status = 'INVITED' AND o.status = 'OPEN' AND o.closes_at > now()`, [w.employeeId]))!.n;
     const publishedToday = (await publishedDays(tx, w.emp.eligibleGroupIds ?? [], w.today, w.today)).has(w.today);
     return { name: `${w.emp.firstName} ${w.emp.lastName}`, today: w.today, timezone: w.tz, todayShift: upcoming.find((s) => s.day === w.today) ?? null, nextShift: upcoming.find((s) => s.day > w.today) ?? null,
-      publishedToday, weekHours, unreadNotifications: unread, pendingTimeOff, swapsIncoming: swaps?.incoming ?? 0, swapsMine: swaps?.mine ?? 0, boardOpen: board, offersOpen };
+      publishedToday, weekHours, weekFrom, weekTo, payWeekStart: payWeek.start, unreadNotifications: unread, pendingTimeOff, swapsIncoming: swaps?.incoming ?? 0, swapsMine: swaps?.mine ?? 0, boardOpen: board, offersOpen };
   }));
 });
 
 // ---------------------------------------------------------------- time off
 
 const yearOf = (day: string) => day.slice(0, 4);
-async function balances(tx: Tx, employeeId: string, pol: Policy, year: string) {
+async function usedIn(tx: Tx, employeeId: string, year: string) {
   const rows = await tx.q<any>(
     `SELECT type, sum(LEAST(end_day, $3::date) - GREATEST(start_day, $2::date) + 1)::int AS days FROM time_off
      WHERE tenant_id = :t AND employee_id = $1 AND status IN ('REQUESTED','APPROVED') AND end_day >= $2::date AND start_day <= $3::date GROUP BY type`, [employeeId, `${year}-01-01`, `${year}-12-31`]);
-  const used = new Map(rows.map((r) => [r.type, r.days as number]));
-  return Object.entries(pol.entitlements).map(([type, entitled]) => ({ type, entitledDays: entitled, usedDays: used.get(type) ?? 0, remainingDays: Math.max(0, entitled - (used.get(type) ?? 0)) }));
+  return new Map(rows.map((r) => [r.type as string, r.days as number]));
+}
+/** Balance per leave type for a year: the entitlement (all at once, or building up monthly up to `asOfMonth`), days carried over from last year, and what is used. */
+async function balances(tx: Tx, employeeId: string, pol: Policy, year: string, asOfMonth = 12) {
+  const used = await usedIn(tx, employeeId, year), prev = pol.carryOverDays && Object.keys(pol.carryOverDays).length ? await usedIn(tx, employeeId, String(Number(year) - 1)) : new Map<string, number>();
+  return Object.entries(pol.entitlements).map(([type, entitled]) => balanceOf({ type, entitled, mode: pol.accrualMode ?? 'UPFRONT', asOfMonth, usedThisYear: used.get(type) ?? 0, lastYearEntitled: entitled, lastYearUsed: prev.get(type) ?? 0, carryOverCap: pol.carryOverDays?.[type] ?? 0 }));
 }
 
-const toDto = (t: any) => ({ id: t.id, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, autoDecided: t.autoDecided, decisionNote: t.decisionNote, createdAt: t.createdAt });
+const toDto = (t: any) => ({ id: t.id, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, autoDecided: t.autoDecided, decisionNote: t.decisionNote, createdAt: t.createdAt, decidedLevel: t.decidedLevel ?? null, escalatedAt: t.escalatedAt ?? null });
 const OWN_SQL = `SELECT o.*, o.start_day::text AS start_day, o.end_day::text AS end_day, (o.end_day - o.start_day + 1) AS days FROM time_off o WHERE o.tenant_id = :t AND o.employee_id = $1`;
 
 selfService.get('/time-off', requires('self:use'), async (req, res) => {
@@ -234,7 +294,8 @@ selfService.get('/time-off', requires('self:use'), async (req, res) => {
   res.json(await withTenant(p.tenantId, async (tx) => {
     const w = await whoAmI(tx, p), pol = await loadSelfPolicy(tx);
     const rows = await tx.q<any>(`${OWN_SQL} ORDER BY o.start_day DESC LIMIT 100`, [w.employeeId]);
-    return { requests: rows.map(toDto), balances: await balances(tx, w.employeeId, pol, yearOf(w.today)), rules: { autoApprove: pol.timeOffAutoApprove, minNoticeDays: pol.timeOffMinNoticeDays, maxOffPercent: pol.timeOffMaxOffPercent }, today: w.today };
+    const wf = rows.some((r) => r.status === 'REQUESTED') ? await waitingFor(tx, w.employeeId) : null;       // who has the requests that are still waiting
+    return { requests: rows.map((r) => ({ ...toDto(r), waitingFor: r.status === 'REQUESTED' ? wf : null })), balances: await balances(tx, w.employeeId, pol, yearOf(w.today), Number(w.today.slice(5, 7))), rules: { accrual: pol.accrualMode, autoApprove: pol.timeOffAutoApprove, minNoticeDays: pol.timeOffMinNoticeDays, maxOffPercent: pol.timeOffMaxOffPercent }, today: w.today };
   }));
 });
 
@@ -249,17 +310,21 @@ async function assessTimeOff(tx: Tx, w: Me, pol: Policy, b: { type: string; star
   if (overlap) blockers.push(`You already have ${overlap.type.toLowerCase()} time off from ${overlap.s} to ${overlap.e} that overlaps these dates.`);
   if (blockers.length) return { blockers, reasons, auto: false, n };
 
+  // blackout dates and daily limits for a date range
+  const verdict = await ruleVerdict(tx, w.employeeId, w.emp.primaryGroupId ?? null, b.type, b.startDate, b.endDate);
+  if (verdict.blockers.length) return { blockers: verdict.blockers, reasons, auto: false, n };
+  reasons.push(...verdict.reasons);
   const sick = b.type === 'SICK';
   if (!pol.timeOffAutoApprove) reasons.push('Requests are approved by a manager.');
   const ahead = Math.round((Date.parse(b.startDate) - Date.parse(w.today)) / 864e5);
   if (!sick && ahead < pol.timeOffMinNoticeDays) reasons.push(`It is only ${Math.max(0, ahead)} day${ahead === 1 ? '' : 's'} away; the rule asks for ${pol.timeOffMinNoticeDays} days' notice.`);
   const ent = pol.entitlements[b.type];
   if (ent !== undefined) {
-    const bal = (await balances(tx, w.employeeId, pol, yearOf(b.startDate))).find((x) => x.type === b.type);
-    if (bal && n > bal.remainingDays) reasons.push(`You have ${bal.remainingDays} ${b.type.toLowerCase()} day${bal.remainingDays === 1 ? '' : 's'} left and this asks for ${n}.`);
+    const bal = (await balances(tx, w.employeeId, pol, yearOf(b.startDate), Number(b.startDate.slice(5, 7)))).find((x) => x.type === b.type);
+    if (bal && n > bal.remainingDays) reasons.push(`You have ${bal.remainingDays} ${b.type.toLowerCase()} day${bal.remainingDays === 1 ? '' : 's'} ${pol.accrualMode === 'MONTHLY' ? 'available by then' : 'left'} and this asks for ${n}.`);
   }
   const scheduled = (await tx.one<{ n: number }>(
-    `SELECT count(*)::int AS n FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = $1 AND s.day >= $2::date AND s.day <= $3::date`, [w.employeeId, b.startDate, b.endDate]))!.n;
+    `SELECT count(*)::int AS n FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = $1 AND s.day >= $2::date AND s.day <= $3::date`, [w.employeeId, b.startDate, b.endDate]))!.n;
   if (scheduled > 0) reasons.push(`You are scheduled to work on ${scheduled} of these days, so a manager has to take you off the schedule.`);
   if (!sick && w.emp.primaryGroupId && n <= 60) {
     const size = (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM employees WHERE tenant_id = :t AND status = 'ACTIVE' AND primary_group_id = $1`, [w.emp.primaryGroupId]))!.n;
@@ -293,10 +358,11 @@ selfService.post('/time-off', requires('self:use'), async (req, res) => {
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TIME_OFF', entityId: id, entityName: `${w.emp.firstName} ${w.emp.lastName}`, reason: b.reason || undefined, after: { ...toDto(row), source: 'SELF' }, diffSummary: `${b.type.toLowerCase()} ${b.startDate} to ${b.endDate}: ${a.auto ? 'approved automatically' : 'sent for approval'}` });
     if (a.auto) await reconcileForEmployee(tx, p, req, w.employeeId);
     if (!a.auto) {
-      const managers = (await tx.q<{ id: string }>(`SELECT u.id FROM users u WHERE u.tenant_id = :t AND u.status = 'ACTIVE' AND u.role IN ('WFM_ADMIN', 'WFM_MANAGER', 'SCHEDULER')`)).map((r) => r.id);
+      const managers = (await approvalAudience(tx, w.employeeId)).users;       // the team's supervisors first, else the managers
+      publish(p.tenantId, ['timeoff', 'requested'], { id, employeeId: w.employeeId, employee: `${w.emp.firstName} ${w.emp.lastName}`, type: b.type, startDate: b.startDate, endDate: b.endDate });
       await notify(tx, managers, { kind: 'TIME_OFF', title: 'Time off request', body: `${w.emp.firstName} ${w.emp.lastName}: ${b.type.toLowerCase()} ${b.startDate} to ${b.endDate}`, data: { screen: 'time-off', id } });
     }
-    return { request: toDto(row), decision: { automatic: a.auto, reasons: a.reasons } };
+    return { request: { ...toDto(row), waitingFor: a.auto ? null : await waitingFor(tx, w.employeeId) }, decision: { automatic: a.auto, reasons: a.reasons } };
   });
   if (out.request.status === 'APPROVED') await dropCache(p.tenantId, 'sched:*');
   res.status(201).json(out);

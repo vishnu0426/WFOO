@@ -196,13 +196,13 @@ export const AccuracyGrid: React.FC<{ cells: { day: string; hour: number; actual
   const days = [...new Set(cells.map((c) => c.day))].sort();
   const hours: number[] = Array.from(new Set<number>(cells.filter((c) => c.actual > 0).map((c) => c.hour))).sort((a, b) => a - b);
   const byKey = new Map<string, (typeof cells)[number]>(cells.map((c) => [`${c.day}|${c.hour}`, c] as [string, (typeof cells)[number]]));
-  const tone = (miss: number) => (miss < 0.08 ? 'bg-[#EAF5EF] text-[#2F7D5A]' : miss < 0.15 ? 'bg-[#FFF5DD] text-[#B7791F]' : 'bg-[#FCEBEC] text-[#C84A4A]');
+  const tone = (miss: number) => (miss < 0.08 ? 'bg-[#EAF5EF] text-[#2A7553]' : miss < 0.15 ? 'bg-[#FFF5DD] text-[#8F6200]' : 'bg-[#FCEBEC] text-[#BC3F3F]');
   return (
     <div className="border border-[#E5E5E0] rounded-lg overflow-x-auto">
       <table className="w-full text-center text-[11.5px] border-collapse">
         <thead>
           <tr className="bg-[#FAFAF8] border-b border-[#E5E5E0]">
-            <th className="p-2 text-left text-[#737373] font-semibold sticky left-0 bg-[#FAFAF8]">Day</th>
+            <th className="p-2 text-left text-[#6B6B6B] font-semibold sticky left-0 bg-[#FAFAF8]">Day</th>
             {hours.map((h) => <th key={h} className="p-2 font-mono text-[#525252] font-semibold">{String(h).padStart(2, '0')}</th>)}
           </tr>
         </thead>
@@ -212,7 +212,7 @@ export const AccuracyGrid: React.FC<{ cells: { day: string; hour: number; actual
               <td className="p-2 text-left font-semibold text-[#171717] whitespace-nowrap sticky left-0 bg-white">{dayLabel(d)}</td>
               {hours.map((h) => {
                 const c = byKey.get(`${d}|${h}`);
-                if (!c || c.actual <= 0) return <td key={h} className="p-1.5 text-[#A3A3A3]">–</td>;
+                if (!c || c.actual <= 0) return <td key={h} className="p-1.5 text-[#6B6B6B]">–</td>;
                 const miss = Math.abs(c.forecast - c.actual) / c.actual;
                 return (
                   <td key={h} className={`p-1.5 font-semibold tabular-nums font-mono ${tone(miss)}`} title={`Forecast ${c.forecast} · actual ${c.actual}`}>

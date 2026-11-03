@@ -58,12 +58,15 @@ describe('pay week setting', () => {
   });
 
   it('lets a group override it, keeps the override through other edits, and falls back when cleared', async () => {
-    let u = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: 2 });
+    // changing the pay week moves what "weekly hours" means, so it needs a reason on record
+    const refused = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: 2 });
+    assert.equal(refused.status, 400, 'a pay week change without a reason is refused');
+    let u = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: 2, reason: 'Group pays Wednesday to Tuesday' });
     assert.equal(u.json.payWeekStart, 2);
     assert.deepEqual((await readiness(ctx.group.id)).json.payWeek, { start: 2, source: 'GROUP', companyStart: 6 });
     u = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { description: 'edited' });
     assert.equal(u.json.payWeekStart, 2);
-    u = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: null });
+    u = await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: null, reason: 'Back to the company pay week' });
     assert.equal(u.json.payWeekStart, null);
     assert.equal((await readiness(ctx.group.id)).json.payWeek.start, 6);
     assert.equal((await call(admin, 'PUT', `/config/groups/${ctx.group.id}`, { payWeekStart: 7 })).status, 400);

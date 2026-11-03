@@ -30,7 +30,7 @@ const GroupPool: React.FC<{ groupId: string; name: string; siteId: string | null
   return (
     <div className="border border-[#E5E5E0] rounded-lg">
       <button className="w-full p-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-left" onClick={() => setOpen(!open)}>
-        {open ? <ChevronDown className="w-4 h-4 text-[#737373]" /> : <ChevronRight className="w-4 h-4 text-[#737373]" />}
+        {open ? <ChevronDown className="w-4 h-4 text-[#6B6B6B]" /> : <ChevronRight className="w-4 h-4 text-[#6B6B6B]" />}
         <span className="font-semibold text-[14px]">{name}</span>
         {pool.data?.skillBased ? <Pill tone="info">Pool by skill</Pill> : <Pill>Pool by group membership</Pill>}
         {c && <span className="text-[12px] text-[#525252]">{c.inPool} in the pool{c.fromOtherGroups ? `, ${c.fromOtherGroups} from other groups` : ''}{c.leftOut ? `, ${c.leftOut} left out for lack of a skill` : ''}</span>}
@@ -44,13 +44,13 @@ const GroupPool: React.FC<{ groupId: string; name: string; siteId: string | null
           </div>
           <div className="space-y-2">
             <div className="text-[12px] font-semibold">Skills required to work for this group</div>
-            <p className="text-[11px] text-[#737373]">With none listed, the pool is the people who belong to this group or are marked eligible for it. With skills listed, it is everyone who has all of them at the level shown, from any group.</p>
+            <p className="text-[11px] text-[#6B6B6B]">With none listed, the pool is the people who belong to this group or are marked eligible for it. With skills listed, it is everyone who has all of them at the level shown, from any group.</p>
             {reqs.map((r, i) => (
               <div key={r.skillId} className="flex flex-wrap items-center gap-2">
                 <span className="w-56 text-[13px] font-medium">{skills.find((s) => s.id === r.skillId)?.name ?? r.name}</span>
-                <span className="text-[12px] text-[#737373]">at least</span>
+                <span className="text-[12px] text-[#6B6B6B]">at least</span>
                 <Select className="!w-auto" disabled={!canWrite} value={r.minProficiency} onChange={(e) => setReqs(reqs.map((x, j) => (j === i ? { ...x, minProficiency: Number(e.target.value) } : x)))}>{LEVEL.map((l, k) => <option key={k} value={k + 1}>{l}</option>)}</Select>
-                {canWrite && <button aria-label="Remove skill" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setReqs(reqs.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
+                {canWrite && <button aria-label="Remove skill" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setReqs(reqs.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
               </div>
             ))}
             {canWrite && (
@@ -63,7 +63,7 @@ const GroupPool: React.FC<{ groupId: string; name: string; siteId: string | null
           {pool.data && pool.data.people.length > 0 && (
             <Table head={['Person', 'Home group', 'In the pool', 'Missing']}>
               {pool.data.people.slice(0, 40).map((p) => (
-                <tr key={p.employeeId}><td className="p-2.5">{p.name} <span className="text-[11px] text-[#737373]">#{p.employeeNumber}</span></td><td className="p-2.5 text-[#525252]">{p.homeGroup ?? '–'}</td><td className="p-2.5">{p.inPool ? <Pill tone="good">Yes</Pill> : <Pill tone="warn">No</Pill>}</td><td className="p-2.5 text-[12px] text-[#B7791F]">{p.missing.join(', ')}</td></tr>
+                <tr key={p.employeeId}><td className="p-2.5">{p.name} <span className="text-[11px] text-[#6B6B6B]">#{p.employeeNumber}</span></td><td className="p-2.5 text-[#525252]">{p.homeGroup ?? '–'}</td><td className="p-2.5">{p.inPool ? <Pill tone="good">Yes</Pill> : <Pill tone="warn">No</Pill>}</td><td className="p-2.5 text-[12px] text-[#8F6200]">{p.missing.join(', ')}</td></tr>
               ))}
             </Table>
           )}
@@ -95,7 +95,7 @@ export const SitesPanel: React.FC = () => {
           <Table head={['Site', 'Time zone', 'Country', 'Groups', '']}>
             {sites.data.map((s) => (
               <tr key={s.id}><td className="p-2.5 font-medium">{s.name}</td><td className="p-2.5 font-mono text-[12px]">{s.timezone}</td><td className="p-2.5">{s.country || '–'}</td><td className="p-2.5 text-[#525252]">{s.groups.map((g) => g.name).join(', ') || '–'}</td>
-                <td className="p-2.5 text-right">{canWrite && <button aria-label={`Delete ${s.name}`} className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(s)}><Trash2 className="w-4 h-4" /></button>}</td></tr>
+                <td className="p-2.5 text-right">{canWrite && <button aria-label={`Delete ${s.name}`} className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(s)}><Trash2 className="w-4 h-4" /></button>}</td></tr>
             ))}
           </Table>
         )}

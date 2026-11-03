@@ -14,13 +14,13 @@ const slotOfTime = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim(
 const Row: React.FC<{ on: boolean; toggle: () => void; label: string; hint?: string; children: React.ReactNode }> = ({ on, toggle, label, hint, children }) => (
   <div className={`rounded-md border p-2.5 ${on ? 'border-[#171717] bg-white' : 'border-[#E5E5E0] bg-[#FAFAF8]'}`}>
     <label className="flex items-center gap-2 text-[12px] font-semibold cursor-pointer"><input type="checkbox" checked={on} onChange={toggle} />Change {label.toLowerCase()}</label>
-    {hint && <div className="text-[11px] text-[#737373] ml-6">{hint}</div>}
+    {hint && <div className="text-[11px] text-[#6B6B6B] ml-6">{hint}</div>}
     <div className={`mt-1.5 ${on ? '' : 'opacity-40 pointer-events-none'}`}>{children}</div>
   </div>
 );
 
 export const BulkEdit: React.FC<{
-  people: Employee[]; groups: { id: string; name: string }[]; teams: Team[]; skills: Skill[]; templates: ShiftTemplate[];
+  people: { id: string; name: string }[]; groups: { id: string; name: string }[]; teams: Team[]; skills: Skill[]; templates: ShiftTemplate[];
   onDone: (text: string) => void; onCancel: () => void;
 }> = ({ people, groups, teams, skills, templates, onDone, onCancel }) => {
   const [on, setOn] = useState<Record<string, boolean>>({});
@@ -39,6 +39,7 @@ export const BulkEdit: React.FC<{
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<Result | null>(null);
+  const [progress, setProgress] = useState('');
 
   const toggleIn = (list: string[], set: (x: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const activeSkills = skills.filter((s) => s.status === 'ACTIVE');
@@ -64,18 +65,29 @@ export const BulkEdit: React.FC<{
   const anything = Object.keys(changes).length > 0 || (eligibleGroups && (eligibleGroups.add.length || eligibleGroups.remove.length)) || (skillChange && (skillChange.add.length || skillChange.remove.length));
   const count = Object.keys(changes).length + (eligibleGroups ? 1 : 0) + (skillChange ? 1 : 0);
 
+  /** The server takes up to 500 people per request, so a bigger selection goes in batches, one after another, and the counts are added up. */
+  const BATCH = 500;
   const apply = async () => {
-    setBusy(true); setError(''); setResult(null);
+    if (people.length > 1000 && !confirm(`This changes ${people.length.toLocaleString('en-US')} people. Continue?`)) return;
+    setBusy(true); setError(''); setResult(null); setProgress('');
+    const total: Result = { updated: 0, skipped: [] };
     try {
-      const r = await api<Result>('/workforce/employees/bulk', { method: 'POST', body: { ids: people.map((p) => p.id), changes, ...(eligibleGroups ? { eligibleGroups } : {}), ...(skillChange ? { skills: skillChange } : {}), reason: reason.trim() } });
-      setResult(r);
-      if (r.updated > 0 && r.skipped.length === 0) onDone(`${r.updated} ${r.updated === 1 ? 'person' : 'people'} updated.`);
-    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+      for (let i = 0; i < people.length; i += BATCH) {
+        if (people.length > BATCH) setProgress(`Updating ${Math.min(i + BATCH, people.length).toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')}…`);
+        const r = await api<Result>('/workforce/employees/bulk', { method: 'POST', timeoutMs: 120_000, body: { ids: people.slice(i, i + BATCH).map((x) => x.id), changes, ...(eligibleGroups ? { eligibleGroups } : {}), ...(skillChange ? { skills: skillChange } : {}), reason: reason.trim() } });
+        total.updated += r.updated; total.skipped.push(...r.skipped);
+      }
+      setResult(total);
+      if (total.updated > 0 && total.skipped.length === 0) onDone(`${total.updated.toLocaleString('en-US')} ${total.updated === 1 ? 'person' : 'people'} updated.`);
+    } catch (e: any) {
+      setResult(total.updated || total.skipped.length ? total : null);
+      setError(total.updated ? `Stopped after ${total.updated.toLocaleString('en-US')} of ${people.length.toLocaleString('en-US')} people were updated: ${e.message}` : e.message);
+    } finally { setBusy(false); setProgress(''); }
   };
 
   return (
-    <Card title={`Edit ${people.length} ${people.length === 1 ? 'person' : 'people'} at once`}
-      sub={`${people.slice(0, 4).map((p) => p.name).join(', ')}${people.length > 4 ? ` and ${people.length - 4} more` : ''}. Tick what to change; everything else stays as it is.`}
+    <Card title={`Edit ${people.length.toLocaleString('en-US')} ${people.length === 1 ? 'person' : 'people'} at once`}
+      sub={`${people.slice(0, 4).map((p) => p.name).join(', ')}${people.length > 4 ? ` and ${(people.length - 4).toLocaleString('en-US')} more` : ''}. Tick what to change; everything else stays as it is.`}
       actions={<Btn onClick={onCancel}>Cancel</Btn>}>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <Row on={!!on.team} toggle={() => flip('team')} label="Team"><Select value={v.teamId} onChange={(e) => set('teamId', e.target.value)}><option value="">No team</option>{teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Row>
@@ -115,7 +127,7 @@ export const BulkEdit: React.FC<{
                 <select disabled={!(s.id in addSkills)} value={addSkills[s.id] ?? 3} onChange={(e) => setAddSkills({ ...addSkills, [s.id]: Number(e.target.value) })} className="border border-[#E5E5E0] rounded p-1 text-[12px] disabled:opacity-40">{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select>
               </div>
             ))}
-            {activeSkills.length === 0 && <span className="text-[12px] text-[#737373]">No skills defined yet.</span>}
+            {activeSkills.length === 0 && <span className="text-[12px] text-[#6B6B6B]">No skills defined yet.</span>}
           </div>
         </Row>
         <Row on={!!on.removeSkills} toggle={() => flip('removeSkills')} label="Remove skills">
@@ -125,8 +137,8 @@ export const BulkEdit: React.FC<{
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-[12px] font-semibold flex-1 min-w-[260px]">Why are you changing these people?<Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="For example: moved to the night team" className="mt-1" /></label>
-        <Btn variant="primary" disabled={busy || !anything || reason.trim().length < 3} onClick={apply}>Apply {count || ''} {count === 1 ? 'change' : 'changes'} to {people.length} {people.length === 1 ? 'person' : 'people'}</Btn>
-        {busy && <Busy text="Saving…" />}
+        <Btn variant="primary" disabled={busy || !anything || reason.trim().length < 3} onClick={apply}>Apply {count || ''} {count === 1 ? 'change' : 'changes'} to {people.length.toLocaleString("en-US")} {people.length === 1 ? "person" : "people"}</Btn>
+        {busy && <Busy text={progress || "Saving…"} />}
       </div>
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
       {result && (

@@ -139,11 +139,11 @@ attendance.delete('/punches/:id', requires('workforce:write'), async (req, res) 
 
 // ---------------------------------------------------------------- summary and payroll export
 
-async function summarize(tx: Tx, groupId: string | null, from: string, to: string) {
+export async function summarize(tx: Tx, groupId: string | null, from: string, to: string) {
   const payStart = (await payWeekFor(tx, groupId)).start;   // overtime is counted per pay week: the group's, else the company's
   const emps = await tx.q<any>(
     `SELECT id, employee_number, first_name || ' ' || last_name AS name, weekly_contract_hours FROM employees
-     WHERE tenant_id = :t AND ($1::uuid IS NULL OR primary_group_id = $1 OR $1 = ANY(eligible_group_ids))`, [groupId]);
+     WHERE tenant_id = :t AND ($1::uuid IS NULL OR primary_group_id = $1 OR eligible_group_ids @> ARRAY[$1::uuid])`, [groupId]);
   const empIds = emps.map((e) => e.id);
   if (!empIds.length) return { days: [], weeks: [], payStart };
   const punches = await tx.q<any>(
@@ -151,7 +151,7 @@ async function summarize(tx: Tx, groupId: string | null, from: string, to: strin
      WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) AND day >= $2 AND day <= $3 ORDER BY employee_id, day, clock_in`, [empIds, from, to]);
   const shifts = await tx.q<any>(
     `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, ${TPL_JOIN_COLS} FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
-     LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND s.employee_id = ANY($1::uuid[]) AND s.day >= $2 AND s.day <= $3`, [empIds, from, to]);
+     LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = ANY($1::uuid[]) AND s.day >= $2 AND s.day <= $3`, [empIds, from, to]);
   const empById = new Map(emps.map((e) => [e.id, e]));
   const schedByKey = new Map(shifts.map((s) => [`${s.employeeId}|${s.day}`, r1(((s.lengthSlots - joinedUnpaidMeal(s, s.lengthSlots)) / 4))]));
   const punchByKey = new Map<string, any[]>();

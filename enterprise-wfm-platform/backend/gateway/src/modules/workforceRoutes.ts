@@ -5,10 +5,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
-import { me, requires } from '../auth.ts';
+import { me, requires, requiresAny } from '../auth.ts';
+import { approvalAudience, approverLevel, teamLimit } from './approvals.ts';
+import { afterDeparture, applyDeparture, departureImpact, refuseIfLeading, type Departure } from './departures.ts';
 import { audit } from '../audit.ts';
+import { ruleVerdict } from './timeOffRules.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
-import { dropCache } from '../infra.ts';
+import { dropCache, publish } from '../infra.ts';
 import { parseCsv } from './csv.ts';
 import { reconcileForEmployee } from './rotations.ts';
 import { notify, usersOf } from '../notify.ts';
@@ -24,7 +27,7 @@ const code = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(
 const EmpFields = z.object({
   employeeNumber: z.string().trim().min(1).max(40), firstName: z.string().trim().min(1).max(80), lastName: z.string().trim().min(1).max(80),
   email: z.string().email().nullable().optional(), phone: z.string().max(40).optional(), extension: z.string().trim().max(20).nullable().optional(), timezone: z.string().max(60).nullable().optional(),
-  status: z.enum(['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED']).optional(), hireDate: z.string().regex(isoDay).nullable().optional(),
+  status: z.enum(['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED']).optional(), hireDate: z.string().regex(isoDay).refine((d) => d >= '1950-01-01' && d <= new Date(Date.now() + 366 * 864e5).toISOString().slice(0, 10), 'must be between 1950 and a year from now').nullable().optional(),
   teamId: uuid.nullable().optional(), location: z.string().max(80).optional(),
   employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY']).optional(),
   weeklyContractHours: z.number().min(0).max(80).optional(), maxWeeklyHours: z.number().gt(0).max(84).optional(),
@@ -34,6 +37,10 @@ const EmpFields = z.object({
   preferredTemplateId: uuid.nullable().optional(),
   // same start and end time every day: DEFAULT follows the company setting. fixedStartSlot assigns the person's usual start (15-minute slot of the day).
   shiftConsistency: z.enum(['DEFAULT', 'REQUIRE', 'PREFER', 'OFF']).optional(), fixedStartSlot: z.number().int().min(0).max(95).nullable().optional(),
+  // may be chosen as a team's supervisor / a WFM group's manager. Only says what the person is: it gives no access (that is the role on their login)
+  isSupervisor: z.boolean().optional(), isManager: z.boolean().optional(),
+  // who they report to (the org chart), and the last working day and reason when they are leaving
+  reportsTo: uuid.nullable().optional(), terminationDate: z.string().regex(isoDay).nullable().optional(), terminationReason: z.string().trim().max(300).nullable().optional(),
 });
 const EmpCreate = EmpFields;
 const EmpPatch = EmpFields.partial();
@@ -44,9 +51,10 @@ const COLS: Record<keyof EmpInput, string> = {
   teamId: 'team_id', location: 'location', employmentType: 'employment_type', weeklyContractHours: 'weekly_contract_hours', maxWeeklyHours: 'max_weekly_hours',
   workDaysPerWeek: 'work_days_per_week', minRestHours: 'min_rest_hours', maxConsecutiveDays: 'max_consecutive_days', allowWeekend: 'allow_weekend', allowOvernight: 'allow_overnight', nightShiftConsent: 'night_shift_consent',
   primaryGroupId: 'primary_group_id', eligibleGroupIds: 'eligible_group_ids', preferredTemplateId: 'preferred_template_id',
-  shiftConsistency: 'shift_consistency', fixedStartSlot: 'fixed_start_slot',
+  shiftConsistency: 'shift_consistency', fixedStartSlot: 'fixed_start_slot', isSupervisor: 'is_supervisor', isManager: 'is_manager',
+  reportsTo: 'reports_to', terminationDate: 'termination_date', terminationReason: 'termination_reason',
 };
-const CASTS: Partial<Record<keyof EmpInput, string>> = { eligibleGroupIds: '::uuid[]', teamId: '::uuid', primaryGroupId: '::uuid', hireDate: '::date', preferredTemplateId: '::uuid' };
+const CASTS: Partial<Record<keyof EmpInput, string>> = { eligibleGroupIds: '::uuid[]', teamId: '::uuid', primaryGroupId: '::uuid', hireDate: '::date', preferredTemplateId: '::uuid', reportsTo: '::uuid', terminationDate: '::date' };
 
 const empDto = (e: any, skills: any[] = []) => ({
   id: e.id, employeeNumber: e.employeeNumber, firstName: e.firstName, lastName: e.lastName, name: `${e.firstName} ${e.lastName}`, email: e.email, phone: e.phone, extension: e.extension, timezone: e.timezone,
@@ -54,20 +62,47 @@ const empDto = (e: any, skills: any[] = []) => ({
   weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours,
   maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
   primaryGroupId: e.primaryGroupId, primaryGroupName: e.primaryGroupName ?? null, eligibleGroupIds: e.eligibleGroupIds, version: e.version,
-  preferredTemplateId: e.preferredTemplateId, preferredTemplateName: e.preferredTemplateName ?? null,
+  preferredTemplateId: e.preferredTemplateId, preferredTemplateName: e.preferredTemplateName ?? null, isSupervisor: !!e.isSupervisor, isManager: !!e.isManager,
+  reportsTo: e.reportsTo ?? null, reportsToName: e.reportsToName ?? null, terminationDate: e.terminationDate ?? null, terminationReason: e.terminationReason ?? null,
   shiftConsistency: (e.shiftConsistency ?? 'DEFAULT') as 'DEFAULT' | 'REQUIRE' | 'PREFER' | 'OFF', fixedStartSlot: (e.fixedStartSlot ?? null) as number | null,
   skills: skills.filter((s) => s.employeeId === e.id).map((s) => ({ skillId: s.skillId, name: s.name, code: s.code, proficiency: s.proficiency })),
 });
 
-async function loadEmployees(tx: Tx, f: { id?: string; groupId?: string; teamId?: string; status?: string; q?: string } = {}) {
-  const rows = await tx.q<any>(
-    `SELECT e.*, t.name AS team_name, g.name AS primary_group_name, st.name AS preferred_template_name, e.hire_date::text AS hire_date FROM employees e
-     LEFT JOIN teams t ON t.id = e.team_id LEFT JOIN wfm_groups g ON g.id = e.primary_group_id LEFT JOIN shift_templates st ON st.id = e.preferred_template_id
-     WHERE e.tenant_id = :t AND ($1::uuid IS NULL OR e.id = $1) AND ($2::uuid IS NULL OR e.primary_group_id = $2 OR $2 = ANY(e.eligible_group_ids))
-       AND ($3::uuid IS NULL OR e.team_id = $3) AND ($4::text IS NULL OR e.status = $4)
+/** A query value like `a,b,c` as a list of at most 50 values, each checked against `item`; empty or missing is no filter. */
+const csv = <T extends z.ZodTypeAny>(item: T) => z.string().optional().transform((v) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined)).pipe(z.array(item).max(50).optional());
+
+/** groupIds / teamIds / statuses take several values (a person matches any of them); groupId / teamId / status are the single-value forms older callers use. */
+type EmpFilter = { id?: string; groupId?: string; teamId?: string; status?: string; groupIds?: string[]; teamIds?: string[]; statuses?: string[]; q?: string; skillIds?: string[]; isSupervisor?: boolean; isManager?: boolean; scopeTeamIds?: string[] | null; scopeSelf?: string | null };
+const EMP_WHERE = `e.tenant_id = :t AND ($1::uuid IS NULL OR e.id = $1) AND ($2::uuid[] IS NULL OR e.primary_group_id = ANY($2::uuid[]) OR e.eligible_group_ids && $2::uuid[])
+       AND ($3::uuid[] IS NULL OR e.team_id = ANY($3::uuid[])) AND ($4::text[] IS NULL OR e.status = ANY($4::text[]))
        AND ($5::text IS NULL OR (e.first_name || ' ' || e.last_name || ' ' || e.employee_number) ILIKE '%' || $5 || '%')
-     ORDER BY e.last_name, e.first_name LIMIT 2000`, [f.id ?? null, f.groupId ?? null, f.teamId ?? null, f.status ?? null, f.q ?? null]);
-  const skills = await tx.q<any>('SELECT es.employee_id, es.skill_id, es.proficiency, s.name, s.code FROM employee_skills es JOIN skills s ON s.id = es.skill_id WHERE es.tenant_id = :t');
+       AND ($6::uuid[] IS NULL OR (SELECT count(DISTINCT es.skill_id) FROM employee_skills es WHERE es.employee_id = e.id AND es.skill_id = ANY($6::uuid[])) = cardinality($6::uuid[]))
+       AND ($7::boolean IS NULL OR e.is_supervisor = $7) AND ($8::boolean IS NULL OR e.is_manager = $8)
+       AND ($9::uuid[] IS NULL OR e.team_id = ANY($9::uuid[]) OR e.id = $10::uuid)`;
+const many = <T,>(list: T[] | undefined, one: T | undefined): T[] | null => (list?.length ? list : one ? [one] : null);
+const empParams = (f: EmpFilter) => [f.id ?? null, many(f.groupIds, f.groupId), many(f.teamIds, f.teamId), many(f.statuses, f.status), f.q ?? null, f.skillIds?.length ? f.skillIds : null, f.isSupervisor ?? null, f.isManager ?? null, f.scopeTeamIds ?? null, f.scopeSelf ?? null];
+
+/** The true number of people a filter matches (paged lists report it, so a screen knows how many pages there are). */
+async function countEmployees(tx: Tx, f: EmpFilter = {}): Promise<number> {
+  return (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM employees e WHERE ${EMP_WHERE}`, empParams(f)))!.n;
+}
+
+/** The columns a list can be sorted by (a fixed list: the name of a column never comes from the request into the SQL). `e.id` last keeps pages from overlapping. */
+const EMP_SORT: Record<string, string> = {
+  name: 'e.last_name, e.first_name', employeeNumber: 'e.employee_number', teamName: 't.name', primaryGroupName: 'g.name',
+  employmentType: 'e.employment_type', weeklyContractHours: 'e.weekly_contract_hours', status: 'e.status',
+};
+
+/** People matching a filter. Without a page everyone is returned (imports and checks need all of them); with one, the database cuts the page. */
+async function loadEmployees(tx: Tx, f: EmpFilter = {}, page?: { limit: number; offset: number; sort?: string; desc?: boolean }) {
+  const by = (page?.sort && EMP_SORT[page.sort]) || EMP_SORT.name, dir = page?.desc ? 'DESC' : 'ASC';
+  const order = by.split(', ').map((c) => `${c} ${dir} NULLS LAST`).join(', ');
+  const rows = await tx.q<any>(
+    `SELECT e.*, t.name AS team_name, g.name AS primary_group_name, st.name AS preferred_template_name, e.hire_date::text AS hire_date, e.termination_date::text AS termination_date, rt.first_name || ' ' || rt.last_name AS reports_to_name FROM employees e
+     LEFT JOIN employees rt ON rt.id = e.reports_to LEFT JOIN teams t ON t.id = e.team_id LEFT JOIN wfm_groups g ON g.id = e.primary_group_id LEFT JOIN shift_templates st ON st.id = e.preferred_template_id
+     WHERE ${EMP_WHERE}
+     ORDER BY ${order}, e.last_name, e.first_name, e.id${page ? ' LIMIT $11 OFFSET $12' : ''}`, page ? [...empParams(f), page.limit, page.offset] : empParams(f));
+  const skills = rows.length ? await tx.q<any>('SELECT es.employee_id, es.skill_id, es.proficiency, s.name, s.code FROM employee_skills es JOIN skills s ON s.id = es.skill_id WHERE es.tenant_id = :t AND es.employee_id = ANY($1::uuid[])', [rows.map((r: any) => r.id)]) : [];
   return rows.map((r) => empDto(r, skills));
 }
 
@@ -102,12 +137,57 @@ workforce.get('/employees/template', requires('workforce:read'), (_req, res) => 
   res.send(EMPLOYEE_TEMPLATE);
 });
 
+/** What a list asks for when it names nobody in particular: a page, not the whole company. Everything that needs more says so with a limit, or narrows the list by group, team or search. */
+const DEFAULT_PAGE = 500;
+
 workforce.get('/employees', requires('workforce:read'), async (req, res) => {
-  const q = parse(z.object({ groupId: uuid.optional(), teamId: uuid.optional(), status: z.string().optional(), q: z.string().max(80).optional() }), req.query);
-  res.json(await withTenant(me(req).tenantId, (tx) => loadEmployees(tx, q)));
+  const q = parse(z.object({
+    groupId: uuid.optional(), teamId: uuid.optional(), status: z.string().optional(), q: z.string().max(80).optional(),
+    isSupervisor: z.enum(['true', 'false']).optional().transform((v) => (v === undefined ? undefined : v === 'true')), isManager: z.enum(['true', 'false']).optional().transform((v) => (v === undefined ? undefined : v === 'true')),
+    groupIds: csv(uuid), teamIds: csv(uuid), statuses: csv(z.enum(['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED'])),
+    skillIds: z.string().optional().transform((v) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined)).pipe(z.array(uuid).max(20).optional()),
+    fields: z.enum(['ids']).optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional(), offset: z.coerce.number().int().min(0).optional(),
+    sort: z.enum(Object.keys(EMP_SORT) as [string, ...string[]]).optional(), dir: z.enum(['asc', 'desc']).optional(),
+  }), req.query);
+  const { limit: asked, offset, sort, dir, fields, ...filters } = q;
+  const tenantId = me(req).tenantId;
+  const lim = await withTenant(tenantId, (tx) => teamLimit(tx, me(req)));            // a Supervisor in an organisation that limits them sees their own teams
+  if (lim) Object.assign(filters, { scopeTeamIds: lim.teamIds, scopeSelf: lim.self });
+  // only the ids of everyone a filter matches (a screen that has to mark or filter people it already shows): small, whatever the size of the company
+  if (fields === 'ids') {
+    const ids = await withTenant(tenantId, (tx) => tx.q<{ id: string }>(`SELECT e.id FROM employees e WHERE ${EMP_WHERE}`, empParams(filters)));
+    res.setHeader('X-Total-Count', String(ids.length));
+    return void res.json(ids);
+  }
+  // A list that names no group, team, search or skill is the whole company. It comes back a page at a time (and says so in X-Total-Count and X-Page-Limit) so that
+  // nothing can ask for 50,000 people by accident; anything narrower than that, or any call with its own limit, behaves as before.
+  const narrowed = !!(filters.groupId || filters.teamId || filters.groupIds || filters.teamIds || filters.q || filters.skillIds || filters.isSupervisor !== undefined || filters.isManager !== undefined);
+  const limit = asked ?? (narrowed ? undefined : DEFAULT_PAGE);
+  const out = await withTenant(tenantId, async (tx) => limit === undefined
+    ? { rows: await loadEmployees(tx, filters), total: null as number | null }
+    : { rows: await loadEmployees(tx, filters, { limit, offset: offset ?? 0, sort, desc: dir === 'desc' }), total: await countEmployees(tx, filters) });
+  if (out.total !== null) res.setHeader('X-Total-Count', String(out.total));
+  if (limit !== undefined) res.setHeader('X-Page-Limit', String(limit));
+  res.json(out.rows);
+});
+/** Counts, contracted hours and the teams for whoever a filter matches: what a screen that plans for a whole group needs, without downloading the group. */
+workforce.get('/employees/summary', requires('workforce:read'), async (req, res) => {
+  const f = parse(z.object({ groupId: uuid.optional(), teamId: uuid.optional(), status: z.string().optional() }), req.query);
+  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<{ team_id: string | null; team_name: string | null; people: number; hours: string }>(
+    `SELECT e.team_id, t.name AS team_name, count(*)::int AS people, coalesce(sum(e.weekly_contract_hours), 0)::text AS hours
+       FROM employees e LEFT JOIN teams t ON t.id = e.team_id WHERE ${EMP_WHERE} GROUP BY e.team_id, t.name ORDER BY t.name NULLS LAST`, empParams(f)));
+  res.json({
+    people: rows.reduce((n, r) => n + r.people, 0), weeklyHours: rows.reduce((n, r) => n + Number(r.hours), 0),
+    teams: rows.filter((r) => r.team_id).map((r) => ({ id: r.team_id, name: r.team_name, people: r.people, weeklyHours: Number(r.hours) })),
+  });
 });
 workforce.get('/employees/:id', requires('workforce:read'), async (req, res) => {
-  const [e] = await withTenant(me(req).tenantId, (tx) => loadEmployees(tx, { id: parse(uuid, req.params.id) }));
+  const id = parse(uuid, req.params.id);
+  const [e] = await withTenant(me(req).tenantId, async (tx) => {
+    const lim = await teamLimit(tx, me(req));
+    return loadEmployees(tx, { id, ...(lim ? { scopeTeamIds: lim.teamIds, scopeSelf: lim.self } : {}) });
+  });
   if (!e) throw notFound('Employee');
   res.json(e);
 });
@@ -129,10 +209,61 @@ workforce.get('/attrition', requires('workforce:read'), async (req, res) => {
   res.json(out);
 });
 
+/** The words for what changed, shown when a reason is asked for. */
+const WORDS: Record<string, string> = { employeeNumber: 'the employee number', firstName: 'the name', lastName: 'the name', status: 'the status', hireDate: 'the hire date', teamId: 'the team', employmentType: 'the employment type',
+  weeklyContractHours: 'the contract hours', maxWeeklyHours: 'the maximum hours', workDaysPerWeek: 'the days per week', minRestHours: 'the rest between shifts', maxConsecutiveDays: 'the days in a row',
+  allowWeekend: 'weekend work', allowOvernight: 'overnight work', nightShiftConsent: 'night-work consent', primaryGroupId: 'the main WFM group', eligibleGroupIds: 'the groups they can work in',
+  preferredTemplateId: 'the preferred shift', shiftConsistency: 'the same-start rule', fixedStartSlot: 'the assigned start time', isSupervisor: 'the supervisor mark', isManager: 'the manager mark',
+  reportsTo: 'who they report to', terminationDate: 'the last working day', terminationReason: 'the reason for leaving' };
+/** Contact details can be corrected without a reason; everything that changes how someone is scheduled, paid or where they sit needs one. */
+const CONTACT = new Set(['email', 'phone', 'extension', 'location', 'timezone']);
+const same = (a: unknown, b: unknown) => JSON.stringify(Array.isArray(a) ? [...a].sort() : a ?? null) === JSON.stringify(Array.isArray(b) ? [...b].sort() : b ?? null);
+export const meaningfulChanges = (before: Record<string, any>, patch: Record<string, unknown>): string[] =>
+  [...new Set(Object.keys(patch).filter((k) => !CONTACT.has(k) && k in WORDS && patch[k] !== undefined && !same(before[k], patch[k])).map((k) => WORDS[k]))];
+
+/** A reporting line has to point at someone who still works here, not at the person themselves, and must not close a circle. */
+async function checkReportsTo(tx: Tx, id: string | null, target: string | null | undefined) {
+  if (!target) return;
+  if (id && target === id) throw bad('A person cannot report to themselves.');
+  const t = await tx.one<{ firstName: string; lastName: string; status: string }>('SELECT first_name, last_name, status FROM employees WHERE tenant_id = :t AND id = $1', [target]);
+  if (!t) throw bad('That person does not exist.');
+  if (t.status === 'TERMINATED') throw bad(`${t.firstName} ${t.lastName} has left, so nobody can report to them.`);
+  if (!id) return;
+  let cur: string | null = target;
+  for (let i = 0; i < 25 && cur; i++) {
+    const up: { reportsTo: string | null } | null = (await tx.one<{ reportsTo: string | null }>('SELECT reports_to FROM employees WHERE tenant_id = :t AND id = $1', [cur])) ?? null;
+    cur = up?.reportsTo ?? null;
+    if (cur === id) throw bad(`That would make a circle: ${t.firstName} ${t.lastName} already reports, directly or through others, to this person.`);
+  }
+}
+
+/** Somebody who still leads a team or manages a group cannot lose the flag: say which, so it is changed first. */
+async function guardRoleRemoval(tx: Tx, id: string, name: string, before: { isSupervisor: boolean; isManager: boolean }, b: { isSupervisor?: boolean; isManager?: boolean }) {
+  if (b.isSupervisor === false && before.isSupervisor) {
+    const teams = await tx.q<{ name: string }>('SELECT name FROM teams WHERE tenant_id = :t AND (manager_id = $1 OR deputy_id = $1) ORDER BY name', [id]);
+    if (teams.length) throw conflict(`${name} is still the supervisor or deputy of ${teams.map((t) => t.name).join(', ')}. Choose someone else for ${teams.length === 1 ? 'that team' : 'those teams'} first.`);
+  }
+  if (b.isManager === false && before.isManager) {
+    const groups = await tx.q<{ name: string }>('SELECT name FROM wfm_groups WHERE tenant_id = :t AND manager_id = $1 ORDER BY name', [id]);
+    if (groups.length) throw conflict(`${name} still manages ${groups.map((g) => g.name).join(', ')}. Choose another manager for ${groups.length === 1 ? 'that group' : 'those groups'} first.`);
+  }
+}
+
+/** The person chosen for a team or group job has to exist, still work here, and be marked for that job. */
+export async function ensureMarked(tx: Tx, id: string | null | undefined, flag: 'is_supervisor' | 'is_manager', job: string) {
+  if (!id) return;
+  const e = await tx.one<{ firstName: string; lastName: string; status: string; marked: boolean }>(`SELECT first_name, last_name, status, ${flag} AS marked FROM employees WHERE tenant_id = :t AND id = $1`, [id]);
+  if (!e) throw bad('That person does not exist.');
+  const name = `${e.firstName} ${e.lastName}`;
+  if (e.status === 'TERMINATED') throw bad(`${name} has left, so cannot be the ${job}.`);
+  if (!e.marked) throw bad(`${name} is not marked as a ${flag === 'is_supervisor' ? 'supervisor' : 'manager'}. Tick "Is a ${flag === 'is_supervisor' ? 'supervisor' : 'manager'}" on their employee record first.`);
+}
+
 workforce.post('/employees', requires('workforce:write'), async (req, res) => {
   const p = me(req), b = parse(EmpCreate, req.body);
   checkEmployee({ weeklyContractHours: b.weeklyContractHours ?? 40, maxWeeklyHours: b.maxWeeklyHours ?? 40, primaryGroupId: b.primaryGroupId ?? null, eligibleGroupIds: b.eligibleGroupIds ?? [] });
   const out = await withTenant(p.tenantId, async (tx) => {
+    await checkReportsTo(tx, null, b.reportsTo);
     const id = await writeEmployee(tx, null, b);
     const [e] = await loadEmployees(tx, { id });
     await audit(tx, p, req, { action: 'CREATE', entityType: 'EMPLOYEE', entityId: id, entityName: e.name, after: e });
@@ -141,18 +272,55 @@ workforce.post('/employees', requires('workforce:write'), async (req, res) => {
   res.status(201).json(out);
 });
 
+/** What recording a departure would touch, shown before it is saved. */
+workforce.get('/employees/:id/departure-impact', requires('workforce:read'), async (req, res) => {
+  const id = parse(uuid, req.params.id), q = parse(z.object({ lastDay: z.string().regex(isoDay) }), req.query);
+  res.json(await withTenant(me(req).tenantId, async (tx) => {
+    if (!(await tx.one('SELECT 1 FROM employees WHERE tenant_id = :t AND id = $1', [id]))) throw notFound('Employee');
+    const today = (await tx.one<{ d: string }>('SELECT current_date::text AS d'))!.d;
+    return { ...(await departureImpact(tx, id, q.lastDay)), lastDayHasPassed: q.lastDay <= today };
+  }));
+});
+
 workforce.put('/employees/:id', requires('workforce:write'), async (req, res) => {
-  const p = me(req), id = parse(uuid, req.params.id), b = parse(EmpPatch, req.body);
+  const p = me(req), id = parse(uuid, req.params.id), parsed = parse(EmpPatch.extend({ reason: z.string().trim().max(300).optional() }), req.body);
+  const { reason, ...b } = parsed;
+  const dep = { v: null as (Departure & { versionIds: string[] }) | null, name: '', scheduled: false };
   const out = await withTenant(p.tenantId, async (tx) => {
     const [before] = await loadEmployees(tx, { id });
     if (!before) throw notFound('Employee');
     checkEmployee({ weeklyContractHours: b.weeklyContractHours ?? before.weeklyContractHours, maxWeeklyHours: b.maxWeeklyHours ?? before.maxWeeklyHours, primaryGroupId: null, eligibleGroupIds: [] });
-    await writeEmployee(tx, id, b);
+    await guardRoleRemoval(tx, id, before.name, before, b);
+    // anything beyond contact details needs a reason, kept in the history with the name of whoever made the change
+    const changed = meaningfulChanges(before, b);
+    if (changed.length && (reason ?? '').length < 3) throw bad(`Say why you are changing ${changed.slice(0, 3).join(', ')}${changed.length > 3 ? ' and more' : ''}: it is kept in the history with your name.`);
+    if (b.reportsTo !== undefined && b.reportsTo !== before.reportsTo) await checkReportsTo(tx, id, b.reportsTo);
+    const leaving = b.status === 'TERMINATED' && before.status !== 'TERMINATED';
+    const returning = before.status === 'TERMINATED' && b.status !== undefined && b.status !== 'TERMINATED';
+    const patch: Partial<typeof b> = { ...b };
+    if (leaving) {
+      const lastDay = b.terminationDate ?? before.terminationDate ?? null, why = (b.terminationReason ?? before.terminationReason ?? '').trim();
+      if (!lastDay || why.length < 3) throw bad('Say their last working day and why they are leaving.');
+      refuseIfLeading(before.name, (await departureImpact(tx, id, lastDay)).leads);
+      const today = (await tx.one<{ d: string }>('SELECT current_date::text AS d'))!.d;
+      const finalize = lastDay <= today;
+      Object.assign(patch, { terminationDate: lastDay, terminationReason: why });
+      if (!finalize) delete patch.status;                                  // still here until the last day: the status changes then
+      await writeEmployee(tx, id, patch);
+      dep.v = await applyDeparture(tx, p, req, { id, name: before.name, reportsTo: b.reportsTo ?? before.reportsTo }, lastDay, why, finalize);
+      dep.name = before.name; dep.scheduled = !finalize;
+    } else if (returning || (b.terminationDate === null && before.terminationDate && before.status !== 'TERMINATED')) {
+      Object.assign(patch, { terminationDate: null, terminationReason: null });     // came back, or the planned departure was cancelled
+      await writeEmployee(tx, id, patch);
+    } else {
+      await writeEmployee(tx, id, patch);
+    }
     const [after] = await loadEmployees(tx, { id });
-    await audit(tx, p, req, { action: 'UPDATE', entityType: 'EMPLOYEE', entityId: id, entityName: after.name, before, after });
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'EMPLOYEE', entityId: id, entityName: after.name, before, after, reason: reason || undefined, diffSummary: changed.length ? `Changed ${changed.join(', ')}` : undefined });
     return after;
   });
-  res.json(out);
+  if (dep.v) { await afterDeparture(p.tenantId, p, dep.name, dep.v.versionIds, dep.v.futureShifts, out.terminationReason ?? ''); await dropCache(p.tenantId, 'sched:*'); await dropCache(p.tenantId, 'userstate:*'); }       // a switched-off login stops working at once, not after the few seconds the session state is kept
+  res.json({ ...out, departure: dep.v ? { ...dep.v, versionIds: undefined, scheduled: dep.scheduled, lastDay: out.terminationDate } : undefined });
 });
 
 // ---------------------------------------------------------------- bulk edit (select many people, change the same things on all of them)
@@ -160,7 +328,7 @@ workforce.put('/employees/:id', requires('workforce:write'), async (req, res) =>
 const BulkBody = z.object({
   ids: z.array(uuid).min(1).max(500),
   // fields that make sense to apply to many people at once: never identity fields such as name, number, email or extension
-  changes: EmpPatch.omit({ employeeNumber: true, firstName: true, lastName: true, email: true, phone: true, extension: true }).default({}),
+  changes: EmpPatch.omit({ employeeNumber: true, firstName: true, lastName: true, email: true, phone: true, extension: true, isSupervisor: true, isManager: true }).default({}),
   eligibleGroups: z.object({ add: z.array(uuid).max(50).default([]), remove: z.array(uuid).max(50).default([]) }).optional(),
   skills: z.object({ add: z.array(z.object({ skillId: uuid, proficiency: z.number().int().min(1).max(5) })).max(60).default([]), remove: z.array(uuid).max(60).default([]) }).optional(),
   reason: z.string().trim().min(3, 'is required').max(300),
@@ -244,7 +412,7 @@ workforce.put('/employees/:id/skills', requires('workforce:write'), async (req, 
 
 const HEAD: Record<string, string[]> = {
   employeeNumber: ['employee_number', 'employee_id', 'id', 'number', 'emp_no'], firstName: ['first_name', 'firstname', 'first'], lastName: ['last_name', 'lastname', 'last', 'surname'],
-  email: ['email'], extension: ['extension', 'ext', 'agent_extension', 'agent_ext'], team: ['team', 'team_name'], group: ['wfm_group', 'group', 'primary_group'], employmentType: ['employment_type', 'type'], weeklyHours: ['weekly_hours', 'contract_hours', 'weekly_contract_hours'],
+  email: ['email'], phone: ['phone', 'mobile', 'mobile_phone', 'phone_number'], extension: ['extension', 'ext', 'agent_extension', 'agent_ext'], team: ['team', 'team_name'], group: ['wfm_group', 'group', 'primary_group'], employmentType: ['employment_type', 'type'], weeklyHours: ['weekly_hours', 'contract_hours', 'weekly_contract_hours'],
   maxWeeklyHours: ['max_weekly_hours', 'max_hours'], daysPerWeek: ['days_per_week', 'work_days_per_week'], status: ['status'], hireDate: ['hire_date', 'start_date'], skills: ['skills'],
 };
 
@@ -285,6 +453,7 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
       const input: any = { employeeNumber: number, firstName: get('firstName'), lastName: get('lastName') };
       if (!input.firstName || !input.lastName) return fail('First and last name are required');
       if (get('email')) input.email = get('email');
+      if (get('phone')) input.phone = get('phone');
       if (get('extension')) input.extension = get('extension');
       if (get('team')) { const t = find(teams, get('team')); if (!t) return fail(`Unknown team '${get('team')}'. Create it first.`); input.teamId = t.id; }
       if (get('group')) { const g = find(groups, get('group')); if (!g) return fail(`Unknown WFM group '${get('group')}'. Create it first.`); input.primaryGroupId = g.id; input.eligibleGroupIds = [g.id]; }
@@ -334,21 +503,47 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
 
 // ---------------------------------------------------------------- teams and skills
 
-const teamDto = (t: any) => ({ id: t.id, name: t.name, code: t.code, description: t.description, location: t.location, managerId: t.managerId, managerName: t.managerName ?? null, status: t.status, memberCount: t.memberCount ?? 0 });
-const TeamBody = z.object({ name: z.string().trim().min(1).max(80), code: z.string().trim().min(1).max(30).optional(), description: z.string().max(300).optional(), location: z.string().max(80).optional(), managerId: uuid.nullable().optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() });
+const teamDto = (t: any) => ({ id: t.id, name: t.name, code: t.code, description: t.description, location: t.location, managerId: t.managerId, managerName: t.managerName ?? null, deputyId: t.deputyId ?? null, deputyName: t.deputyName ?? null, status: t.status, memberCount: t.memberCount ?? 0 });
+const TeamBody = z.object({ name: z.string().trim().min(1).max(80), code: z.string().trim().min(1).max(30).optional(), description: z.string().max(300).optional(), location: z.string().max(80).optional(), managerId: uuid.nullable().optional(), deputyId: uuid.nullable().optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() });
 
+/** A team as the lists show it, with the supervisor's and deputy's names and the head count. */
+const TEAM_SELECT = `SELECT t.*, e.first_name || ' ' || e.last_name AS manager_name, d.first_name || ' ' || d.last_name AS deputy_name, (SELECT count(*)::int FROM employees x WHERE x.team_id = t.id AND x.status <> 'TERMINATED') AS member_count
+     FROM teams t LEFT JOIN employees e ON e.id = t.manager_id LEFT JOIN employees d ON d.id = t.deputy_id WHERE t.tenant_id = :t`;
+const teamById = async (tx: Tx, id: string) => teamDto(await tx.one<any>(`${TEAM_SELECT} AND t.id = $1`, [id]));
+
+/** Teams a page at a time (`limit`, `offset`, `q` searches name and code). `fields=pick` is the slim list a drop-down needs: id, name, code, status, supervisor and deputy, up to 5,000.
+ *  Asked for neither, the first 500 come back; X-Total-Count says how many there are in all. */
 workforce.get('/teams', requires('workforce:read'), async (req, res) => {
-  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>(
-    `SELECT t.*, e.first_name || ' ' || e.last_name AS manager_name, (SELECT count(*)::int FROM employees x WHERE x.team_id = t.id AND x.status <> 'TERMINATED') AS member_count
-     FROM teams t LEFT JOIN employees e ON e.id = t.manager_id WHERE t.tenant_id = :t ORDER BY t.name`));
-  res.json(rows.map(teamDto));
+  const q = parse(z.object({ limit: z.coerce.number().int().min(1).max(1000).optional(), offset: z.coerce.number().int().min(0).optional(), q: z.string().trim().max(80).optional(), fields: z.enum(['pick']).optional(), counts: z.enum(['1']).optional() }), req.query);
+  const where = `t.tenant_id = :t AND ($1::text IS NULL OR t.name ILIKE '%' || $1 || '%' OR t.code ILIKE '%' || $1 || '%')`;
+  const search = q.q || null;
+  const out = await withTenant(me(req).tenantId, async (tx) => {
+    const total = (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM teams t WHERE ${where}`, [search]))!.n;
+    if (q.fields === 'pick') {
+      // head counts (counts=1) from one grouped read of the people, not one lookup per team
+      const rows = await tx.q<any>(`SELECT t.id, t.name, t.code, t.status, t.manager_id, t.deputy_id${q.counts ? ', coalesce(c.n, 0) AS member_count' : ''} FROM teams t
+        ${q.counts ? `LEFT JOIN (SELECT team_id, count(*)::int AS n FROM employees WHERE tenant_id = :t AND status <> 'TERMINATED' AND team_id IS NOT NULL GROUP BY team_id) c ON c.team_id = t.id` : ''}
+        WHERE ${where} ORDER BY t.name LIMIT 5000 OFFSET $2`, [search, q.offset ?? 0]);
+      return { total, limit: 5000, rows: rows.map((t) => ({ id: t.id, name: t.name, code: t.code, status: t.status, managerId: t.managerId ?? null, deputyId: t.deputyId ?? null, ...(q.counts ? { memberCount: t.memberCount } : {}) })) };
+    }
+    const limit = q.limit ?? 500;
+    // the page of teams first, then the names and head counts for just those
+    const rows = await tx.q<any>(
+      `SELECT t.*, e.first_name || ' ' || e.last_name AS manager_name, d.first_name || ' ' || d.last_name AS deputy_name, (SELECT count(*)::int FROM employees x WHERE x.team_id = t.id AND x.status <> 'TERMINATED') AS member_count
+       FROM (SELECT * FROM teams t WHERE ${where} ORDER BY t.name LIMIT $2 OFFSET $3) t LEFT JOIN employees e ON e.id = t.manager_id LEFT JOIN employees d ON d.id = t.deputy_id ORDER BY t.name`, [search, limit, q.offset ?? 0]);
+    return { total, limit, rows: rows.map(teamDto) };
+  });
+  res.setHeader('X-Total-Count', String(out.total)); res.setHeader('X-Page-Limit', String(out.limit));
+  res.json(out.rows);
 });
 workforce.post('/teams', requires('workforce:write'), async (req, res) => {
   const p = me(req), b = parse(TeamBody, req.body);
   const out = await withTenant(p.tenantId, async (tx) => {
-    const t = await tx.one<any>('INSERT INTO teams (tenant_id, name, code, description, location, manager_id) VALUES (:t, $1, $2, $3, $4, $5) RETURNING *', [b.name, b.code ?? code(b.name), b.description ?? '', b.location ?? '', b.managerId ?? null]);
+    await ensureMarked(tx, b.managerId, 'is_supervisor', 'supervisor'); await ensureMarked(tx, b.deputyId, 'is_supervisor', 'deputy');
+    if (b.managerId && b.managerId === b.deputyId) throw bad('The deputy has to be a different person from the supervisor.');
+    const t = await tx.one<any>('INSERT INTO teams (tenant_id, name, code, description, location, manager_id, deputy_id) VALUES (:t, $1, $2, $3, $4, $5, $6) RETURNING *', [b.name, b.code ?? code(b.name), b.description ?? '', b.location ?? '', b.managerId ?? null, b.deputyId ?? null]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TEAM', entityId: t!.id, entityName: b.name, after: teamDto(t) });
-    return teamDto(t);
+    return teamById(tx, t!.id);
   });
   res.status(201).json(out);
 });
@@ -357,12 +552,17 @@ workforce.put('/teams/:id', requires('workforce:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await tx.one<any>('SELECT * FROM teams WHERE tenant_id = :t AND id = $1', [id]);
     if (!before) throw notFound('Team');
+    // only a change is checked, so a team set up before the flags existed can still be edited
+    if (b.managerId !== undefined && b.managerId !== before.managerId) await ensureMarked(tx, b.managerId, 'is_supervisor', 'supervisor');
+    if (b.deputyId !== undefined && b.deputyId !== before.deputyId) await ensureMarked(tx, b.deputyId, 'is_supervisor', 'deputy');
+    const mgr = b.managerId !== undefined ? b.managerId : before.managerId, dep = b.deputyId !== undefined ? b.deputyId : before.deputyId;
+    if (mgr && mgr === dep) throw bad('The deputy has to be a different person from the supervisor.');
     const t = await tx.one<any>(
       `UPDATE teams SET name = coalesce($2, name), description = coalesce($3, description), location = coalesce($4, location), status = coalesce($5, status),
-         manager_id = CASE WHEN $6::boolean THEN $7::uuid ELSE manager_id END WHERE tenant_id = :t AND id = $1 RETURNING *`,
-      [id, b.name ?? null, b.description ?? null, b.location ?? null, b.status ?? null, b.managerId !== undefined, b.managerId ?? null]);
+         manager_id = CASE WHEN $6::boolean THEN $7::uuid ELSE manager_id END, deputy_id = CASE WHEN $8::boolean THEN $9::uuid ELSE deputy_id END WHERE tenant_id = :t AND id = $1 RETURNING *`,
+      [id, b.name ?? null, b.description ?? null, b.location ?? null, b.status ?? null, b.managerId !== undefined, b.managerId ?? null, b.deputyId !== undefined, b.deputyId ?? null]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'TEAM', entityId: id, entityName: t!.name, before: teamDto(before), after: teamDto(t) });
-    return teamDto(t);
+    return teamById(tx, id);
   });
   res.json(out);
 });
@@ -452,15 +652,19 @@ workforce.put('/employees/:id/availability', requires('workforce:write'), async 
 
 // ---------------------------------------------------------------- time off
 
-const toDto = (t: any) => ({ id: t.id, employeeId: t.employeeId, employeeName: t.employeeName, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, createdAt: t.createdAt });
+const toDto = (t: any) => ({ id: t.id, employeeId: t.employeeId, employeeName: t.employeeName, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, createdAt: t.createdAt, escalatedAt: t.escalatedAt ?? null, decidedLevel: t.decidedLevel ?? null });
 const TO_SQL = `SELECT o.*, o.start_day::text AS start_day, o.end_day::text AS end_day, (o.end_day - o.start_day + 1) AS days, e.first_name || ' ' || e.last_name AS employee_name
                 FROM time_off o JOIN employees e ON e.id = o.employee_id WHERE o.tenant_id = :t`;
 
 workforce.get('/time-off', requires('workforce:read'), async (req, res) => {
-  const q = parse(z.object({ employeeId: uuid.optional(), status: z.string().optional(), from: z.string().regex(isoDay).optional(), to: z.string().regex(isoDay).optional() }), req.query);
-  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>(
-    `${TO_SQL} AND ($1::uuid IS NULL OR o.employee_id = $1) AND ($2::text IS NULL OR o.status = $2) AND ($3::date IS NULL OR o.end_day >= $3) AND ($4::date IS NULL OR o.start_day <= $4) ORDER BY o.start_day DESC LIMIT 500`,
-    [q.employeeId ?? null, q.status ?? null, q.from ?? null, q.to ?? null]));
+  const q = parse(z.object({ employeeId: uuid.optional(), status: z.string().optional(), statuses: csv(z.enum(['REQUESTED', 'APPROVED', 'REJECTED', 'CANCELLED'])), from: z.string().regex(isoDay).optional(), to: z.string().regex(isoDay).optional() }), req.query);
+  const rows = await withTenant(me(req).tenantId, async (tx) => {
+    const lim = await teamLimit(tx, me(req));
+    return tx.q<any>(
+      `${TO_SQL} AND ($1::uuid IS NULL OR o.employee_id = $1) AND ($2::text[] IS NULL OR o.status = ANY($2::text[])) AND ($3::date IS NULL OR o.end_day >= $3) AND ($4::date IS NULL OR o.start_day <= $4)
+        AND ($5::uuid[] IS NULL OR e.team_id = ANY($5::uuid[]) OR e.id = $6::uuid) ORDER BY o.start_day DESC LIMIT 500`,
+      [q.employeeId ?? null, q.statuses?.length ? q.statuses : q.status ? [q.status] : null, q.from ?? null, q.to ?? null, lim ? lim.teamIds : null, lim?.self ?? null]);
+  });
   res.json(rows.map(toDto));
 });
 workforce.post('/time-off', requires('workforce:write'), async (req, res) => {
@@ -470,27 +674,37 @@ workforce.post('/time-off', requires('workforce:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const [emp] = await loadEmployees(tx, { id: b.employeeId });
     if (!emp) throw notFound('Employee');
+    const overlap = await tx.one<any>(`SELECT type, start_day::text AS s, end_day::text AS e FROM time_off WHERE tenant_id = :t AND employee_id = $1 AND status IN ('REQUESTED','APPROVED') AND end_day >= $2::date AND start_day <= $3::date LIMIT 1`, [b.employeeId, b.startDate, b.endDate]);
+    if (overlap) throw conflict(`${emp.name} already has ${String(overlap.type).toLowerCase()} time off from ${overlap.s} to ${overlap.e} that overlaps these dates.`);
     const id = (await tx.one<{ id: string }>(
       `INSERT INTO time_off (tenant_id, employee_id, type, start_day, end_day, reason, status, decided_by, decided_at) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [b.employeeId, b.type, b.startDate, b.endDate, b.reason ?? '', b.approve ? 'APPROVED' : 'REQUESTED', b.approve ? p.name : null, b.approve ? new Date().toISOString() : null]))!.id;
     const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TIME_OFF', entityId: id, entityName: emp.name, after: toDto(t) });
     if (b.approve) await reconcileForEmployee(tx, p, req, b.employeeId);   // approved leave takes the person off their generated rotation shifts
-    return toDto(t);
+    // blackout dates and daily limits do not stop a manager, but they are told
+    const v = await ruleVerdict(tx, b.employeeId, emp.primaryGroupId ?? null, b.type, b.startDate, b.endDate);
+    return { ...toDto(t), warnings: [...v.blockers, ...v.reasons] };
   });
   await dropCache(me(req).tenantId, 'sched:*');
   res.status(201).json(out);
 });
-workforce.post('/time-off/:id/decide', requires('workforce:write'), async (req, res) => {
+workforce.post('/time-off/:id/decide', requiresAny('workforce:write', 'requests:approve'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   const b = parse(z.object({ status: z.enum(['APPROVED', 'REJECTED', 'CANCELLED']), reason: z.string().max(300).optional() }), req.body);
   if (b.status === 'REJECTED' && (b.reason ?? '').trim().length < 3) throw bad('Give a reason when rejecting a request');
   const out = await withTenant(p.tenantId, async (tx) => {
     const cur = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
     if (!cur) throw notFound('Time-off request');
-    await tx.exec('UPDATE time_off SET status = $2, decided_by = $3, decided_at = now(), reason = CASE WHEN $4 <> \'\' THEN $4 ELSE reason END WHERE tenant_id = :t AND id = $1', [id, b.status, p.name, b.reason ?? '']);
+    const level = await approverLevel(tx, p, cur.employeeId, 'workforce:write');      // a supervisor may decide their own team's requests; a manager anyone's
+    if (b.status === 'APPROVED') {   // approving must not create the double booking either
+      const clash = await tx.one<any>(`SELECT type, start_day::text AS s, end_day::text AS e FROM time_off WHERE tenant_id = :t AND employee_id = $1 AND id <> $2 AND status = 'APPROVED' AND end_day >= $3::date AND start_day <= $4::date LIMIT 1`, [cur.employeeId, id, cur.startDay, cur.endDay]);
+      if (clash) throw conflict(`${cur.employeeName} already has approved ${String(clash.type).toLowerCase()} time off from ${clash.s} to ${clash.e} that overlaps these dates.`);
+    }
+    await tx.exec('UPDATE time_off SET status = $2, decided_by = $3, decided_at = now(), reason = CASE WHEN $4 <> \'\' THEN $4 ELSE reason END, decided_level = $5 WHERE tenant_id = :t AND id = $1', [id, b.status, p.name, b.reason ?? '', level]);
     const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
-    await audit(tx, p, req, { action: b.status === 'APPROVED' ? 'APPROVE' : b.status === 'REJECTED' ? 'REJECT' : 'UPDATE', entityType: 'TIME_OFF', entityId: id, entityName: cur.employeeName, reason: b.reason, before: { status: cur.status }, after: { status: b.status } });
+    await audit(tx, p, req, { action: b.status === 'APPROVED' ? 'APPROVE' : b.status === 'REJECTED' ? 'REJECT' : 'UPDATE', entityType: 'TIME_OFF', diffSummary: level === 'SUPERVISOR' ? 'Decided by the team supervisor (first line)' : 'Decided by a manager', entityId: id, entityName: cur.employeeName, reason: b.reason, before: { status: cur.status }, after: { status: b.status } });
+    if (b.status !== 'CANCELLED') publish(p.tenantId, ['timeoff', 'decided'], { id, employeeId: cur.employeeId, employee: cur.employeeName, status: b.status, startDate: cur.startDay, endDate: cur.endDay });
     if (b.status !== 'CANCELLED') await notify(tx, await usersOf(tx, [cur.employeeId]), { kind: 'TIME_OFF', title: `Time off ${b.status === 'APPROVED' ? 'approved' : 'declined'}`, body: `${cur.startDay} to ${cur.endDay}${b.reason ? `: ${b.reason}` : ''}`, data: { screen: 'time-off', id } });
     await reconcileForEmployee(tx, p, req, cur.employeeId);   // approving takes the person off their rotation shifts; cancelling puts them back
     return toDto(t);

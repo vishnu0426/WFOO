@@ -65,9 +65,9 @@ export const RtaMappingPanel: React.FC = () => {
           {map.data?.map((m) => (
             <tr key={m.id}>
               <td className="p-3 font-semibold">{m.state}</td>
-              <td className="p-3">{m.reason || <span className="text-[#737373]">Any</span>}</td>
+              <td className="p-3">{m.reason || <span className="text-[#6B6B6B]">Any</span>}</td>
               <td className="p-3">{m.activityId ? m.activityName : <Pill>Not working</Pill>}</td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ id: m.id, state: m.state, reason: m.reason, activityId: m.activityId ?? '' }); }}>Edit</button><button aria-label="Remove mapping" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => del(m)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ id: m.id, state: m.state, reason: m.reason, activityId: m.activityId ?? '' }); }}>Edit</button><button aria-label="Remove mapping" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(m)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
             </tr>
           ))}
         </Table>

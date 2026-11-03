@@ -1,4 +1,4 @@
-# Enterprise WFM Platform
+# AgnoWFM
 
 Workforce management: demand forecasting, capacity planning, staged data ingestion, configuration, workforce (employees,
 teams, skills, availability, time off) and scheduling (shift templates, OR-Tools CP-SAT schedule generator, validation,
@@ -30,7 +30,7 @@ publish the forecast → Workforce (teams, skills, employees) and Scheduling ›
 
 ## AG Grid
 
-The adjustments grid uses AG Grid Enterprise. Set `VITE_AG_GRID_LICENSE` in `.env.local` to remove the evaluation watermark.
+Tables use AG Grid Community (MIT licence): no licence key, no watermark.
 
 ## Tests
 

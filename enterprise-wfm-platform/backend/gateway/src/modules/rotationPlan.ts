@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The arithmetic behind rotation patterns, kept apart from the routes so it can be tested on its own.
  *
  *  - compileWeekly: a weekly rotation (a list of weekly templates, each repeated for some weeks) is stored as the day cycle it unrolls to,
@@ -21,6 +21,21 @@ export function compileWeekly(steps: WeeklyStep[]): (string | null)[] {
   return out;
 }
 
+// ---------------------------------------------------------------- fixed-crew patterns: is every day covered?
+
+/** How many crews work each shift template on each day of the cycle, as a range: the check that a crew pattern leaves no day uncovered. */
+export function crewCoverage(sequence: (string | null)[], crews: { offsetDays: number }[]): { templateId: string; min: number; max: number; gapDays: number }[] {
+  const n = sequence.length, ids = [...new Set(sequence.filter((x): x is string => !!x))];
+  return ids.map((id) => {
+    let min = Infinity, max = 0, gaps = 0;
+    for (let d = 0; d < n; d++) {
+      const c = crews.filter((cr) => sequence[mod(d + cr.offsetDays, n)] === id).length;
+      min = Math.min(min, c); max = Math.max(max, c); if (c === 0) gaps++;
+    }
+    return { templateId: id, min: min === Infinity ? 0 : min, max, gapDays: gaps };
+  });
+}
+
 export interface TemplateLite { id: string; name: string; startSlot: number; lengthSlots: number; paidSlots: number; active: boolean }
 export interface Limits { minRestHours?: number | null; maxWeeklyHours?: number | null; maxConsecutiveDays?: number | null; maxDaysPerWeek?: number | null }
 export interface AnalysisInput {
@@ -34,7 +49,7 @@ export interface CrewSummary {
   longestRun: number; neverOff: boolean; shortestRestHours: number | null; weekendDaysPerWeek: number; weekendsFullyOff: number;
 }
 
-export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findings: Finding[]; cycleDays: number } {
+export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findings: Finding[]; cycleDays: number; coverage?: { templateId: string; name: string; min: number; max: number; gapDays: number }[] } {
   const n = a.cycleDays, findings: Finding[] = [];
   const missing = new Set<string>();
   const tplAt = (id: string | null) => (id ? a.templates.get(id) ?? null : null);
@@ -96,6 +111,11 @@ export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findin
     const hi = crews[wk.indexOf(Math.max(...wk))], lo = crews[wk.indexOf(Math.min(...wk))];
     findings.push({ level: 'INFO', text: `${hi.name} works more weekend days (${hi.weekendDaysPerWeek} a week) than ${lo.name} (${lo.weekendDaysPerWeek}).` });
   }
+  const coverage = crewCoverage(a.sequence, a.crews).map((c) => ({ ...c, name: a.templates.get(c.templateId)?.name ?? 'Shift' }));
+  if (a.crews.length > 1) for (const c of coverage) {
+    if (c.gapDays === 0) findings.push({ level: 'OK', text: `${c.name} is covered every day (${c.min === c.max ? c.min : `${c.min} to ${c.max}`} crew${c.max === 1 ? '' : 's'} a day).` });
+    else findings.push({ level: 'INFO', text: `On ${c.gapDays} of ${n} days of the cycle no crew works ${c.name}${c.max > 1 ? `, and on others ${c.max} do` : ''}.` });
+  }
   if (!findings.some((f) => f.level === 'WARN')) findings.push({ level: 'OK', text: 'No limit is broken by the pattern itself.' });
-  return { crews, findings, cycleDays: n };
+  return { crews, findings, cycleDays: n, coverage };
 }

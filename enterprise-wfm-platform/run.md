@@ -53,7 +53,7 @@ cd D:\WFOO\enterprise-wfm-platform ; npm install
 cd backend\gateway               ; npm install
 ```
 
-**AG Grid licence (optional).** Tables use AG Grid Enterprise. Without a key they work but show a trial watermark. To add one, create `D:\WFOO\enterprise-wfm-platform\.env` containing `VITE_AG_GRID_LICENSE=your-key`.
+**AG Grid.** Tables use AG Grid Community (MIT licence). No licence key is needed.
 
 ## 2. Start everything (each time)
 

@@ -45,7 +45,7 @@ export const TracePanel: React.FC<{ data: TraceResult | null; error?: string }> 
       <ol className="list-decimal pl-5 space-y-1.5 text-[13px] text-[#171717] leading-relaxed">{data.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
       {data.warn && <Banner kind="warn">Small team under real load: Erlang assumes many agents, so treat this number as a guide and sanity-check it.</Banner>}
       <div>
-        <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider mb-1.5">If volume is different</div>
+        <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider mb-1.5">If volume is different</div>
         <Table head={['Volume change', 'Contacts / 15 min', 'Agents on phones', 'On schedule']} right={[1, 2, 3]}>
           {data.sensitivity.map((s) => (
             <tr key={s.changePct} className={s.changePct === 0 ? 'bg-[#EAF5EF]/40 font-medium' : ''}>
@@ -73,17 +73,17 @@ export const TraceModal: React.FC<{ groupId: string; title: string; input: { vol
       <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white rounded-lg shadow-2xl border border-[#E5E5E0]" onClick={(e) => e.stopPropagation()}>
         <div className="p-4 border-b border-[#E5E5E0] flex items-center justify-between bg-[#FAFAF8] sticky top-0">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded bg-[#2F7D5A]/10 text-[#2F7D5A] flex items-center justify-center"><Calculator className="w-4 h-4" /></div>
+            <div className="w-8 h-8 rounded bg-[#2F7D5A]/10 text-[#2A7553] flex items-center justify-center"><Calculator className="w-4 h-4" /></div>
             <div>
               <h2 className="text-[16px] font-semibold text-[#171717]">Where does this number come from?</h2>
-              <p className="text-[12px] text-[#737373]">{title}</p>
+              <p className="text-[12px] text-[#6B6B6B]">{title}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded text-[#737373] hover:text-[#171717] hover:bg-[#E5E5E0]"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} className="p-1 rounded text-[#6B6B6B] hover:text-[#171717] hover:bg-[#E5E5E0]"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-5 space-y-3">
           <TracePanel data={data} error={error} />
-          <p className="text-[11px] text-[#737373]">Shown as a single {input.channel} queue with this interval’s volume and handle time. Groups with several channels pool their traffic, so their totals can differ slightly.</p>
+          <p className="text-[11px] text-[#6B6B6B]">Shown as a single {input.channel} queue with this interval’s volume and handle time. Groups with several channels pool their traffic, so their totals can differ slightly.</p>
         </div>
       </div>
     </div>

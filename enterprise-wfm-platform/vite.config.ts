@@ -17,6 +17,7 @@ export default defineConfig(() => {
       // The WFM gateway (Node) serves the REST API and the live WebSocket; the Python engine sits behind it.
       proxy: {
         '/api': api,
+        '/scim': api,              // user provisioning from an identity provider
         '/health': api,
         '/ws': {target: api.replace('http', 'ws'), ws: true},
       },

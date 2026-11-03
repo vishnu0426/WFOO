@@ -10,6 +10,7 @@ import { Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { addDays, api, CHANNEL_LABEL, DOW, dayYear, dec, fmtDate, int, MODEL_LABEL, pct } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi, useVersionFull } from "./hooks";
+import { HistoryHealth } from "./HistoryHealth";
 import { ChartTooltip } from "./ChartTooltip";
 import { Banner, Btn, Busy, Card, Empty, Field as StackField, Input as PlainInput, Pill, Select as PlainSelect, Table } from "./ui";
 import { OutlineButton, PageHeader, PrimaryButton, Section, StatusPill } from "../wfm/app-shell";
@@ -147,8 +148,8 @@ export function BuilderSection() {
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="border-r">
           <Section title="Scope">
-            <Field label="Forecast name" hint="Blank = numbered automatically, e.g. Short-term v3">
-              <input className={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="Short-term v…" />
+            <Field label="Forecast name" hint="Your name is used exactly as typed. Blank = numbered automatically">
+              <input className={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="e.g. April campaign plan" />
             </Field>
             <Field label="WFM group" hint="Determines queues and service targets">
               <select className={input} value={group.id} onChange={(e) => setGroupId(e.target.value)} aria-label="WFM group">
@@ -323,6 +324,7 @@ export function BuilderSection() {
       </div>
 
       <div className="space-y-6 p-6">
+        <HistoryHealth groupId={group.id} />
         <EventsCard groupId={group.id} canEdit={canCreate} />
       </div>
     </div>
@@ -350,14 +352,14 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
               <td className="p-3 font-medium">{e.name}</td><td className="p-3 capitalize">{e.kind}</td>
               <td className="p-3">{dayYear(e.startDay)}</td><td className="p-3">{dayYear(e.endDay)}</td>
               <td className="p-3 text-right tabular-nums">{e.upliftPct > 0 ? '+' : ''}{e.upliftPct}%</td>
-              <td className="p-3 text-[12px] text-[#737373]">{e.leadDays || e.lagDays ? `${e.leadDays}d in, ${e.lagDays}d out` : '—'}</td>
+              <td className="p-3 text-[12px] text-[#6B6B6B]">{e.leadDays || e.lagDays ? `${e.leadDays}d in, ${e.lagDays}d out` : '—'}</td>
               <td className="p-3">{e.queueName ?? e.groupName ?? 'All groups'}</td>
-              <td className="p-3 text-right">{canEdit && <button aria-label="Delete event" className="text-[#737373] hover:text-[#C84A4A]" onClick={async () => { await api(`/forecast/events/${e.id}`, { method: 'DELETE' }); setTick((t) => t + 1); }}><Trash2 className="w-4 h-4" /></button>}</td>
+              <td className="p-3 text-right">{canEdit && <button aria-label="Delete event" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={async () => { await api(`/forecast/events/${e.id}`, { method: 'DELETE' }); setTick((t) => t + 1); }}><Trash2 className="w-4 h-4" /></button>}</td>
             </tr>
           ))}
         </Table>
       )}
-      {events.data?.length === 0 && <p className="text-[12px] text-[#737373]">No events recorded yet.</p>}
+      {events.data?.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No events recorded yet.</p>}
       {canEdit && (
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
           <div className="col-span-2"><StackField label="Name"><PlainInput value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Spring sale" /></StackField></div>
@@ -367,7 +369,7 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
           <StackField label="Change %"><PlainInput type="number" value={f.upliftPct} onChange={(e) => setF({ ...f, upliftPct: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp in (days)"><PlainInput type="number" min={0} max={60} value={f.leadDays} onChange={(e) => setF({ ...f, leadDays: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp out (days)"><PlainInput type="number" min={0} max={60} value={f.lagDays} onChange={(e) => setF({ ...f, lagDays: Number(e.target.value) })} /></StackField>
-          <div className="col-span-2 md:col-span-6 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Add event</Btn>{error && <span className="text-[12px] text-[#C84A4A]">{error}</span>}</div>
+          <div className="col-span-2 md:col-span-6 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Add event</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
     </Card>

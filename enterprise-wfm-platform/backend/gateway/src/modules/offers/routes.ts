@@ -65,7 +65,7 @@ const kindWord = (k: string) => (k === 'VTO' ? 'time off' : 'overtime');
 async function liveForDay(tenantId: string, groupId: string, day: string, cache?: Map<string, Promise<{ v: any; live: Live }>>) {
   const vs = await withTenant(tenantId, (tx) => tx.q<any>(
     `SELECT v.*, v.period_start::text AS period_start, v.period_end::text AS period_end, f.name AS forecast_name FROM schedule_versions v LEFT JOIN forecast_versions f ON f.id = v.forecast_version_id
-     WHERE v.tenant_id = :t AND v.wfm_group_id = $1 AND v.status = 'PUBLISHED' AND v.period_start <= $2::date AND v.period_end >= $2::date ORDER BY v.seq DESC`, [groupId, day]));
+     WHERE v.tenant_id = :t AND v.wfm_group_id = $1 AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR $2::date <= v.publish_through) AND v.period_start <= $2::date AND v.period_end >= $2::date ORDER BY v.seq DESC`, [groupId, day]));
   if (!vs.length) throw bad(`There is no published schedule for this group on ${day}. Publish one first: offers change the published schedule.`);
   const key = vs.map((x) => x.id).join('|');
   const hit = cache?.get(key);
@@ -300,9 +300,9 @@ offersAdmin.post('/:id/cancel', requires('schedule:edit'), async (req, res) => {
 
 // ---------------------------------------------------------------- the person's side
 
-const mineDto = (o: any) => ({ ...offerDto({ ...o, groupName: '' }), spotsLeft: o.spots - o.filled, myStatus: o.myStatus, warnings: o.warnings ?? [], respondedAt: o.respondedAt });
-const MINE = `SELECT o.*, o.day::text AS day, i.status AS my_status, i.warnings, i.responded_at, 0 AS invited, 0 AS queued, 0 AS declined, 0 AS total
-  FROM offer_invites i JOIN offers o ON o.id = i.offer_id WHERE i.tenant_id = :t AND i.employee_id = $1`;
+const mineDto = (o: any) => ({ ...offerDto(o), spotsLeft: o.spots - o.filled, myStatus: o.myStatus, warnings: o.warnings ?? [], respondedAt: o.respondedAt });
+const MINE = `SELECT o.*, o.day::text AS day, g.name AS group_name, i.status AS my_status, i.warnings, i.responded_at, 0 AS invited, 0 AS queued, 0 AS declined, 0 AS total
+  FROM offer_invites i JOIN offers o ON o.id = i.offer_id LEFT JOIN wfm_groups g ON g.id = o.wfm_group_id WHERE i.tenant_id = :t AND i.employee_id = $1`;
 
 offersMe.get('/', requires('self:use'), async (req, res) => {
   const p = me(req);

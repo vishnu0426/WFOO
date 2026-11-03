@@ -232,6 +232,34 @@ export function analyseShortage(a: { ctx: Ctx; days: string[]; shifts: QShift[];
   const { whyNot, pool } = buildWhyNot(ctx, shifts, helpers);
   const shortTotal = blocks.reduce((s, b) => s + b.shortSlots, 0);
 
+  // A shift template that would cover a gap nobody can cover today. Several days with the same window share one proposal. The effect is an estimate:
+  // people who are blocked today only because no template reaches the window and who could take it (every other rule still checked) once one does.
+  const requiredTotal = required.reduce((s, v) => s + v, 0);
+  const proposals = new Map<string, { start: number; len: number; workDays: Set<number>; days: { day: string; eligible: number }[]; gainSlots: number }>();
+  const proposalOf = new Map<Block, string>();
+  for (const b of blocks.slice(0, a.limit ?? 40)) {
+    const i = days.indexOf(b.day); let at = b.startSlot, worst = 0;
+    for (let s = b.startSlot; s < b.endSlot; s++) { const sh = required[i * SPD + s] - sched[i * SPD + s]; if (sh > worst) { worst = sh; at = s; } }
+    const noTpl = pool.filter((e) => whyNot(e, b.day, at) === 'NO_TEMPLATE');
+    if (!noTpl.length) continue;
+    const len = Math.min(48, Math.max(16, b.endSlot - b.startSlot)), start = b.startSlot, dow = helpers.dowOf(b.day);
+    const synth = { id: 'proposed', status: 'ACTIVE', workDays: [dow], earliestStart: start, latestStart: start, startStep: 2, lengthSlots: len, minLengthSlots: null, lengthStep: null,
+      mealSlots: len >= 20 ? 2 : 0, breakCount: Math.min(2, Math.floor(len / 16)), breakSlots: 1, flexSlots: 0, groupIds: null, employmentTypes: null, skillIds: null };
+    const after = buildWhyNot({ ...ctx, templates: [...ctx.templates, synth] }, shifts, helpers).whyNot;
+    const eligible = noTpl.filter((e) => after(e, b.day, at) === 'COULD_WORK').length;
+    if (!eligible) continue;
+    let gain = 0; for (let s = b.startSlot; s < b.endSlot; s++) gain += Math.min(Math.max(0, required[i * SPD + s] - sched[i * SPD + s]), eligible);
+    const key = `${start}-${len}`, p = proposals.get(key) ?? { start, len, workDays: new Set<number>(), days: [], gainSlots: 0 };
+    p.workDays.add(dow); p.days.push({ day: b.day, eligible }); p.gainSlots += gain; proposals.set(key, p); proposalOf.set(b, key);
+  }
+  const proposalDto = (key: string) => {
+    const p = proposals.get(key)!, len = p.len, meal = len >= 20 ? 30 : 0;
+    return {
+      name: `Cover ${hhmm(p.start)}-${hhmm(p.start + len)}`, earliestStart: hhmm(p.start), latestStart: hhmm(p.start), durationHours: len / 4, mealMinutes: meal, breakCount: Math.min(2, Math.floor(len / 16)), breakMinutes: 15,
+      workDays: [...p.workDays].sort(), days: p.days, gainPeopleHours: r1(p.gainSlots / 4),
+      coverageBefore: a.coveragePercent, coverageAfter: requiredTotal ? Math.min(100, r1(a.coveragePercent + (p.gainSlots / requiredTotal) * 100)) : a.coveragePercent,
+    };
+  };
   const overall = new Map<CauseKey, number>();
   const detailed = blocks.slice(0, a.limit ?? 40).map((b) => {
     // the slot with the biggest gap stands for the block
@@ -243,10 +271,12 @@ export function analyseShortage(a: { ctx: Ctx; days: string[]; shifts: QShift[];
       .map(([key, people]) => ({ key, people, text: CAUSE_TEXT[key] }));
     for (const c of causes) overall.set(c.key, (overall.get(c.key) ?? 0) + c.people * b.shortSlots);
     const couldWork = counts.get('COULD_WORK') ?? 0;
-    const actions: { type: string; label: string; detail: string }[] = [];
+    const actions: { type: string; label: string; detail: string; proposal?: ReturnType<typeof proposalDto> }[] = [];
     if (couldWork > 0) actions.push({ type: 'ASSIGN', label: 'Add shifts by hand', detail: `${couldWork} people could cover this and are not scheduled for it. Open the day on the timeline and assign them.` });
     actions.push({ type: 'OVERTIME', label: 'Offer overtime', detail: `Offer ${b.peakShort} extra ${b.peakShort === 1 ? 'person' : 'people'} for ${hhmm(b.startSlot)}-${hhmm(b.endSlot)} on ${b.day}.` });
-    if ((counts.get('NOT_ALLOWED') ?? 0) + (counts.get('NO_TEMPLATE') ?? 0) > 0) actions.push({ type: 'RELAX', label: 'Relax a rule', detail: (counts.get('NO_TEMPLATE') ?? 0) > pool.length / 2 ? 'Add a shift template that covers this time.' : 'Allow overnight or weekend work for more people.' });
+    const pk = proposalOf.get(b), mine = pk ? proposals.get(pk)!.days.find((d) => d.day === b.day) : undefined;
+    if (pk && mine) { const pr = proposalDto(pk); actions.push({ type: 'ADD_TEMPLATE', label: 'Add a shift template', detail: `"${pr.name}": up to ${mine.eligible} ${mine.eligible === 1 ? 'person' : 'people'} could take it on this day.`, proposal: pr }); }
+    if ((counts.get('NOT_ALLOWED') ?? 0) > 0 || (!pk && (counts.get('NO_TEMPLATE') ?? 0) > 0)) actions.push({ type: 'RELAX', label: 'Relax a rule', detail: (counts.get('NO_TEMPLATE') ?? 0) > pool.length / 2 ? 'Add a shift template that covers this time.' : 'Allow overnight or weekend work for more people.' });
     if (b.peakShort >= 3) actions.push({ type: 'TEMP', label: 'Add temporary staff', detail: `This gap needs about ${b.peakShort} more ${b.peakShort === 1 ? 'person' : 'people'} at its worst.` });
     return { day: b.day, from: hhmm(b.startSlot), to: hhmm(b.endSlot), peakShort: b.peakShort, shortPeopleHours: r1(b.shortSlots / 4), requiredPeak: b.requiredPeak, scheduledMin: b.scheduledMin, causes, actions };
   });
@@ -326,7 +356,7 @@ export interface ReportException { level: 'WARNING' | 'INFO'; code: string; subj
 export function buildReport(a: {
   pool: any[]; requested: { employeeIds?: string[]; teamIds?: string[] } | null; poolSize: number; shifts: QShift[]; optionsByPerson: Map<string, number>;
   blockedByPerson: Map<string, Map<string, number>>; uncoveredDays: string[]; projectedDays: string[]; coveragePercent: number; targetCoverage: number;
-  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; skillNote?: string | null; historyNote?: string | null; repeatNote?: string | null; thinNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null;
+  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; representativeNote?: string | null; skillNote?: string | null; historyNote?: string | null; repeatNote?: string | null; partNote?: string | null; thinNote?: string | null; rosterOnlyNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null; hoursNote?: { level: 'WARNING' | 'INFO'; message: string } | null;
 }) {
   const scheduled = new Map<string, number>();
   for (const s of a.shifts) scheduled.set(s.employeeId, (scheduled.get(s.employeeId) ?? 0) + 1);
@@ -352,12 +382,16 @@ export function buildReport(a: {
   if (a.projectedDays.length) exceptions.push({ level: 'INFO', code: 'PROJECTED', subject: `${a.projectedDays.length} day${a.projectedDays.length === 1 ? '' : 's'} use the long-term forecast`, message: 'These days are projected from long-term totals and are less certain.' });
   if (a.coveragePercent < a.targetCoverage) exceptions.push({ level: 'WARNING', code: 'BELOW_TARGET', subject: `Coverage ${a.coveragePercent}% is below the ${a.targetCoverage}% target`, message: 'See the shortage analysis for where and why.' });
   if (a.violations) exceptions.push({ level: 'WARNING', code: 'VIOLATIONS', subject: `${a.violations} rule violation${a.violations === 1 ? '' : 's'}`, message: 'Fix them on the timeline before publishing.' });
-  if (a.solverStatus === 'FEASIBLE') exceptions.push({ level: 'INFO', code: 'NOT_PROVEN_BEST', subject: 'A good schedule, not proven best', message: 'The solver ran out of time. More solver time may improve it.' });
+  if (a.solverStatus === 'FEASIBLE') exceptions.push({ level: 'INFO', code: 'NOT_PROVEN_BEST', subject: 'A good schedule, not proven best', message: 'The solver stopped at a good answer without proving it is the very best: it was proven within a small share of the best possible, or it ran out of time. More solver time may improve it.' });
   if (a.consistencyNote) exceptions.push({ level: 'INFO', code: 'CONSISTENCY', subject: 'Same start and end times', message: a.consistencyNote });
   if (a.historyNote) exceptions.push({ level: 'INFO', code: 'HISTORY', subject: 'Carried over from the previous schedule', message: a.historyNote });
+  if (a.rosterOnlyNote) exceptions.push({ level: 'WARNING', code: 'STARTING_ROSTER', subject: 'Part of this schedule is the starting roster only', message: a.rosterOnlyNote });
+  if (a.representativeNote) exceptions.push({ level: 'INFO', code: 'REPRESENTATIVES', subject: 'A sample was solved and its rosters repeated', message: a.representativeNote });
+  if (a.partNote) exceptions.push({ level: 'INFO', code: 'SPLIT', subject: 'The group was solved in parts', message: a.partNote });
   if (a.thinNote) exceptions.push({ level: 'INFO', code: 'THINNED', subject: 'Some shift choices were left out', message: a.thinNote });
   if (a.repeatNote) exceptions.push({ level: 'INFO', code: 'REPEAT', subject: 'The week is assumed to repeat', message: a.repeatNote });
   if (a.crewNote) exceptions.push({ level: a.crewNote.level, code: 'CREW_SIZE', subject: 'More paid hours than the forecast needs', message: a.crewNote.message });
+  if (a.hoursNote) exceptions.push({ level: a.hoursNote.level, code: 'UNDER_CONTRACT', subject: 'Full-time people below their contract hours', message: a.hoursNote.message });
   if (a.contractNote) exceptions.push({ level: a.contractNote.level, code: 'CONTRACT_FIT', subject: 'Contract hours cannot be met exactly', message: a.contractNote.message });
   if (a.skillNote) exceptions.push({ level: 'INFO', code: 'SKILLS', subject: 'Coverage judged per skill', message: a.skillNote });
   const warnings = exceptions.filter((e) => e.level === 'WARNING').length;
@@ -371,6 +405,26 @@ export function buildReport(a: {
     // everyone who got no shift, with the reason, for the downloadable report
     unscheduled: unscheduled.slice(0, 2000).map((e) => ({ id: e.id as string, employeeNumber: (e.employeeNumber ?? '') as string, name: nameOf(e), reason: reasonFor(e) })),
   };
+}
+
+/**
+ * Full-time people scheduled for clearly fewer paid hours a week than their contract. Says how many, by how much and the likely reason, so it is never silent.
+ * `paidSlotsByPerson` is the paid 15-minute slots each person was given over the whole schedule.
+ */
+export function underContractNote(a: { people: { id: string; employmentType: string; weeklyContractHours: number }[]; paidSlotsByPerson: Map<string, number>; weeks: number; crewIsLarge: boolean }): { level: 'WARNING' | 'INFO'; message: string } | null {
+  const ft = a.people.filter((e) => e.employmentType === 'FULL_TIME' && Number(e.weeklyContractHours) > 0);
+  if (!ft.length || a.weeks <= 0) return null;
+  let below = 0, got = 0, owed = 0;
+  for (const e of ft) {
+    const h = (a.paidSlotsByPerson.get(e.id) ?? 0) / 4 / a.weeks, c = Number(e.weeklyContractHours);
+    got += h; owed += c;
+    if (h < c - 2) below++;
+  }
+  const share = below / ft.length;
+  if (below === 0 || share < 0.05) return null;
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const why = a.crewIsLarge ? 'The crew is larger than the forecast needs, so there is not enough work to give everyone their full contract.' : 'The shift templates, availability or limits on days and hours in the rules do not leave room for the full contract, or the solver ran out of time. Check the report and try more solver time.';
+  return { level: share >= 0.25 ? 'WARNING' : 'INFO', message: `${below.toLocaleString('en-US')} of ${ft.length.toLocaleString('en-US')} full-time people (${Math.round(share * 100)}%) are scheduled for more than 2 hours a week below their contract; on average ${r1(got / ft.length)} hours against ${r1(owed / ft.length)}. ${why}` };
 }
 
 /**

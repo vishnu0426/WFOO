@@ -13,7 +13,7 @@ import { withTenant } from './db.ts';
 export const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean }
+export interface Principal { userId: string; tenantId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean; /** an API key, not a person: it holds exactly these permissions and nothing its role would give */ scopes?: string[]; apiKey?: boolean }
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -26,7 +26,7 @@ const ALL = [
   'config:read', 'config:write', 'data:read', 'data:import', 'data:rollback',
   'forecast:read', 'forecast:create', 'forecast:adjust', 'forecast:submit', 'forecast:approve', 'forecast:publish', 'forecast:delete',
   'workforce:read', 'workforce:write', 'schedule:read', 'schedule:generate', 'schedule:edit', 'schedule:approve', 'schedule:publish',
-  'intraday:read', 'intraday:act', 'audit:read', 'users:read', 'users:write', 'self:use',
+  'intraday:read', 'intraday:act', 'audit:read', 'users:read', 'users:write', 'self:use', 'requests:approve',
 ] as const;
 export type Permission = (typeof ALL)[number];
 export const ALL_PERMISSIONS: readonly string[] = ALL;
@@ -39,7 +39,7 @@ export const DEFAULT_PERMISSIONS: Record<Role, readonly string[]> = {
   WFM_MANAGER: ALL.filter((p) => p !== 'users:write'),
   FORECAST_PLANNER: ['config:read', 'data:read', 'data:import', 'forecast:read', 'forecast:create', 'forecast:adjust', 'forecast:submit', 'workforce:read', 'schedule:read', 'intraday:read', 'self:use'],
   SCHEDULER: ['config:read', 'data:read', 'forecast:read', 'workforce:read', 'workforce:write', 'schedule:read', 'schedule:generate', 'schedule:edit', 'schedule:publish', 'intraday:read', 'self:use'],
-  SUPERVISOR_RTA: ['config:read', 'data:read', 'forecast:read', 'workforce:read', 'schedule:read', 'intraday:read', 'intraday:act', 'self:use'],
+  SUPERVISOR_RTA: ['config:read', 'data:read', 'forecast:read', 'workforce:read', 'schedule:read', 'intraday:read', 'intraday:act', 'self:use', 'requests:approve'],
   ANALYST: [...new Set([...readOnly, 'audit:read', 'self:use'])],
   AGENT: ['self:use'],
 };
@@ -52,9 +52,11 @@ const ALLOWED_WHILE_TEMPORARY = /^\/api\/v1\/auth\/(me|logout|change-password)(\
 
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   try {
-    const raw = (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || (typeof req.query.token === 'string' ? req.query.token : '');
+    // header only: a token in the URL ends up in logs, browser history and Referer headers (the WebSocket upgrade is checked separately in ws.ts)
+    const raw = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     if (!raw) throw new HttpError(401, 'UNAUTHENTICATED', 'Sign in required');
-    const p = await principalFromToken(raw);
+    // an API key (wfm_<id>_<secret>) is another system reading from the platform; anything else is a signed-in person's token
+    const p = raw.startsWith('wfm_') ? await (await import('./modules/developer.ts')).principalFromApiKey(raw) : await principalFromToken(raw);
     req.principal = p;
     // a temporary password only opens the way to choosing a new one
     if (p.mustChangePassword && !ALLOWED_WHILE_TEMPORARY.test(req.originalUrl)) throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Choose a new password before you continue.');
@@ -65,7 +67,17 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
 export async function principalFromToken(token: string): Promise<Principal> {
   const d = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
   if (await redis.get(`wfm:denied:${d.jti}`).catch(() => null)) throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
-  return { userId: String(d.sub), tenantId: d.tid, role: d.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: d.mcp === true };
+  // a token outlives the account it was issued to: look at the account itself (a few seconds of cache) so disabling someone, changing
+  // their role or making them choose a new password takes effect on the session they already have
+  const st = await cached<{ status: string; role: Role; mcp: boolean } | null>(key(String(d.tid), 'userstate', String(d.sub)), 5, () =>
+    withTenant(String(d.tid), (tx) => tx.one<any>('SELECT status, role, must_change_password AS mcp FROM users WHERE tenant_id = :t AND id = $1', [String(d.sub)])));
+  if (!st || st.status !== 'ACTIVE') throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
+  return { userId: String(d.sub), tenantId: d.tid, role: st.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: st.mcp === true };
+}
+
+/** Forget the cached account state so a change (disable, role, password reset) applies to open sessions at once. */
+export async function dropUserState(tenantId: string, userId: string): Promise<void> {
+  await redis.del(key(tenantId, 'userstate', userId)).catch(() => {});
 }
 
 export async function revokeToken(p: Principal): Promise<void> {
@@ -83,7 +95,7 @@ export const requires = (...perms: Permission[]) => async (req: Request, _res: R
   try {
     const p = req.principal;
     if (!p) throw new HttpError(401, 'UNAUTHENTICATED', 'Sign in required');
-    const have = await permissionsFor(p.tenantId, p.role);
+    const have = p.scopes ? new Set(p.scopes) : await permissionsFor(p.tenantId, p.role);
     const missing = perms.filter((x) => !have.has(x));
     if (missing.length) throw new HttpError(403, 'FORBIDDEN', `Your role (${p.role}) is not allowed to do this (needs ${missing.join(', ')}).`, { missing });
     next();
@@ -95,7 +107,7 @@ export const requiresAny = (...perms: Permission[]) => async (req: Request, _res
   try {
     const p = req.principal;
     if (!p) throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
-    const have = await permissionsFor(p.tenantId, p.role);
+    const have = p.scopes ? new Set(p.scopes) : await permissionsFor(p.tenantId, p.role);
     if (!perms.some((x) => have.has(x))) throw new HttpError(403, "FORBIDDEN", `Your role (${p.role}) is not allowed to do this (needs one of ${perms.join(", ")}).`, { anyOf: perms });
     next();
   } catch (e) { next(e); }

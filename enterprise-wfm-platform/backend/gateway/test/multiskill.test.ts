@@ -53,7 +53,7 @@ describe('multi-skill and multi-site', () => {
     assert.equal((await call(admin, 'POST', '/workforce/employees/import', { csv: lines.join('\n'), dryRun: false })).json.committed, true);
     const emps = (await call(admin, 'GET', '/workforce/employees?groupId=' + ctx.A.id)).json.filter((e: any) => e.primaryGroupId === ctx.A.id);
     ctx.shared = emps.slice(0, 8);                        // eight of A's people can also work for B
-    for (const e of ctx.shared) assert.equal((await call(admin, 'PUT', `/workforce/employees/${e.id}`, { eligibleGroupIds: [ctx.A.id, ctx.B.id] })).status, 200);
+    for (const e of ctx.shared) assert.equal((await call(admin, 'PUT', `/workforce/employees/${e.id}`, { reason: 'Test change', eligibleGroupIds: [ctx.A.id, ctx.B.id] })).status, 200);
   });
 
   it('never books the same person for two groups at once', async () => {
@@ -131,7 +131,7 @@ describe('multi-skill and multi-site', () => {
     assert.ok(roll.json.total.requiredHours >= ga.days.reduce((t: number, d: any) => t + d.requiredHours, 0));
     // the same local shift pattern lands on different UTC hours in different zones: the two sites' first busy hour differs
     const first = (s: any) => s.series.find((h: any) => h.required > 1)?.hour;
-    const [cs, ls] = ['Chennai', 'London'].map((n) => roll.json.sites.find((s: any) => s.siteName.startsWith(n)));
+    const [cs, ls] = ['Chennai', 'London'].map((n) => roll.json.sites.find((s: any) => s.siteName === `${n} ${RUN}`))       // this run's own sites: other test files leave sites with the same first word;
     assert.ok(cs.series.length > 0 && ls.series.length > 0);
     assert.ok(first(cs) && first(ls));
     assert.equal((await call(admin, 'GET', `/scheduling/rollup?from=${day}&to=${day}&day=2000-01-01`)).status, 200);

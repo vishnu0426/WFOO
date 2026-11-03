@@ -38,6 +38,12 @@ export const PRESETS: Preset[] = [
     crews: [{ name: 'Crew A', offsetDays: 0 }, { name: 'Crew B', offsetDays: 7 }],
   },
   {
+    id: '223-dn', kind: 'DAY_CYCLE', label: '2-2-3 Pitman, days then nights', summary: 'Two weeks of 2-2-3 on days, then two weeks of 2-2-3 on nights: 28-day cycle, four crews, one crew on each shift every day of the year. 42 hours a week on 12-hour shifts.',
+    shape: ['D', 'D', off, off, 'D', 'D', 'D', off, off, 'D', 'D', off, off, off, 'N', 'N', off, off, 'N', 'N', 'N', off, off, 'N', 'N', off, off, off],
+    letters: [{ letter: 'D', label: 'Day shift' }, { letter: 'N', label: 'Night shift' }],
+    crews: [{ name: 'Crew A', offsetDays: 0 }, { name: 'Crew B', offsetDays: 7 }, { name: 'Crew C', offsetDays: 14 }, { name: 'Crew D', offsetDays: 21 }],
+  },
+  {
     id: 'dupont', kind: 'DAY_CYCLE', label: 'DuPont', summary: 'Four nights, three off, three days, one off, three nights, three off, four days, then seven days off: 28-day cycle, four crews.',
     shape: ['N', 'N', 'N', 'N', off, off, off, 'D', 'D', 'D', off, 'N', 'N', 'N', off, off, off, 'D', 'D', 'D', 'D', off, off, off, off, off, off, off],
     letters: [{ letter: 'D', label: 'Day shift' }, { letter: 'N', label: 'Night shift' }],

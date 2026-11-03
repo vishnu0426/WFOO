@@ -3,10 +3,13 @@
  * (which tracks live ACD activity, not physical presence). Compared against the published schedule and rolled into
  * a payroll export -- regular, overtime hours per person per day.
  */
+import { PersonPicker } from '../common/PersonPicker';
 import React, { useRef, useState } from 'react';
 import { ColDef } from 'ag-grid-community';
 import { Download, Trash2, Upload } from 'lucide-react';
 import { AttendanceDay, AttendanceSummary, Employee, api, download, dayYear, dec, ImportResult, Punch } from '../../services/api';
+import { weekFloor } from '../../services/api';
+import { usePayWeek } from '../forecasting/hooks';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
@@ -14,19 +17,20 @@ import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select } from '../f
 
 const STATUS_TONE = { MATCHED: 'good', MISSED: 'bad', UNSCHEDULED: 'warn', OPEN: 'neutral' } as const;
 const STATUS_LABEL: Record<string, string> = { MATCHED: 'Matched', MISSED: 'Missed punch', UNSCHEDULED: 'Not scheduled', OPEN: 'Still clocked in' };
-const monday = (d: Date) => { const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
 const plus = (s: string, n: number) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 const TEMPLATE_CSV = 'employee_number,day,clock_in,clock_out\nE100,2026-01-05,08:58,17:03\nE100,2026-01-06,09:02,17:00\n';
 
 export const AttendancePanel: React.FC = () => {
-  const { can, setNotice } = useForecast();
+  const { can, setNotice, group } = useForecast();
   const canWrite = can('workforce:write');
-  const [from, setFrom] = useState(monday(new Date()));
+  const weekStart = usePayWeek(group?.id);                 // the week is the group's pay week, not always Monday to Sunday
+  const [picked, setPicked] = useState<string | null>(null);
+  const from = weekFloor(picked ?? new Date(), weekStart);
   const to = plus(from, 6);
   const [tick, setTick] = useState(0);
-  const sum = useApi<AttendanceSummary>(`/attendance/summary?from=${from}&to=${to}`, [tick]);
-  const emps = useApi<Employee[]>('/workforce/employees?status=ACTIVE');
+  // the active group's people, not every person-day of the whole company (24 MB at 50,000 people)
+  const sum = useApi<AttendanceSummary>(`/attendance/summary?from=${from}&to=${to}${group ? `&groupId=${group.id}` : ''}`, [tick, group?.id]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [csv, setCsv] = useState('');
@@ -74,7 +78,7 @@ export const AttendancePanel: React.FC = () => {
         {p.data.punches.map((x: any, i: number) => (
           <span key={i} className="font-mono bg-[#FAFAF8] border border-[#E5E5E0] rounded px-1.5 py-0.5 flex items-center gap-1">
             {x.clockIn.slice(11, 16)}–{x.clockOut ? x.clockOut.slice(11, 16) : 'open'}
-            {canWrite && <button aria-label="Remove punch" onClick={() => removePunch(x, p.data.employeeId, p.data.day)} className="text-[#737373] hover:text-[#C84A4A]"><Trash2 className="w-3 h-3" /></button>}
+            {canWrite && <button aria-label="Remove punch" onClick={() => removePunch(x, p.data.employeeId, p.data.day)} className="text-[#6B6B6B] hover:text-[#BC3F3F]"><Trash2 className="w-3 h-3" /></button>}
           </span>
         ))}
       </span>) },
@@ -84,7 +88,7 @@ export const AttendancePanel: React.FC = () => {
     <div className="space-y-6">
       <Card title="Time & attendance" sub="Punches compared against the published schedule. Independent of RTA state, which tracks live ACD activity, not physical presence."
         actions={<div className="flex flex-wrap items-center gap-2">
-          <Field label="Week"><Input type="date" value={from} onChange={(e) => e.target.value && setFrom(monday(new Date(e.target.value + 'T00:00:00')))} /></Field>
+          <Field label="Week"><Input type="date" value={from} onChange={(e) => e.target.value && setPicked(e.target.value)} /></Field>
           {canWrite && <>
             <input ref={file} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) check(f); }} />
             <Btn onClick={() => download('/attendance/template.csv', 'attendance-template.csv').catch((e) => setError(e.message))}><Download className="w-3.5 h-3.5" />CSV template</Btn>
@@ -99,14 +103,14 @@ export const AttendancePanel: React.FC = () => {
           <div className="border border-[#E5E5E0] rounded-lg p-4 bg-[#FAFAF8] space-y-3">
             <div className="flex flex-wrap items-center gap-4 text-[13px]">
               <b>Check before importing</b>
-              <span className="text-[#2F7D5A] font-semibold">{preview.newPunches} new</span>
-              <span className="text-[#737373]">{preview.alreadyImported} already imported</span>
-              <span className={preview.errorCount ? 'text-[#C84A4A] font-semibold' : 'text-[#737373]'}>{preview.errorCount} problems</span>
+              <span className="text-[#2A7553] font-semibold">{preview.newPunches} new</span>
+              <span className="text-[#6B6B6B]">{preview.alreadyImported} already imported</span>
+              <span className={preview.errorCount ? 'text-[#BC3F3F] font-semibold' : 'text-[#6B6B6B]'}>{preview.errorCount} problems</span>
             </div>
             {preview.errors.length > 0 && (
-              <div className="text-[12px] space-y-1">{preview.errors.slice(0, 15).map((e, i) => <div key={i}><span className="font-mono text-[#737373]">line {e.line}:</span> {e.message}</div>)}</div>
+              <div className="text-[12px] space-y-1">{preview.errors.slice(0, 15).map((e, i) => <div key={i}><span className="font-mono text-[#6B6B6B]">line {e.line}:</span> {e.message}</div>)}</div>
             )}
-            <p className="text-[11px] text-[#737373]">Columns: employee_number, day, clock_in (required); clock_out. A clock-out earlier than clock-in is read as the next day (an overnight shift).</p>
+            <p className="text-[11px] text-[#6B6B6B]">Columns: employee_number, day, clock_in (required); clock_out. A clock-out earlier than clock-in is read as the next day (an overnight shift).</p>
             <div className="flex gap-2"><Btn variant="primary" disabled={busy || !preview.newPunches} onClick={commit}>Import {preview.newPunches} punch{preview.newPunches === 1 ? '' : 'es'}</Btn><Btn onClick={() => setPreview(null)}>Cancel</Btn></div>
           </div>
         )}
@@ -122,7 +126,7 @@ export const AttendancePanel: React.FC = () => {
         <Card title="Weekly hours" sub="Overtime is actual hours worked beyond the person's weekly contract hours.">
           <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
             <table className="w-full text-[13px]">
-              <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+              <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
                 <tr><th className="p-3 text-left">Person</th><th className="p-3 text-right">Scheduled</th><th className="p-3 text-right">Actual</th><th className="p-3 text-right">Overtime</th></tr>
               </thead>
               <tbody className="divide-y divide-[#E5E5E0]">
@@ -131,7 +135,7 @@ export const AttendancePanel: React.FC = () => {
                     <td className="p-3 font-semibold">{w.name}</td>
                     <td className="p-3 text-right font-mono">{dec(w.scheduledHours, 1)}</td>
                     <td className="p-3 text-right font-mono">{dec(w.actualHours, 1)}</td>
-                    <td className="p-3 text-right font-mono">{w.overtimeHours > 0 ? <span className="text-[#B7791F] font-semibold">{dec(w.overtimeHours, 1)}</span> : '–'}</td>
+                    <td className="p-3 text-right font-mono">{w.overtimeHours > 0 ? <span className="text-[#8F6200] font-semibold">{dec(w.overtimeHours, 1)}</span> : '–'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -144,7 +148,7 @@ export const AttendancePanel: React.FC = () => {
         <Card title="Add a punch by hand" sub="For when someone forgot to badge in or out.">
           {manual ? (
             <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-              <Field label="Person"><Select value={manual.employeeId} onChange={(e) => setManual({ ...manual, employeeId: e.target.value })}><option value="">Choose…</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>
+              <Field label="Person"><PersonPicker ariaLabel="Person" value={manual.employeeId} status="ACTIVE" placeholder="Choose: type a name or number" onChange={(id) => setManual({ ...manual, employeeId: id })} /></Field>
               <Field label="Day"><Input type="date" value={manual.day} onChange={(e) => setManual({ ...manual, day: e.target.value })} /></Field>
               <Field label="Clock in"><Input type="time" step={60} value={manual.clockIn} onChange={(e) => setManual({ ...manual, clockIn: e.target.value })} /></Field>
               <Field label="Clock out"><Input type="time" step={60} value={manual.clockOut} onChange={(e) => setManual({ ...manual, clockOut: e.target.value })} /></Field>

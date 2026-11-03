@@ -12,6 +12,8 @@ export type Tenant = { id: string; name: string; code: string; timezone: string;
 export type Session = { user: SessionUser; tenant: Tenant; permissions: string[]; /** signed in with a temporary password: only choosing a new one is allowed */ mustChangePassword?: boolean };
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
+/** Keep a token on its own for a moment, so the next call can ask who it belongs to (single sign-on return). */
+export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 export const getStoredSession = (): Session | null => {
   try { return getToken() ? JSON.parse(localStorage.getItem(SESSION_KEY) || 'null') : null; } catch { return null; }
 };

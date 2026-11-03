@@ -5,14 +5,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ColDef } from 'ag-grid-community';
 import { Download, Plus } from 'lucide-react';
-import { addDays, api, dayName, dayYear, DOW, dowOfDay, dec, Employee, isNew, ScheduleShift, ScheduleVersion, SCHED_STATUS_LABEL, ShiftTemplate, slotHHMM, when, Violation } from '../../services/api';
+import { addDays, api, dayName, dayYear, DOW, dowOfDay, dec, Employee, isNew, ScheduleShift, ScheduleVersion, SCHED_STATUS_LABEL, ShiftTemplate, Skill, slotHHMM, when, Violation } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
+import { PersonPicker } from '../common/PersonPicker';
 import { downloadXlsx } from '../../services/excel';
 import { DayTimeline, type Act } from './DayTimeline';
 import { EmployeeDrawer } from './EmployeeDrawer';
 import { CoverageView } from './CoverageView';
+import { StaleBanner } from './StaleBanner';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Kpi, KpiRow, Pill, Seg, Select } from '../forecasting/ui';
 
 type Coverage = { daily: { day: string; requiredHours: number; scheduledHours: number; coveragePercent: number; shifts: number; projected: boolean }[]; slots: { time: string; required: number; scheduled: number; delta: number }[]; uncoveredDays?: string[]; projectedDays?: string[]; projected?: boolean };
@@ -42,17 +44,30 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   const [problem, setProblem] = useState<'ALL' | 'UNDERSTAFFED' | 'VIOLATIONS'>('ALL');
   const [openEmp, setOpenEmp] = useState<string | null>(null);
 
+  // a long schedule (a 13- to 52-week plan) shows four weeks at a time; a short one shows all of it
+  const PAGE = 28;
+  const [page, setPage] = useState(0);
+  const allDays = useMemo(() => { if (!version) return []; const o: string[] = []; for (let d = version.periodStart; d <= version.periodEnd && o.length < 400; d = addDays(d, 1)) o.push(d); return o; }, [version?.id, version?.periodEnd]);
+  const paged = allDays.length > 31;
+  const days = useMemo(() => (paged ? allDays.slice(page * PAGE, page * PAGE + PAGE) : allDays), [allDays, page, paged]);
   const key = version ? `${version.id}-${version.rev}-${version.status}` : '';
   const full = useApi<ScheduleVersion>(version ? `/scheduling/versions/${version.id}` : null, [key]);
-  const shifts = useApi<ScheduleShift[]>(version ? `/scheduling/versions/${version.id}/shifts` : null, [key]);
+  const shifts = useApi<ScheduleShift[]>(version ? `/scheduling/versions/${version.id}/shifts${paged && days.length ? `?from=${days[0]}&to=${days[days.length - 1]}` : ''}` : null, [key, days[0], days.length]);
   const cov = useApi<Coverage>(version ? `/scheduling/versions/${version.id}/coverage?grain=${grain}${day ? `&day=${day}` : ''}` : null, [key, day, grain]);
   const cov15 = useApi<Coverage>(version && day ? `/scheduling/versions/${version.id}/coverage?grain=15&day=${day}` : null, [key, day]);
-  const emps = useApi<Employee[]>(group ? `/workforce/employees?groupId=${group.id}&status=ACTIVE` : null);
+  // Nobody downloads the whole group here: skills come from the (short) skills list, the skill filter is answered by the server with just the ids, and the person to add or open is fetched or searched on demand.
+  const skills = useApi<Skill[]>(group ? '/workforce/skills' : null);
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
 
-  useEffect(() => { if (version) setDay(version.periodStart); setSel(null); }, [version?.id]);
+  // the year plan can send you to a particular week
+  useEffect(() => {
+    if (!version) return;
+    let target = version.periodStart;
+    try { const f = JSON.parse(sessionStorage.getItem('wfm.focusDay') ?? 'null'); if (f?.versionId === version.id && f.day >= version.periodStart && f.day <= version.periodEnd) { target = f.day; sessionStorage.removeItem('wfm.focusDay'); } } catch { /* ignore */ }
+    setPage(Math.max(0, Math.floor(Math.max(0, allDays.indexOf(target)) / PAGE)));
+    setDay(target); setSel(null);
+  }, [version?.id]);
 
-  const days = useMemo(() => { if (!version) return []; const o: string[] = []; for (let d = version.periodStart; d <= version.periodEnd && o.length < 31; d = addDays(d, 1)) o.push(d); return o; }, [version?.id]);
   // grouped into weeks starting from the schedule's own first day, so "Week 2" etc. always means the same thing
   // this version -- lets a multi-week schedule be jumped to directly instead of paged through one day at a time.
   const weeks = useMemo(() => { const o: string[][] = []; for (let i = 0; i < days.length; i += 7) o.push(days.slice(i, i + 7)); return o; }, [days]);
@@ -66,7 +81,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
     { headerName: 'Employee', field: 'name', pinned: 'left', minWidth: 170 },
     ...days.map((d) => ({
       headerName: `${DOW[dowOfDay(d)]} ${d.slice(8)}`, field: d, width: 118, sortable: false,
-      cellStyle: (p: any) => (badKeys.has(`${p.data.id}|${d}`) ? { background: '#FCEBEC', color: '#C84A4A', fontWeight: 600 } : p.value ? { fontFamily: 'ui-monospace, monospace', fontSize: '12px' } : { color: '#A3A3A3' }),
+      cellStyle: (p: any) => (badKeys.has(`${p.data.id}|${d}`) ? { background: '#FCEBEC', color: '#BC3F3F', fontWeight: 600 } : p.value ? { fontFamily: 'ui-monospace, monospace', fontSize: '12px' } : { color: '#A3A3A3' }),
       valueFormatter: (p: any) => p.value || '·',
     } as ColDef<any>)),
     { headerName: 'Paid hours', field: 'hours', type: 'rightAligned', width: 90, pinned: 'right' },
@@ -80,14 +95,18 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
     }
     return [...m.values()].map((r) => ({ ...r, hours: Math.round(r.hours * 10) / 10 }));
   }, [shifts.data]);
-  const empById = useMemo(() => new Map((emps.data ?? []).map((e) => [e.id, e])), [emps.data]);
-  const allSkills = useMemo(() => { const m = new Map<string, string>(); for (const e of emps.data ?? []) for (const s of e.skills) m.set(s.skillId, s.name); return [...m.entries()]; }, [emps.data]);
+  const allSkills = useMemo(() => (skills.data ?? []).map((s) => [s.id, s.name] as [string, string]), [skills.data]);
+  const skilled = useApi<{ id: string }[]>(group && skillFilter.length ? `/workforce/employees?groupId=${group.id}&status=ACTIVE&skillIds=${skillFilter.join(',')}&fields=ids` : null, [skillFilter.join(',')]);
+  const skilledIds = useMemo(() => (skilled.data ? new Set(skilled.data.map((x) => x.id)) : null), [skilled.data]);
+  const noPeople = useMemo(() => new Map<string, Employee>(), []);
+  const [added, setAdded] = useState<Employee | null>(null);
+  const opened = useApi<Employee>(openEmp ? `/workforce/employees/${openEmp}` : null, [openEmp]);
 
   // all hooks are above this line: the returns below must not change how many hooks run
-  const dayIdx = days.indexOf(day);
+  const dayIdx = allDays.indexOf(day);
   const dayRow = cov.data?.daily.find((d) => d.day === day);
-  const goDay = (n: number) => { const d = days[dayIdx + n]; if (d) { setDay(d); setSel(null); setOpenEmp(null); } };
-  const jumpTo = (d: string) => { if (days.includes(d)) { setDay(d); setSel(null); setOpenEmp(null); } };
+  const goDay = (n: number) => { const i = allDays.indexOf(day) + n, d = allDays[i]; if (d) { if (paged) setPage(Math.floor(i / PAGE)); setDay(d); setSel(null); setOpenEmp(null); } };
+  const jumpTo = (d: string) => { const i = allDays.indexOf(d); if (i >= 0) { if (paged) setPage(Math.floor(i / PAGE)); setDay(d); setSel(null); setOpenEmp(null); } };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -106,9 +125,8 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   const canEdit = (draft || version.status === 'PUBLISHED') && can('schedule:edit');
   const passesFilter = (employeeId: string, employeeName?: string) => {
     if (!nameQuery.trim() && skillFilter.length === 0) return true;
-    const e = empById.get(employeeId);
-    const nameOk = !nameQuery.trim() || (employeeName ?? e?.name ?? '').toLowerCase().includes(nameQuery.trim().toLowerCase());
-    const skillOk = skillFilter.length === 0 || (!!e && skillFilter.every((sid) => e.skills.some((s) => s.skillId === sid)));
+    const nameOk = !nameQuery.trim() || (employeeName ?? '').toLowerCase().includes(nameQuery.trim().toLowerCase());
+    const skillOk = skillFilter.length === 0 || !skilledIds || skilledIds.has(employeeId);
     return nameOk && skillOk;
   };
   const dayShifts = (shifts.data ?? []).filter((s) => s.day === day && passesFilter(s.employeeId, s.employeeName));
@@ -202,7 +220,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
             <h2 className="text-[16px] font-semibold text-[#171717] truncate">{version.name}</h2>
             <Pill tone={version.status === 'PUBLISHED' ? 'good' : version.status === 'DRAFT' ? 'warn' : 'neutral'}>{SCHED_STATUS_LABEL[version.status]}</Pill>
             {isNew(version) && <Pill tone="info">NEW</Pill>}
-            <span className="text-[12px] text-[#737373] truncate">{dayYear(version.periodStart)} → {dayYear(version.periodEnd)} · built on {version.coverageSource === 'MANUAL' ? 'manual coverage' : (version.forecastName ?? 'a forecast')}</span>
+            <span className="text-[12px] text-[#6B6B6B] truncate">{dayYear(version.periodStart)} → {dayYear(version.periodEnd)} · built on {version.coverageSource === 'MANUAL' ? 'manual coverage' : (version.forecastName ?? 'a forecast')}</span>
           </div>
           <div className="flex items-center gap-2">
             {busy && <Busy />}
@@ -216,9 +234,9 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
             {can('schedule:generate') && <Btn onClick={() => go('generate-schedule')}>New schedule</Btn>}
           </div>
         </div>
-        {!draft && <p className="mt-1 text-[11px] text-[#737373]">{version.status === 'PUBLISHED' ? (version.hasChanges ? 'Unpublished edits are live for adherence. Republish to re-check the rules and re-stamp it.' : 'Published. No changes since it was last published.') : 'Archived: a newer schedule was published.'}</p>}
+        {!draft && <p className="mt-1 text-[11px] text-[#6B6B6B]">{version.status === 'PUBLISHED' ? (version.hasChanges ? 'Unpublished edits are live for adherence. Republish to re-check the rules and re-stamp it.' : 'Published. No changes since it was last published.') : 'Archived: a newer schedule was published.'}</p>}
       </div>
-      {version.stale && version.stale.length > 0 && <Banner kind="warn"><span className="font-semibold">This schedule may be out of date.</span> {version.stale.join(' ')} <button className="underline" onClick={() => go('schedule-quality')}>See schedule quality</button></Banner>}
+      <StaleBanner version={version} reload={reload} go={go} showQualityLink />
       {ack && (
         <Banner kind="warn">
           <div className="font-semibold">{ack.message.replace(' Give a reason to publish anyway.', '')}</div>
@@ -251,48 +269,50 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
         </Select>
         <Seg options={[{ id: '15', label: '15m' }, { id: '30', label: '30m' }, { id: '60', label: '1h' }, { id: '120', label: '2h' }]} value={zoom} onChange={setZoom} />
         <button className={`px-3 py-1.5 rounded-md border text-[12px] font-medium ${focus ? 'bg-[#171717] text-white border-[#171717]' : 'border-[#E5E5E0] hover:bg-[#FAFAF8]'}`} onClick={() => setFocus((f) => !f)}>Focus mode</button>
-        {filtering && <button className="text-[12px] underline text-[#737373]" onClick={() => { setNameQuery(''); setSkillFilter([]); }}>Clear</button>}
+        {filtering && <button className="text-[12px] underline text-[#6B6B6B]" onClick={() => { setNameQuery(''); setSkillFilter([]); }}>Clear</button>}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 py-2 text-[13px] text-[#525252] border-y border-[#E5E5E0]">
-        <span>Coverage <b className={tone(stats.coverage.percent) === 'good' ? 'text-[#2F7D5A]' : tone(stats.coverage.percent) === 'warn' ? 'text-[#B7791F]' : 'text-[#C84A4A]'}>{dec(stats.coverage.percent, 1)}%</b></span>
+        <span>Coverage <b className={tone(stats.coverage.percent) === 'good' ? 'text-[#2A7553]' : tone(stats.coverage.percent) === 'warn' ? 'text-[#8F6200]' : 'text-[#BC3F3F]'}>{dec(stats.coverage.percent, 1)}%</b></span>
         <span><b className="text-[#171717]">{stats.shifts}</b> shifts · {stats.people} people</span>
         <span><b className="text-[#171717]">{dec(stats.hours.paid, 0)}h</b> paid of {dec(stats.hours.required, 0)}h needed</span>
         <span>Overtime <b className="text-[#171717]">{dec(stats.hours.overtime, 0)}h</b></span>
         <span>Short <b className="text-[#171717]">{stats.coverage.underIntervals}</b> quarter-hours across this schedule, <b className="text-[#171717]">{stats.coverage.criticalIntervals}</b> critical</span>
-        <span className={stats.violations ? 'text-[#C84A4A]' : ''}>Rule violations <b>{stats.violations}</b></span>
+        <span className={stats.violations ? 'text-[#BC3F3F]' : ''}>Rule violations <b>{stats.violations}</b></span>
       </div>
 
       <Card title={dayName(day)} actions={
         <div className="flex items-center gap-2.5">
           {weeks.length > 1 && (
             <div className="flex items-center gap-1 rounded-md border border-[#E5E5E0] p-0.5">
+              {paged && <button aria-label="Previous four weeks" disabled={page <= 0} onClick={() => jumpTo(allDays[(page - 1) * PAGE])} className="px-1.5 py-1 rounded text-[11px] text-[#525252] hover:bg-[#FAFAF8] disabled:opacity-30">‹ 4 wk</button>}
               {weeks.map((w, i) => (
                 <button key={w[0]} title={`${dayYear(w[0])} – ${dayYear(w[w.length - 1])}`}
                   onClick={() => jumpTo(w[0])}
                   className={`px-2 py-1 rounded text-[11px] font-medium ${w.includes(day) ? 'bg-[#171717] text-white' : 'text-[#525252] hover:bg-[#FAFAF8]'}`}>
-                  Week {i + 1}
+                  Week {(paged ? page * (PAGE / 7) : 0) + i + 1}
                 </button>
               ))}
+              {paged && <button aria-label="Next four weeks" disabled={(page + 1) * PAGE >= allDays.length} onClick={() => jumpTo(allDays[(page + 1) * PAGE])} className="px-1.5 py-1 rounded text-[11px] text-[#525252] hover:bg-[#FAFAF8] disabled:opacity-30">4 wk ›</button>}
             </div>
           )}
-          <input type="date" value={day} min={days[0]} max={days[days.length - 1]} onChange={(e) => jumpTo(e.target.value)}
+          <input type="date" value={day} min={allDays[0]} max={allDays[allDays.length - 1]} onChange={(e) => jumpTo(e.target.value)}
             className="px-2 py-1 rounded-md border border-[#E5E5E0] text-[12px]" aria-label="Jump to date" />
           <div className="flex items-center gap-1.5">
             <button aria-label="Previous day" title="Previous day (←)" disabled={dayIdx <= 0} onClick={() => goDay(-1)} className="w-8 h-8 rounded-md border border-[#E5E5E0] text-[16px] leading-none hover:bg-[#FAFAF8] disabled:opacity-35 disabled:cursor-not-allowed">‹</button>
-            <span className="text-[11px] text-[#737373] px-1 tabular-nums">{dayIdx + 1} / {days.length}</span>
-            <button aria-label="Next day" title="Next day (→)" disabled={dayIdx < 0 || dayIdx >= days.length - 1} onClick={() => goDay(1)} className="w-8 h-8 rounded-md border border-[#E5E5E0] text-[16px] leading-none hover:bg-[#FAFAF8] disabled:opacity-35 disabled:cursor-not-allowed">›</button>
+            <span className="text-[11px] text-[#6B6B6B] px-1 tabular-nums">{dayIdx + 1} / {allDays.length}</span>
+            <button aria-label="Next day" title="Next day (→)" disabled={dayIdx < 0 || dayIdx >= allDays.length - 1} onClick={() => goDay(1)} className="w-8 h-8 rounded-md border border-[#E5E5E0] text-[16px] leading-none hover:bg-[#FAFAF8] disabled:opacity-35 disabled:cursor-not-allowed">›</button>
           </div>
         </div>
       } sub={canEdit ? 'Hover for details. Click a name for their week. Drag an activity to move it, its right edge to resize it.' : 'Hover for details. Click a name for their week.'}>
         {add && (
           <div className="mb-4 border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-            <Field label="Person" hint={emps.loading ? 'Loading…' : emps.data && emps.data.length === 0 ? 'No active employees in this group' : undefined}>
-              <Select disabled={emps.loading} value={add.employeeId} onChange={(e) => {
-                const emp = emps.data?.find((x) => x.id === e.target.value);
+            <Field label="Person">
+              <PersonPicker ariaLabel="Person" value={add.employeeId} groupId={group.id} status="ACTIVE" placeholder="Choose: type a name or number" onChange={(id, emp) => {
+                setAdded(emp);
                 const preferred = emp?.preferredTemplateId && tpls.data?.find((t) => t.id === emp.preferredTemplateId && t.status === 'ACTIVE') ? emp.preferredTemplateId : add.templateId;
-                setAdd({ ...add, employeeId: e.target.value, templateId: preferred });
-              }}><option value="">{emps.loading ? 'Loading…' : 'Choose…'}</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select>
+                setAdd({ ...add, employeeId: id, templateId: preferred });
+              }} />
             </Field>
             <Field label="Template"><Select value={add.templateId} onChange={(e) => setAdd({ ...add, templateId: e.target.value })}>{tpls.data?.filter((t) => t.status === 'ACTIVE').map((t) => <option key={t.id} value={t.id}>{t.name} ({t.durationHours}h)</option>)}</Select></Field>
             <Field label="Starts"><Input type="time" step={900} value={add.startTime} onChange={(e) => setAdd({ ...add, startTime: e.target.value })} /></Field>
@@ -311,8 +331,8 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
           </div>
         )}
         {dayShifts.length === 0 && problem === 'ALL' && !focus
-          ? <p className="text-[12px] text-[#737373]">{filtering ? 'No one matches the current filters on this day.' : 'Nobody is scheduled on this day.'}</p>
-          : <DayTimeline shifts={dayShifts} bad={badKeys} coverage={cov15.data?.slots ?? []} people={empById} zoom={zoom} focus={focus} problem={problem}
+          ? <p className="text-[12px] text-[#6B6B6B]">{filtering ? 'No one matches the current filters on this day.' : 'Nobody is scheduled on this day.'}</p>
+          : <DayTimeline shifts={dayShifts} bad={badKeys} coverage={cov15.data?.slots ?? []} people={noPeople} zoom={zoom} focus={focus} problem={problem}
               canEdit={canEdit} selected={sel?.id ?? null} onSelect={(s) => setSel(s.id === sel?.id ? null : s)} onOpen={(id) => setOpenEmp(id)}
               onMoveShift={async (shift, newStartSlot, why) => {
                 // the server re-places each meal and break around the new start, as it does for any shift it writes
@@ -325,8 +345,8 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
               }} />}
         {sel && (
           <div className="mt-3 border border-[#E5E5E0] rounded-lg p-3 bg-[#FAFAF8] flex flex-wrap items-center gap-4 text-[13px]">
-            <b>{sel.employeeName}</b><span>{sel.startTime}–{sel.endTime}{sel.overnight ? ' (overnight)' : ''}</span><span className="text-[#737373]">{sel.templateName ?? 'shift'} · {sel.source === 'MANUAL' ? 'added by hand' : 'from the solver'}</span>
-            {canEdit && <button className="ml-auto text-[12px] text-[#C84A4A] underline" onClick={() => removeShift(sel)}>Remove shift</button>}
+            <b>{sel.employeeName}</b><span>{sel.startTime}–{sel.endTime}{sel.overnight ? ' (overnight)' : ''}</span><span className="text-[#6B6B6B]">{sel.templateName ?? 'shift'} · {sel.source === 'MANUAL' ? 'added by hand' : 'from the solver'}</span>
+            {canEdit && <button className="ml-auto text-[12px] text-[#BC3F3F] underline" onClick={() => removeShift(sel)}>Remove shift</button>}
           </div>
         )}
       </Card>
@@ -334,14 +354,14 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
       {violations.length > 0 && (
         <Card title={`Rule violations (${violations.length})`} sub="These must be fixed before this schedule can be published.">
           <ul className="space-y-1 text-[13px]">{violations.slice(0, 12).map((v, i) => <li key={i} className="flex gap-2"><Pill tone="bad">{v.type.replace(/^LAW_/, 'law: ').replace(/_/g, ' ').toLowerCase()}</Pill><span>{v.message}</span></li>)}</ul>
-          {violations.length > 12 && <p className="text-[11px] text-[#737373]">and {violations.length - 12} more</p>}
+          {violations.length > 12 && <p className="text-[11px] text-[#6B6B6B]">and {violations.length - 12} more</p>}
         </Card>
       )}
 
       {warnings.length > 0 && (
         <Card title={`Labour-law warnings (${warnings.length})`} sub="These do not stop publishing, but the labour-law pack for this group asks you to look at them.">
           <ul className="space-y-1 text-[13px]">{warnings.slice(0, 12).map((v, i) => <li key={i} className="flex gap-2"><Pill tone="warn">{v.type.replace(/^LAW_/, '').replace(/_/g, ' ').toLowerCase()}</Pill><span>{v.message}</span></li>)}</ul>
-          {warnings.length > 12 && <p className="text-[11px] text-[#737373]">and {warnings.length - 12} more</p>}
+          {warnings.length > 12 && <p className="text-[11px] text-[#6B6B6B]">and {warnings.length - 12} more</p>}
         </Card>
       )}
 
@@ -360,7 +380,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
       </Card>
 
       {version && <CoverageView version={version} versions={versions} day={day} days={days} setDay={jumpTo} refreshKey={key} />}
-      {openEmp && <EmployeeDrawer employee={emps.data?.find((e) => e.id === openEmp) ?? null} currentVersionId={version.id} periodStart={version.periodStart} periodEnd={version.periodEnd} day={day} onClose={() => setOpenEmp(null)} />}
+      {openEmp && <EmployeeDrawer employee={opened.data ?? null} currentVersionId={version.id} periodStart={version.periodStart} periodEnd={version.periodEnd} day={day} onClose={() => setOpenEmp(null)} />}
     </div>
   );
 };

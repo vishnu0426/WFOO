@@ -17,6 +17,12 @@ export async function payWeekFor(tx: Tx, groupId: string | null | undefined): Pr
   return { start: companyStart, source: pol && Number.isInteger(raw) ? 'COMPANY' : 'DEFAULT', companyStart };
 }
 
+/** Weekday of a calendar day, Monday = 0 ... Sunday = 6. */
+export function weekdayOf(day: string): number {
+  const [y, m, d] = day.split('-').map(Number);
+  return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+}
+
 /** First day of the pay week that `day` (YYYY-MM-DD) falls in. */
 export function payWeekFloor(day: string, weekStart: number): string {
   const [y, m, d] = day.split('-').map(Number);

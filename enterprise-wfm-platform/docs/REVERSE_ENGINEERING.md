@@ -1,4 +1,4 @@
-# Enterprise WFM Platform: reverse-engineering report
+# AgnoWFM: reverse-engineering report
 
 Scope: everything under `enterprise-wfm-platform/` as delivered (an AI Studio export), analysed by reading all source and running
 the app (`npm run dev`, port 3000) through every menu item. Line numbers refer to the delivered files.

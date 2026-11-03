@@ -29,7 +29,9 @@ const tok = (await call(null, 'POST', '/auth/login', { username: USER, password:
 if ((await call(tok, 'GET', '/config/groups')).some((g) => g.name === 'Demo Support')) { console.log('The group "Demo Support" already exists, so nothing was changed.'); process.exit(0); }
 
 step('creating the group, queue and call history');
-const g = await call(tok, 'POST', '/config/groups', { name: 'Demo Support', serviceLevelGoal: 80, serviceLevelThresholdSec: 20, shrinkagePercent: 20, targetOccupancy: 85 });
+let g;
+try {
+g = await call(tok, 'POST', '/config/groups', { name: 'Demo Support', serviceLevelGoal: 80, serviceLevelThresholdSec: 20, shrinkagePercent: 20, targetOccupancy: 85 });
 const q = await call(tok, 'POST', '/config/queues', { name: 'Demo Voice', channel: 'VOICE', wfmGroupId: g.id, ahtDefault: 400 });
 const curve = [2, 1, 1, 1, 2, 5, 12, 30, 55, 70, 78, 74, 62, 66, 72, 70, 60, 48, 32, 20, 12, 8, 5, 3];
 let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -73,7 +75,16 @@ for (let i = 0; i < 3; i++) {
 }
 
 step('leaving something to act on: a shift on the board and a VTO and an overtime offer');
-const t2 = (await call(null, 'POST', '/auth/login', { username: 'demo.agent2', password: 'Demo-Pass-123', ...(TENANT ? { tenant: TENANT } : {}) })).token;
+// new logins carry a temporary password (the default), and a temporary session may only choose a new one: do that first
+const PASS2 = 'Demo-Agent-2026!';
+const signInDemo = async (username) => {
+  const r = await call(null, 'POST', '/auth/login', { username, password: 'Demo-Pass-123', ...(TENANT ? { tenant: TENANT } : {}) });
+  if (!r.mustChangePassword) return r.token;
+  return (await call(r.token, 'POST', '/auth/change-password', { currentPassword: 'Demo-Pass-123', newPassword: PASS2 })).token;
+};
+const demoTokens = [];
+for (const u of logins) demoTokens.push(await signInDemo(u));
+const t2 = demoTokens[1];
 const theirs = shifts.filter((s) => s.employeeId === people[1]).sort((a, b) => (a.day < b.day ? -1 : 1))[1];
 if (theirs) await call(t2, 'POST', '/me/swaps', { kind: 'GIVEAWAY', shiftId: theirs.id, note: 'Dentist appointment' }).catch(() => {});
 const mine = shifts.filter((s) => s.employeeId === people[0]).sort((a, b) => (a.day < b.day ? -1 : 1))[0];
@@ -83,7 +94,14 @@ if (mine) {
   await call(tok, 'POST', '/scheduling/offers', { groupId: g.id, kind: 'OVERTIME', day: mine.day, startTime: hh(end), endTime: hh(end + 8), spots: 1, ordering: 'FIRST_COME', note: 'Busy evening' }).catch((e) => console.log('  (no overtime offer:', e.message, ')'));
 }
 
+
 console.log('\nDone. Sign in to the mobile app with:');
 console.log(`  organisation: ${TENANT ?? '(your organisation code)'}`);
-for (const u of logins) console.log(`  username: ${u}    password: Demo-Pass-123`);
+for (const u of logins) console.log(`  username: ${u}    password: ${PASS2}`);
 console.log('\nSee mobile/TESTING.md for what to try.');
+} catch (e) {
+  // a half-built demo would make the next run refuse to start; say how to clear it
+  console.error('\nThe demo could not be finished:', e.message);
+  console.error(`Remove the "Demo Support" group${g?.id ? ` (id ${g.id})` : ''} and the demo people (employee numbers D001-D030) before running the script again.`);
+  process.exit(1);
+}

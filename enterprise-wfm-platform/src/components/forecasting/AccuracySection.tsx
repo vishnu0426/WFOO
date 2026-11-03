@@ -7,6 +7,7 @@ import { dayName, dayYear, dec, pct, lean, MODEL_LABEL, Score } from '../../serv
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from './hooks';
 import { AccuracyGrid, CHART, LineChart } from './charts';
+import { AccuracyTrend } from './AccuracyTrend';
 import { Banner, Busy, Card, Empty, Kpi, KpiRow, Seg, Table } from './ui';
 
 type Metric = { wape: number; bias: number; actual: number; forecast: number };
@@ -32,6 +33,7 @@ export const AccuracySection: React.FC = () => {
   const a = acc.data;
   return (
     <div className="space-y-6">
+      <AccuracyTrend />
       <Card
         title="Forecast accuracy"
         sub="A fair test: the forecast is rebuilt using only the history from before the window, then compared with what actually happened. The score shown is the average miss: how far off the forecast was, as a share of real volume."
@@ -73,11 +75,11 @@ export const AccuracySection: React.FC = () => {
                 </tr>
               ))}
             </Table>
-            <p className="text-[11px] text-[#737373]">“Actual within range” is how often real volume landed between the low and high estimate. It should be around 80%.</p>
+            <p className="text-[11px] text-[#6B6B6B]">“Actual within range” is how often real volume landed between the low and high estimate. It should be around 80%.</p>
           </Card>
 
           <Card title="Published forecasts vs what happened" sub="Once a published forecast's days have passed, its numbers are compared with the actuals that arrived.">
-            {a.realised.length === 0 ? <p className="text-[12px] text-[#737373]">Nothing to compare yet: publish a short-term forecast and let some of its days pass.</p> : (
+            {a.realised.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">Nothing to compare yet: publish a short-term forecast and let some of its days pass.</p> : (
               <Table head={['Day', 'Forecast', 'Actual', 'Avg. miss · 15 min', 'Over / under']} right={[1, 2, 3, 4]}>
                 {a.realised.map((r) => (
                   <tr key={r.day}><td className="p-3">{dayName(r.day)}</td><td className="p-3 text-right font-mono">{dec(r.forecast, 0)}</td><td className="p-3 text-right font-mono">{dec(r.actual, 0)}</td><td className="p-3 text-right font-mono">{pct(r.wape15, 1)}</td><td className="p-3 text-right font-mono">{lean(r.bias)}</td></tr>

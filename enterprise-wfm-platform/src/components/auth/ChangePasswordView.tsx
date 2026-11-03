@@ -38,7 +38,7 @@ export const ChangePasswordView: React.FC<{ session: Session; onChanged: (sessio
           <div className="w-9 h-9 rounded bg-[#171717] flex items-center justify-center text-white"><KeyRound className="w-4 h-4" /></div>
           <div>
             <h1 className="text-[16px] font-semibold text-[#171717] leading-tight">Choose your own password</h1>
-            <p className="text-[12px] text-[#737373]">{session.user.userName}, you signed in with a temporary password.</p>
+            <p className="text-[12px] text-[#6B6B6B]">{session.user.userName}, you signed in with a temporary password.</p>
           </div>
         </div>
         <label className="block text-[12px] font-semibold text-[#171717]">
@@ -53,12 +53,12 @@ export const ChangePasswordView: React.FC<{ session: Session; onChanged: (sessio
           New password again
           <input type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" className={field} />
         </label>
-        <p className="text-[11px] text-[#737373]">At least 8 characters, mixing letters with numbers or symbols. Not your username, not a common word or number run, and not the temporary password.</p>
-        {error && <div className="text-[12px] text-[#C84A4A] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2">{error}</div>}
+        <p className="text-[11px] text-[#6B6B6B]">At least 8 characters, mixing letters with numbers or symbols. Not your username, not a common word or number run, and not the temporary password.</p>
+        {error && <div className="text-[12px] text-[#BC3F3F] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2">{error}</div>}
         <button disabled={busy || !current || next.length < 8 || !again} className="w-full px-4 py-2 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold disabled:opacity-50">
           {busy ? 'Saving…' : 'Save password and continue'}
         </button>
-        <button type="button" onClick={onSignOut} className="block w-full text-center text-[12px] text-[#737373] underline">Sign out</button>
+        <button type="button" onClick={onSignOut} className="block w-full text-center text-[12px] text-[#6B6B6B] underline">Sign out</button>
       </form>
     </div>
   );

@@ -44,7 +44,7 @@ describe('headcount attrition estimate', () => {
   });
 
   it('picks up a real termination from the audit trail and recomputes the rate', async () => {
-    const upd = await call(admin, 'PUT', `/workforce/employees/${ctx.emps[0].id}`, { status: 'TERMINATED' });
+    const upd = await call(admin, 'PUT', `/workforce/employees/${ctx.emps[0].id}`, { reason: 'Resigned', status: 'TERMINATED', terminationDate: new Date().toISOString().slice(0, 10), terminationReason: 'Resigned' });
     assert.equal(upd.status, 200, upd.text);
     const r = await call(admin, 'GET', `/workforce/attrition?groupId=${ctx.group.id}`);
     assert.equal(r.json.currentHeadcount, 3, 'one fewer active person');
@@ -53,7 +53,7 @@ describe('headcount attrition estimate', () => {
   });
 
   it('does not count an unrelated field edit as a termination', async () => {
-    await call(admin, 'PUT', `/workforce/employees/${ctx.emps[1].id}`, { phone: '555-0100' });
+    await call(admin, 'PUT', `/workforce/employees/${ctx.emps[1].id}`, { reason: 'Test change', phone: '555-0100' });
     const r = await call(admin, 'GET', `/workforce/attrition?groupId=${ctx.group.id}`);
     assert.equal(r.json.terminatedTrailing12mo, 1, 'still just the one real termination');
   });

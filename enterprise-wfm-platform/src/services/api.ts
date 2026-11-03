@@ -3,6 +3,8 @@
  * Types mirror the gateway's JSON (camelCase); the formatting helpers turn statistics into plain words.
  */
 
+import { markStale, setScope } from './dataCache';
+
 const TOKEN_KEY = 'wfm_token';
 const SESSION_KEY = 'wfm_session';
 const BASE = '/api/v1';
@@ -15,10 +17,13 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredSession = (): Session | null => {
   try { return getToken() ? JSON.parse(localStorage.getItem(SESSION_KEY) || 'null') : null; } catch { return null; }
 };
+/** A short id for the current sign-in, so remembered answers are never shown to a different one. */
+const scopeOf = (token: string | null) => (token ? token.slice(-24) : '');
 export const storeSession = (token: string | null, session: Session | null) => {
-  if (token && session) { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
-  else { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESSION_KEY); }
+  if (token && session) { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(SESSION_KEY, JSON.stringify(session)); setScope(scopeOf(token)); }
+  else { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESSION_KEY); setScope(''); }
 };
+setScope(scopeOf(getToken()));
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string, readonly details?: unknown) { super(message); }
@@ -54,7 +59,19 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   }, opts.timeoutMs);
   if (!res.ok) return fail(res);
+  // anything saved, deleted or imported may have changed what is remembered: it is shown if asked for, but fetched again (checks that only look, like a preview, change nothing)
+  if (opts.method && opts.method !== 'GET' && !READ_ONLY_POST.test(path)) markStale();
   return res.json().catch(() => ({}));
+}
+const READ_ONLY_POST = /\/(preview|check|detect|test|test-pull|suggest|validate|simulate|what-if|dry-run|trace)(\?|$)/;
+
+/** A paged list: the rows of this page and the true number of matches (the gateway's X-Total-Count). */
+export async function apiPage<T = any>(path: string): Promise<{ rows: T[]; total: number }> {
+  const res = await send(path, { method: 'GET', headers: {} });
+  if (!res.ok) return fail(res);
+  const rows: T[] = await res.json().catch(() => []);
+  const total = Number(res.headers.get('X-Total-Count'));
+  return { rows, total: Number.isFinite(total) && res.headers.has('X-Total-Count') ? total : rows.length };
 }
 
 export async function download(path: string, fileName: string) {
@@ -68,13 +85,17 @@ export async function download(path: string, fileName: string) {
 // ---------------------------------------------------------------- types
 
 export type Channel = 'VOICE' | 'CHAT' | 'EMAIL' | 'BACKOFFICE';
-export type Queue = { id: string; name: string; code: string; channel: Channel; wfmGroupId: string | null; ahtDefault: number; concurrency: number; openSlot: number; closeSlot: number; slaTargetSeconds: number; slaTargetPercent: number; turnaroundHours: number | null; skillId?: string | null };
+export type Queue = { shapeFromQueueId?: string | null; aliases?: string[]; volumeBasis?: 'OFFERED' | 'ANSWERED'; abandonRepeatPct?: number; id: string; name: string; code: string; channel: Channel; wfmGroupId: string | null; ahtDefault: number; concurrency: number; openSlot: number; closeSlot: number; slaTargetSeconds: number; slaTargetPercent: number; turnaroundHours: number | null; skillId?: string | null };
 export type GroupDto = {
   id: string; name: string; code: string; description: string; timezone: string; status: 'ACTIVE' | 'INACTIVE'; queueIds: string[]; queueNames: string[]; channels: Channel[];
   serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number; shrinkagePercent: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number;
   blended: boolean; model: string; fteHoursWeek: number;
   /** Weekday a pay week begins on (Monday 0 ... Sunday 6) for this group; null = the company setting. */
   payWeekStart?: number | null;
+  /** The site this group's people work at. */
+  siteId?: string | null;
+  /** Who manages the group (a person marked as a manager). */
+  managerId?: string | null; managerName?: string | null;
 };
 export type Group = GroupDto & { queues: Queue[] };
 export type ShrinkageCategory = { id: string; name: string; pct: number; sort: number };
@@ -141,7 +162,7 @@ export const STATUS_LABEL: Record<VersionStatus, string> = { DRAFT: 'Draft', SUB
 // ---------------------------------------------------------------- workforce and scheduling (phase 2)
 
 export type Skill = { id: string; name: string; code: string; category: 'CHANNELS' | 'LANGUAGES' | 'PRODUCTS' | 'TIERS'; type: 'CORE' | 'SECONDARY' | 'SPECIALTY'; status: 'ACTIVE' | 'INACTIVE'; requiresCertification: boolean; description: string; holders: number };
-export type Team = { id: string; name: string; code: string; description: string; location: string; managerId: string | null; managerName: string | null; status: 'ACTIVE' | 'INACTIVE'; memberCount: number };
+export type Team = { id: string; name: string; code: string; description: string; location: string; managerId: string | null; managerName: string | null; deputyId?: string | null; deputyName?: string | null; status: 'ACTIVE' | 'INACTIVE'; memberCount: number };
 export type EmployeeStatus = 'ONBOARDING' | 'ACTIVE' | 'LEAVE' | 'SUSPENDED' | 'TERMINATED';
 export type EmploymentType = 'FULL_TIME' | 'PART_TIME' | 'CONTRACTOR' | 'TEMPORARY';
 /** Same start and end time every day: DEFAULT follows the company setting. */
@@ -152,10 +173,14 @@ export type Employee = {
   maxConsecutiveDays: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; primaryGroupId: string | null; primaryGroupName: string | null; eligibleGroupIds: string[]; version: number;
   preferredTemplateId: string | null; preferredTemplateName: string | null;
   shiftConsistency: ShiftConsistency; fixedStartSlot: number | null;
+  /** May be chosen as a team's supervisor / a group's manager. Only says what the person is: access comes from the role on their login. */
+  isSupervisor?: boolean; isManager?: boolean;
+  /** Who they report to (the org chart), and the last working day and reason when they are leaving. */
+  reportsTo?: string | null; reportsToName?: string | null; terminationDate?: string | null; terminationReason?: string | null;
   skills: { skillId: string; name: string; code: string; proficiency: number }[];
 };
 export type AvailabilityWindow = { id?: string; dayOfWeek: number; startTime: string; endTime: string; kind: 'AVAILABLE' | 'UNAVAILABLE' | 'PREFERRED'; effectiveFrom?: string | null; effectiveTo?: string | null };
-export type TimeOff = { id: string; employeeId: string; employeeName: string; type: string; startDate: string; endDate: string; days: number; status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; reason: string; decidedBy: string | null; decidedAt: string | null; createdAt: string };
+export type TimeOff = { id: string; employeeId: string; employeeName: string; type: string; startDate: string; endDate: string; days: number; status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; reason: string; decidedBy: string | null; decidedAt: string | null; createdAt: string; escalatedAt?: string | null; decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null };
 export type ShiftTemplate = {
   id: string; name: string; code: string; description: string; status: 'ACTIVE' | 'INACTIVE'; workDays: number[]; earliestStart: string; latestStart: string; startStepMinutes: number;
   durationHours: number; paidHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; version: number;
@@ -169,7 +194,7 @@ export type ShiftTemplate = {
   /** Who it is offered to (null = everyone) and the dates it is in force. */
   groupIds?: string[] | null; employmentTypes?: string[] | null; skillIds?: string[] | null; effectiveFrom?: string | null; effectiveTo?: string | null;
 };
-export type SolverInfo = { status: string; gap: number; wallSec: number; variables: number; constraints: number; objective: number; candidates: number; people: number } | null;
+export type SolverInfo = { status: string; gap: number; wallSec: number; variables: number; constraints: number; objective: number; candidates: number; people: number; backend?: string; attempts?: string[] } | null;
 export type ScheduleStats = {
   solver: SolverInfo; coverage: { percent: number; requiredSlots: number; underSlots: number; overSlots: number; underIntervals: number; criticalIntervals: number };
   hours: { paid: number; overtime: number; required: number; premium?: number }; shifts: number; people: number; violations: number; warnings?: number; uncoveredDays?: string[]; projectedDays?: string[];
@@ -182,11 +207,13 @@ export type ScheduleVersion = {
   /** Why this schedule no longer matches the forecast it was built from (empty while current). */
   stale?: string[];
   acknowledged?: { by: string; at: string; reason: string; issues: string[] } | null;
+  /** A schedule can be published up to a date; later weeks stay planned. null = published in full (or a draft). */
+  publishThrough?: string | null;
 };
 export type Violation = { type: string; employeeId: string; employeeName: string; day: string; message: string; severity?: 'BLOCK' | 'WARN' };
 export type ScheduleShift = {
-  id: string; employeeId: string; employeeName: string; employeeNumber: string; day: string; templateId: string | null; templateName: string | null; startTime: string; endTime: string;
-  startSlot: number; lengthSlots: number; overnight: boolean; source: 'SOLVER' | 'MANUAL'; activities: { type: 'MEAL' | 'BREAK'; startSlot: number; slots: number; startTime: string; endTime: string }[];
+  id: string; employeeId: string; employeeName: string; employeeNumber: string; teamName?: string | null; day: string; templateId: string | null; templateName: string | null; startTime: string; endTime: string;
+  startSlot: number; lengthSlots: number; overnight: boolean; source: 'SOLVER' | 'MANUAL' | 'ROTATION' | 'PATTERN'; activities: { type: 'MEAL' | 'BREAK'; startSlot: number; slots: number; startTime: string; endTime: string }[];
 };
 
 export const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -195,6 +222,22 @@ export const TYPE_LABEL: Record<EmploymentType, string> = { FULL_TIME: 'Full-tim
 /** Monday on or after today (local), as YYYY-MM-DD: the natural start of a schedule. */
 export const nextMonday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + ((7 - ((d.getDay() + 6) % 7)) % 7)); return fmtDate(d); };
 export const dowOfDay = (s: string) => (new Date(s + 'T00:00:00').getDay() + 6) % 7;
+export const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+/** First day of the pay week that `day` falls in. weekStart: Monday 0 ... Sunday 6. */
+export const weekFloor = (day: string | Date, weekStart = 0) => {
+  const d = typeof day === 'string' ? new Date(day + 'T00:00:00') : new Date(day);
+  d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((((d.getDay() + 6) % 7) - weekStart + 7) % 7));
+  return fmtDate(d);
+};
+/** The first day of a pay week on or after `plusDays` days from today. */
+export const nextWeekStart = (weekStart = 0, plusDays = 0) => {
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + plusDays);
+  d.setDate(d.getDate() + ((weekStart - ((d.getDay() + 6) % 7) + 7) % 7));
+  return fmtDate(d);
+};
+/** The seven weekday names in pay-week order, starting with the weekday the pay week begins on. */
+export const weekOrder = <T,>(names: T[], weekStart = 0) => Array.from({ length: 7 }, (_, i) => names[(weekStart + i) % 7]);
+export type PayWeekInfo = { start: number; source: 'GROUP' | 'COMPANY' | 'DEFAULT'; companyStart: number };
 export const slotHHMM = (s: number) => `${p2(Math.floor(s / 4) % 24)}:${p2((s % 4) * 15)}`;
 export const SCHED_STATUS_LABEL: Record<string, string> = { DRAFT: 'Draft', PUBLISHED: 'Published', ARCHIVED: 'Archived' };
 
@@ -214,7 +257,9 @@ export type Evaluation = {
   byDay: { day: string; volume: number; serviceLevel: number; intervalsBelowTarget: number }[];
   worst: { day: string; slot: number; time: string; volume: number; scheduled: number; onPhones: number; sl: number; slLow: number; slHigh: number; asa: number }[];
 };
-export type ShortageBlock = { day: string; from: string; to: string; peakShort: number; shortPeopleHours: number; requiredPeak: number; scheduledMin: number; causes: { key: string; people: number; text: string }[]; actions: { type: string; label: string; detail: string }[] };
+export type ShortageBlock = { day: string; from: string; to: string; peakShort: number; shortPeopleHours: number; requiredPeak: number; scheduledMin: number; causes: { key: string; people: number; text: string }[]; actions: { type: string; label: string; detail: string; proposal?: TemplateProposal }[] };
+/** A shift template that would cover a gap nobody can cover today, with an estimate of what it frees up. */
+export type TemplateProposal = { name: string; earliestStart: string; latestStart: string; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; workDays: number[]; days: { day: string; eligible: number }[]; gainPeopleHours: number; coverageBefore: number; coverageAfter: number };
 export type Shortage = { targetCoverage: number; coveragePercent: number; meetsTarget: boolean; intervalsShort: number; gaps: number; shortPeopleHours: number; headline: string; topCauses: { key: string; weight: number; text: string }[]; blocks: ShortageBlock[] };
 
 export type GroupActivity = Activity & { enabled: boolean; overridden: boolean; companyShrinkage: boolean; companyPaid: boolean };
@@ -229,6 +274,17 @@ export type Adherence = {
   unmappedStates: { state: string; reason: string; agents: number }[]; agents: AdherenceAgent[];
   staffing: { slot: number; time: string; published: number; actual: number | null }[];
 };
+// the paged adherence screen: a summary, a page of people at a time (no timelines), and one person with their timeline
+export type AdherenceLite = Omit<AdherenceAgent, 'timeline' | 'exceptions'> & { scheduledMin: number; adherentMin: number };
+export type AdherenceDetail = AdherenceAgent & { day: string; scheduledMin: number; adherentMin: number };
+export type AdherenceTeam = { team: string | null; total: number; inAdherence: number; outOfAdherence: number; unscheduled: number; ignored: number; unknown: number; dayPercent: number | null };
+export type AdherenceSummary = Omit<Adherence, 'agents'> & { teams: AdherenceTeam[]; scope: 'all' | 'mine'; myTeams: string[]; ageSeconds: number };
+export type AdherenceHistory = {
+  by: 'agent' | 'team'; from: string; to: string; building: number; overall: { percent: number | null; people: number; scheduledMin: number };
+  series: { day: string; percent: number | null; people: number }[];
+  rows: { employeeId?: string; name: string; employeeNumber: string | null; team: string | null; people: number; scheduledMin: number; adherentMin: number; percent: number | null }[];
+};
+export type SavedView = { id: string; name: string; filters: Record<string, any> };
 export type CoverageSlot = { slot: number; time: string; forecast: number; forecastLow: number; forecastHigh: number; historical: number | null; aht: number | null; serviceLevel: number | null; occupancy: number | null; edited: boolean; actual: number | null; reforecast: number | null; abandoned: number | null; required: number; requiredReforecast: number | null; scheduled: number };
 export type Coverage =
   | { day: string; ready: false; reason: string }
@@ -279,12 +335,13 @@ export type RotationPreview =
 export type RotationMember = { employeeId: string; name: string; employeeNumber: string; crewName: string; startCycleDay: number | null; effectiveFrom: string | null; effectiveTo: string | null };
 
 // ---------------------------------------------------------------- Integration Station
-export type IntegrationField = { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select'; options?: string[]; help?: string; required?: boolean };
-export type IntegrationPreset = { id: string; label: string; method: string; authType: string; fields: IntegrationField[]; note: string | null; writesTo: string };
+export type IntegrationField = { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean };
+export type IntegrationPreset = { id: string; label: string; method: string; authType: string; fields: IntegrationField[]; note: string | null; writesTo: string; canPull?: boolean };
 export type IntegrationCatalog = Record<string, IntegrationPreset[]>;
 export type Connector = {
   id: string; wfmGroupId: string | null; category: string; method: string; preset: string; name: string; status: string; config: Record<string, string>;
   lastReceivedAt: string | null; lastError: string | null; lastSample: unknown; connectedAt: string | null; backfillStatus: string; backfillThrough: string | null; hasWebhookSecret: boolean; createdBy: string | null; createdAt: string;
+  scheduleMin: number | null; scheduleAt: string | null; scheduleDays: number[] | null; nextRunAt: string | null; canPull: boolean; note: string;   // whether the server can pull this source itself, and why not
 };
 export type ConnectorCreated = Connector & { apiKey: string | null; webhookSecret: string | null; webhookUrl: string | null };
 export type IntegrationFieldMap = { targetField: string; sourcePath: string; transform: string | null };
@@ -296,3 +353,16 @@ export type MapTestResult = { raw: unknown; mapped: Record<string, unknown>; res
 // ---------------------------------------------------------------- dynamic break re-optimization
 export type BreakSuggestion = { shiftId: string; employeeName: string; type: 'MEAL' | 'BREAK'; fromSlot: number; toSlot: number; from: string; to: string; deficitReduction: number };
 export type BreakSuggestions = { day: string; ready: boolean; reason?: string; nowTime?: string | null; reforecastApplied?: boolean; suggestions: BreakSuggestion[] };
+
+/** A background schedule build or re-solve. */
+export type ScheduleJob = {
+  id: string; groupId: string; kind: 'PLAN' | 'RESOLVE'; status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED'; versionId: string | null; error: string | null; cancelRequested: boolean;
+  createdAt: string; startedAt: string | null; finishedAt: string | null; createdBy: string | null; params: { from: string | null; weeks: number | null; versionId: string | null };
+  progress: { done?: number; total?: number; note?: string; etaSec?: number | null; windows?: { from: string; to: string; kind: 'SOLVED' | 'PATTERN'; coverage: number | null; backend: string | null; status: string; shifts: number; note?: string }[] };
+};
+export type PlanWeek = {
+  weekStart: string; weekEnd: string; coveragePercent: number | null; needSlots: number; underSlots: number; overSlots: number; shifts: number; people: number;
+  shiftSource: 'SOLVED' | 'PATTERN' | 'MIXED' | 'EMPTY'; forecast: 'SHORT' | 'LONG' | 'MIXED' | 'NONE'; confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE'; weeksAhead: number; state: 'LOCKED' | 'PARTLY_LOCKED' | 'PAST' | 'PLANNED';
+};
+export type PlanView = { versionId: string; name: string; status: string; periodStart: string; periodEnd: string; publishThrough: string | null; today: string; plan: any; weeks: PlanWeek[]; summary: { coverage: number; shifts: number; people: number; violations: number } };
+export type RotationLines = { versionId: string; from: string; to: string; cycleWeeks: number; peopleOnLines: number; lines: { id: string; name: string; size: number; summary: string; weeks: { week: number; text: string; days: { day: string; shift: string }[] }[]; people: { id: string; name: string; number: string }[] }[] };

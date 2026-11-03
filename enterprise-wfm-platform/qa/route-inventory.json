@@ -1,0 +1,3473 @@
+[
+ {
+  "method": "GET",
+  "path": "?/health",
+  "router": "app",
+  "file": "index.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/attendance/import",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/attendance/template.csv",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/attendance/punches",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/attendance/punches",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/attendance/punches/:id",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/attendance/summary",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/attendance/payroll-export.csv",
+  "router": "attendance",
+  "file": "modules/attendance.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/audit",
+  "router": "auditRoutes",
+  "file": "modules/auditRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "audit:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/audit/summary",
+  "router": "auditRoutes",
+  "file": "modules/auditRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "audit:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/audit/export.csv",
+  "router": "auditRoutes",
+  "file": "modules/auditRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "audit:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/login-options",
+  "router": "publicAuth",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/org/:code",
+  "router": "publicAuth",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/auth/discover",
+  "router": "publicAuth",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/auth/login",
+  "router": "publicAuth",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/me",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/auth/logout",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/auth/change-password",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/users",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/users",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/api/v1/users/:id",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/rbac/matrix",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/rbac/matrix/:role",
+  "router": "authed",
+  "file": "modules/authRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/bids/",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/bids/:id",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/bids/:id/open",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/bids/:id/close",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/bids/:id/cancel",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/bids/:id/preview",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/bids/:id/award",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/bids/",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/bids/:id",
+  "router": "bidsAdmin",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/bids/",
+  "router": "bidsMe",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/me/bids/:id/ranking",
+  "router": "bidsMe",
+  "file": "modules/bids/routes.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/channels/providers",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/channels/settings",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/channels/settings",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/channels/test",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/channels/deliveries",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/channels/deliveries/:id/retry",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/channels/me",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/channels/me",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/channels/alert-rules",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/channels/alert-rules",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/channels/alert-rules/:id",
+  "router": "channels",
+  "file": "modules/channels.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/compliance/catalog",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/compliance/packs",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/compliance/packs",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/compliance/packs/:id",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/compliance/packs/:id",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/compliance/assignments",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/compliance/assignments",
+  "router": "compliance",
+  "file": "modules/compliance/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/groups/:id",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/shrinkage-categories",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups/:id/shrinkage-categories",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/groups/:id/shrinkage-categories/:catId",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/groups/:id/shrinkage-categories/:catId",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/coverage-windows",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups/:id/coverage-windows",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/groups/:id/coverage-windows/:windowId",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/queues",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/queues",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/queues/:id",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/queues/:id",
+  "router": "config",
+  "file": "modules/configRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/scopes",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/keys",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/keys",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/scim-token",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/developer/keys/:id",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/events",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/webhooks",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/webhooks",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/developer/webhooks/:id",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/webhooks/:id/rotate-secret",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/developer/webhooks/:id",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/webhooks/:id/test",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/webhooks/:id/deliveries",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/developer/deliveries/:id/retry",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/developer/openapi.json",
+  "router": "developer",
+  "file": "modules/developer.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/follow-the-sun/",
+  "router": "followTheSun",
+  "file": "modules/followTheSun.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/history-quality",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/preview",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/import",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/forecast/versions/:id",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:delete"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id/data",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id/leaderboard",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "PATCH",
+  "path": "/api/v1/forecast/versions/:id/adjustments",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:adjust"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/submit",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:submit"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/approve",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:approve"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/reject",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "any",
+  "perms": [
+   "forecast:approve",
+   "forecast:submit"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/publish",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:publish"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/clone",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id/export.csv",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id/scenarios",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/scenarios",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/forecast/scenarios/:id",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/versions/:id/scenarios/compare",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/versions/:id/capacity",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/accuracy",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/accuracy-trend",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/trace-staffing",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/events",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/events",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/forecast/events/:id",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/learning",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/forecast/learning/run",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/forecast/learning/settings",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/forecast/learning/factors",
+  "router": "forecast",
+  "file": "modules/forecast/routes.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:create"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/summary",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/import-template",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/impact",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/groups/:id",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/members",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups/:id/members",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/history",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups/:id/clone",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/groups/import",
+  "router": "groupAdmin",
+  "file": "modules/groupAdminRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/imports",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/imports/detect",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/imports",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/imports/:id",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:read"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/data/imports/:id",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/imports/:id/commit",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/imports/:id/rollback",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:rollback"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/coverage",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/quality",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/import-template",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/ingest",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/data/ingest/check",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/data/ingest/settings",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:import"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/data/ingest/status",
+  "router": "ingestion",
+  "file": "modules/ingestionRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "data:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/catalog",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/:id",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/integrations/:id",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/integrations/:id",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/run",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/test-pull",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/:id/runs",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/:id/field-maps",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/integrations/:id/field-maps",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/field-maps/test",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/:id/event-rules",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/integrations/:id/event-rules/:eventType",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/entity-matches/suggest",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/integrations/:id/entity-matches",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/integrations/:id/entity-matches",
+  "router": "integrationsAdmin",
+  "file": "modules/integrations/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/backfill",
+  "router": "integrationsPublic",
+  "file": "modules/integrations/routes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/live",
+  "router": "integrationsPublic",
+  "file": "modules/integrations/routes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/integrations/:id/webhook",
+  "router": "integrationsPublic",
+  "file": "modules/integrations/routes.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/intraday/gap-fixes",
+  "router": "intraday",
+  "file": "modules/intradayGapRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/intraday/gap-fixes/apply",
+  "router": "intraday",
+  "file": "modules/intradayGapRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:act"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/intraday/state-map",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/intraday/state-map",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/intraday/state-map/:id",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/intraday/state-map/:id",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/intraday/events",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:act"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/intraday/adherence",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/intraday/exceptions",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:act"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/intraday/exceptions/:id",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:act"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/intraday/coverage",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/intraday/break-suggestions",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/intraday/break-suggestions/apply",
+  "router": "intraday",
+  "file": "modules/intradayRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "intraday:act"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/self-service/offer-policy/",
+  "router": "offerPolicyRoutes",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/self-service/offer-policy/",
+  "router": "offerPolicyRoutes",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/offers/",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/offers/",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/offers/suggestions",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/offers/shortages",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/offers/:id",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/offers/:id/cancel",
+  "router": "offersAdmin",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/offers/",
+  "router": "offersMe",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/offers/:id/accept",
+  "router": "offersMe",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/offers/:id/decline",
+  "router": "offersMe",
+  "file": "modules/offers/routes.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/payroll/settings",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/payroll/settings",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/payroll/preview",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/payroll/runs",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/payroll/runs/:id",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/payroll/runs",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/payroll/runs/:id/recalculate",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/payroll/runs/:id/approve",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:approve"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/payroll/runs/:id",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/payroll/runs/:id/export.csv",
+  "router": "payroll",
+  "file": "modules/payroll.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:approve"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/activities",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/activities",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/activities/:id",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/activities/:id",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:gid/activities",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/groups/:gid/activities/:aid",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/groups/:gid/activities/:aid",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/scheduling-policy",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/scheduling-policy",
+  "router": "policy",
+  "file": "modules/policyRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/reports/catalog",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/reports/run",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/reports/branding",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/reports/branding",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/reports/schedules",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/reports/schedules",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/reports/schedules/:id",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/reports/schedules/:id",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/reports/schedules/:id/run-now",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/reports/schedules/:id/runs",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/reports/runs/:id/download",
+  "router": "reports",
+  "file": "modules/reports.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rotations/",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/rotations/",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rotations/pay-week",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/rotations/analyse",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rotations/:id/preview",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rotations/member",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/rotations/member",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/rotations/:id",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/scheduling/rotations/:id",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rotations/:id/members",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/rotations/:id/members",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/rotations/:id/materialize",
+  "router": "rotations",
+  "file": "modules/rotations.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/jobs",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/regenerate",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/resolve",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/jobs",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/jobs/:id",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/jobs/:id/cancel",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/publish-window",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:publish"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/plan",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/lines",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/simulate",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/what-if",
+  "router": "planRoutes",
+  "file": "modules/scheduleJobs.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/templates",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/templates",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/templates/:id",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/scheduling/templates/:id",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/pay-week",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/readiness",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/shifts",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/coverage",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/interval",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/validate",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/revisions",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/report",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/forecast-change",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/clock-changes",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/report.csv",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/evaluation",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/versions/:id/shortage",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/optimize-breaks",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/shifts",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/scheduling/versions/:id/shifts/:shiftId/activities",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/employees/:employeeId/shifts",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/scheduling/versions/:id/shifts/:shiftId",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/publish",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:publish"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/versions/:id/republish",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:publish"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/scheduling/versions/:id",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:generate"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/compare",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/mine",
+  "router": "scheduling",
+  "file": "modules/scheduleRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/scim/v2/ServiceProviderConfig",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/scim/v2/ResourceTypes",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/scim/v2/Schemas",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/scim/v2/Users",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/scim/v2/Users/:id",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "POST",
+  "path": "/scim/v2/Users",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "PUT",
+  "path": "/scim/v2/Users/:id",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "PATCH",
+  "path": "/scim/v2/Users/:id",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "DELETE",
+  "path": "/scim/v2/Users/:id",
+  "router": "scim",
+  "file": "modules/scim.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/security/secrets",
+  "router": "security",
+  "file": "modules/secretsAdmin.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/security/secrets/reencrypt",
+  "router": "security",
+  "file": "modules/secretsAdmin.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/self-service/policy",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/self-service/policy",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/self-service/time-off-rules",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/self-service/time-off-rules",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/self-service/time-off-rules/:id",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/self-service/logins",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/self-service/logins",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/self-service/logins/:userId/reset-password",
+  "router": "selfAdmin",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/profile",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/me/change-password",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/schedule",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/home",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/time-off",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/time-off/check",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/time-off",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/time-off/:id/cancel",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/availability",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/me/availability",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/notifications",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/notifications/read",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/push-token",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/me/push-token",
+  "router": "selfService",
+  "file": "modules/selfService.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/sites",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/config/sites",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/sites/:id",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/config/sites/:id",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/groups/:id/site",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/skills",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/config/groups/:id/skills",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/config/groups/:id/pool",
+  "router": "sitesRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "config:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/rollup/",
+  "router": "rollupRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/forecast/pooling/",
+  "router": "poolingRoutes",
+  "file": "modules/sites.ts",
+  "guard": "all",
+  "perms": [
+   "forecast:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/sso/:tenant/info",
+  "router": "ssoPublic",
+  "file": "modules/sso.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/sso/:tenant/start",
+  "router": "ssoPublic",
+  "file": "modules/sso.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/sso/callback",
+  "router": "ssoPublic",
+  "file": "modules/sso.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/sso/config",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/sso/config",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/sso/providers",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/sso/test",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/sso/preview",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/sso/detect",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/sso/try",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/sso/try/:id",
+  "router": "ssoAdmin",
+  "file": "modules/sso.ts",
+  "guard": "all",
+  "perms": [
+   "users:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/auth/sso/try/:id/go",
+  "router": "ssoPublic",
+  "file": "modules/sso.ts",
+  "guard": "none",
+  "perms": []
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/swaps/",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/me/swaps/candidates",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/swaps/",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/swaps/:id/accept",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/swaps/:id/decline",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/swaps/:id/take",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/me/swaps/:id/cancel",
+  "router": "swapsMe",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "self:use"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/scheduling/swaps/",
+  "router": "swapsAdmin",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/scheduling/swaps/:id/decide",
+  "router": "swapsAdmin",
+  "file": "modules/swaps.ts",
+  "guard": "all",
+  "perms": [
+   "schedule:edit"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/employees/template",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/employees",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/employees/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/attrition",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/employees",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/workforce/employees/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/employees/bulk",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/workforce/employees/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/workforce/employees/:id/skills",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/employees/import",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/teams",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/teams",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/workforce/teams/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/workforce/teams/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/skills",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/skills",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/workforce/skills/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "DELETE",
+  "path": "/api/v1/workforce/skills/:id",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/employees/:id/availability",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/availability",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "PUT",
+  "path": "/api/v1/workforce/employees/:id/availability",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "GET",
+  "path": "/api/v1/workforce/time-off",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:read"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/time-off",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ },
+ {
+  "method": "POST",
+  "path": "/api/v1/workforce/time-off/:id/decide",
+  "router": "workforce",
+  "file": "modules/workforceRoutes.ts",
+  "guard": "all",
+  "perms": [
+   "workforce:write"
+  ]
+ }
+]

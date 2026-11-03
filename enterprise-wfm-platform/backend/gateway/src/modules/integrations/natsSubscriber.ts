@@ -6,6 +6,7 @@
  * NATS instead of a relay script's HTTP POST. Started for every ACTIVE connector at boot (`startAllSubscriptions`,
  * called from index.ts) and kept in sync with connector create/status-change/delete from routes.ts.
  */
+import { CONFIG_SECRET_KEYS, openFields } from '../../secrets.ts';
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
 import { raw, withTenant } from '../../db.ts';
 import { publish } from '../../infra.ts';
@@ -128,7 +129,7 @@ export async function startSubscription(connector: any): Promise<void> {
   if (!preset || preset.method !== 'STREAM_SUBSCRIBE') return;
   await stopSubscription(connector.id);
 
-  const cfg = connector.config ?? {};
+  const cfg = openFields(connector.config ?? {}, CONFIG_SECRET_KEYS);
   const servers = String(cfg.natsServers ?? '').split(',').map((s: string) => s.trim()).filter(Boolean);
   const subject = String(cfg.subject ?? '');
   if (!servers.length || !subject) return mark(connector.id, connector.tenantId, false, 'natsServers and subject must be set before this connector can run');

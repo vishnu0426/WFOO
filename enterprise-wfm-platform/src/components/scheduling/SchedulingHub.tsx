@@ -20,10 +20,14 @@ import { BidsPanel } from './BidsPanel';
 import { RollupPanel } from './RollupPanel';
 import { RotationsPanel } from './RotationsPanel';
 import { SchedulesSection } from './SchedulesSection';
+import { YearPlanPanel } from './YearPlanPanel';
+import { SunPanel } from './SunPanel';
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   'schedule-timeline': { title: 'Schedule Timeline', sub: 'Who works when, and how well it covers the forecast.' },
   'generate-schedule': { title: 'Generate Schedule', sub: 'Build a draft roster from the published forecast.' },
+  'follow-the-sun': { title: 'Follow the Sun', sub: 'Several sites in different time zones on one clock: where the need is not met and how the day is shared.' },
+  'year-plan': { title: 'Year Plan', sub: 'A long schedule week by week: how well each week is covered, what is locked, and what is still planned.' },
   'schedule-quality': { title: 'Schedule Quality', sub: 'How good a schedule is, where it falls short and why, and what happened when it was generated.' },
   'shift-templates': { title: 'Shift Templates', sub: 'The shift shapes the generator can use.' },
   'schedule-compare': { title: 'Compare Versions', sub: 'See what changed between two schedules.' },
@@ -57,13 +61,13 @@ export const SchedulingHub: React.FC<{ activeSubSection?: string; onNavigateSubS
 
   const meta = TITLES[activeSubSection] ?? TITLES['schedule-timeline'];
   const version = versions.find((v) => v.id === id) ?? null;
-  const usesGroup = activeSubSection !== 'shift-templates' && activeSubSection !== 'shift-swaps' && activeSubSection !== 'multi-site' && activeSubSection !== 'all-schedules';
+  const usesGroup = activeSubSection !== 'shift-templates' && activeSubSection !== 'shift-swaps' && activeSubSection !== 'multi-site' && activeSubSection !== 'all-schedules' && activeSubSection !== 'follow-the-sun';
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-[#FFFFFF] p-6 space-y-6">
       <PageHeader title={meta.title} sub={meta.sub}
         actions={usesGroup && groups.length > 0 && (
-          <div className="flex items-center gap-2 text-[12px] text-[#525252]"><Layers className="w-3.5 h-3.5 text-[#737373]" />
+          <div className="flex items-center gap-2 text-[12px] text-[#525252]"><Layers className="w-3.5 h-3.5 text-[#6B6B6B]" />
             <Select value={group?.id ?? ''} onChange={(e) => setGroupId(e.target.value)} className="!w-auto" aria-label="WFM group">{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
           </div>
         )} />
@@ -73,10 +77,12 @@ export const SchedulingHub: React.FC<{ activeSubSection?: string; onNavigateSubS
         : activeSubSection === 'vto-overtime' ? <OffersPanel />
         : activeSubSection === 'shift-bidding' ? <BidsPanel />
         : activeSubSection === 'multi-site' ? <RollupPanel />
+        : activeSubSection === 'follow-the-sun' ? <SunPanel />
         : activeSubSection === 'all-schedules' ? <SchedulesSection open={openSchedule} onChanged={() => reload()} />
         : groups.length === 0 ? <Empty title="No WFM group yet">Create a WFM group in Configuration, add people and shift templates, then generate a schedule.</Empty>
         : activeSubSection === 'rotations' ? <RotationsPanel go={onNavigateSubSection} />
         : activeSubSection === 'generate-schedule' ? <GeneratePanel versions={versions} go={onNavigateSubSection} onCreated={(v) => reload(v.id)} />
+        : activeSubSection === 'year-plan' ? <YearPlanPanel versions={versions} version={version} select={setId} reload={reload} go={onNavigateSubSection} />
         : activeSubSection === 'schedule-compare' ? <ComparePanel versions={versions} />
         : activeSubSection === 'schedule-quality' ? <QualityPanel versions={versions} version={version} select={setId} reload={reload} go={onNavigateSubSection} />
         : activeSubSection === 'schedule-replay' ? <ReplayPanel versions={versions} version={version} select={setId} go={onNavigateSubSection} />
@@ -103,7 +109,7 @@ const ComparePanel: React.FC<{ versions: ScheduleVersion[] }> = ({ versions }) =
           <label className="text-[12px] font-semibold">A (baseline)<Select value={a} onChange={(e) => setA(e.target.value)} className="mt-1">{versions.map((v) => <option key={v.id} value={v.id}>{v.name} — {v.status.toLowerCase()}</option>)}</Select></label>
           <label className="text-[12px] font-semibold">B<Select value={b} onChange={(e) => setB(e.target.value)} className="mt-1">{versions.map((v) => <option key={v.id} value={v.id}>{v.name} — {v.status.toLowerCase()}</option>)}</Select></label>
         </div>
-        {a === b && <p className="text-[12px] text-[#737373]">Choose two different schedules.</p>}
+        {a === b && <p className="text-[12px] text-[#6B6B6B]">Choose two different schedules.</p>}
         {cmp.loading && <Busy text="Comparing…" />}
         {cmp.data && d && (
           <>

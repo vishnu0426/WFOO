@@ -54,8 +54,8 @@ export const RotationsPanel: React.FC<{ go: (sub: string) => void }> = ({ go }) 
             {(patterns.data ?? []).map((p) => (
               <button key={p.id} onClick={() => { setCreating(false); setSel(p.id); }} className={`text-left p-3 rounded-lg border ${sel === p.id && !creating ? 'border-[#171717] bg-[#FAFAF8]' : 'border-[#E5E5E0] hover:bg-[#FAFAF8]'}`}>
                 <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-[13px]">{p.name}</span>{p.kind === 'WEEKLY' && <Pill tone="info">Weekly</Pill>}{p.status === 'INACTIVE' && <Pill tone="neutral">Inactive</Pill>}</div>
-                <div className="text-[11px] text-[#737373] mt-1">{p.kind === 'WEEKLY' ? `${p.cycleDays / 7}-week rotation` : `${p.cycleDays}-day cycle`} · {p.crews.length} crew{p.crews.length === 1 ? '' : 's'} · {p.memberCount} people</div>
-                <div className="text-[11px] text-[#737373]">{p.materializedThrough ? `Generated through ${dayYear(p.materializedThrough)}` : 'Not generated yet'}</div>
+                <div className="text-[11px] text-[#6B6B6B] mt-1">{p.kind === 'WEEKLY' ? `${p.cycleDays / 7}-week rotation` : `${p.cycleDays}-day cycle`} · {p.crews.length} crew{p.crews.length === 1 ? '' : 's'} · {p.memberCount} people</div>
+                <div className="text-[11px] text-[#6B6B6B]">{p.materializedThrough ? `Generated through ${dayYear(p.materializedThrough)}` : 'Not generated yet'}</div>
               </button>
             ))}
           </div>
@@ -118,7 +118,7 @@ const NewPatternForm: React.FC<{ groupId: string; templates: ShiftTemplate[]; on
         <div>
           <div className="text-[12px] font-semibold mb-1.5">How does it repeat?</div>
           <Seg options={[{ id: 'DAY_CYCLE', label: 'Repeat a day cycle' }, { id: 'WEEKLY', label: 'Rotate weekly templates' }]} value={kind} onChange={(v) => setKind(v as 'DAY_CYCLE' | 'WEEKLY')} />
-          <p className="text-[12px] text-[#737373] mt-1.5">
+          <p className="text-[12px] text-[#6B6B6B] mt-1.5">
             {kind === 'DAY_CYCLE' ? 'A sequence of days, each a shift or a day off, that repeats: 4-on-4-off, 2-2-3, DuPont. Crews run the same cycle a few days apart.'
               : 'Weekly templates, each worked for one or more weeks before the next: a week of days, then a week of lates. Crews run it a whole number of weeks apart.'}
           </p>
@@ -135,19 +135,19 @@ const NewPatternForm: React.FC<{ groupId: string; templates: ShiftTemplate[]; on
           ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
           <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'WEEKLY' ? 'Days, lates, nights' : '4-on-4-off nights'} /></Field>
           {kind === 'DAY_CYCLE' && <Field label="Cycle length (days)" hint={preset ? 'Set by the pattern' : 'e.g. 8 for a 4-on-4-off pattern'}><Input type="number" min={2} max={84} disabled={!!preset} value={cycleDays} onChange={(e) => setCycleDays(Math.max(2, Math.min(84, Number(e.target.value) || 2)))} /></Field>}
           <Field label="Anchor date" hint={kind === 'WEEKLY' ? `Must be a ${DOW_LONG[payStart]}: the first day of this group's pay week` : 'day 0 of the cycle'}>
             <Input type="date" value={anchorDate} onChange={(e) => setAnchorDate(kind === 'WEEKLY' ? onOrAfter(e.target.value, payStart) : e.target.value)} />
           </Field>
-          <div className="flex gap-2"><Btn variant="primary" disabled={busy || !name.trim() || !active.length} onClick={create}>Create</Btn><Btn onClick={onCancel}>Cancel</Btn></div>
+          <div className="flex gap-2 md:pt-[22px]"><Btn variant="primary" disabled={busy || !name.trim() || !active.length} onClick={create}>Create</Btn><Btn onClick={onCancel}>Cancel</Btn></div>
         </div>
       </div>
       <label className="flex items-center gap-2 text-[12px] mt-3"><input type="checkbox" checked={observesHolidays} onChange={(e) => setObservesHolidays(e.target.checked)} />Skip generating a work shift on days marked as a holiday (Forecasting › special events). Turn off for crews that work through holidays.</label>
-      {!active.length && <p className="text-[12px] text-[#C84A4A] mt-2">Create a shift template first (Scheduling › Shift Templates).</p>}
+      {!active.length && <p className="text-[12px] text-[#BC3F3F] mt-2">Create a shift template first (Scheduling › Shift Templates).</p>}
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
-      <p className="text-[11px] text-[#737373] mt-2">You can change the days, crews and who is in them next, and see what the pattern means for hours and rest before anyone is put on it.</p>
+      <p className="text-[11px] text-[#6B6B6B] mt-2">You can change the days, crews and who is in them next, and see what the pattern means for hours and rest before anyone is put on it.</p>
     </Card>
   );
 };
@@ -197,7 +197,7 @@ const PatternDetail: React.FC<{
         {!weekly && (
           <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
             <table className="text-[12px]">
-              <thead className="bg-[#FAFAF8] text-[#737373] border-b border-[#E5E5E0]"><tr><th className="p-2 text-left w-24">Cycle day</th>{seq.map((_, i) => <th key={i} className="p-2 text-center min-w-[100px]">{i + 1}</th>)}</tr></thead>
+              <thead className="bg-[#FAFAF8] text-[#6B6B6B] border-b border-[#E5E5E0]"><tr><th className="p-2 text-left w-24">Cycle day</th>{seq.map((_, i) => <th key={i} className="p-2 text-center min-w-[100px]">{i + 1}</th>)}</tr></thead>
               <tbody><tr>
                 <td className="p-2 font-semibold">Shift</td>
                 {seq.map((tplId, i) => (
@@ -215,23 +215,23 @@ const PatternDetail: React.FC<{
             {steps.map((s, i) => (
               <div key={i} className="border border-[#E5E5E0] rounded-lg p-3 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-semibold text-[#737373] w-14">Step {i + 1}</span>
+                  <span className="text-[11px] font-semibold text-[#6B6B6B] w-14">Step {i + 1}</span>
                   <Input disabled={!canWrite} value={s.name} onChange={(e) => setStep(i, { name: e.target.value })} className="max-w-[200px]" />
-                  <span className="text-[12px] text-[#737373]">worked for</span>
+                  <span className="text-[12px] text-[#6B6B6B]">worked for</span>
                   <Input disabled={!canWrite} type="number" min={1} max={12} value={s.weeks} onChange={(e) => setStep(i, { weeks: Math.max(1, Math.min(12, Number(e.target.value) || 1)) })} className="max-w-[80px]" />
-                  <span className="text-[12px] text-[#737373]">week{s.weeks === 1 ? '' : 's'}</span>
+                  <span className="text-[12px] text-[#6B6B6B]">week{s.weeks === 1 ? '' : 's'}</span>
                   {canWrite && (
                     <span className="ml-auto flex items-center gap-1">
-                      <button type="button" aria-label="Move up" disabled={i === 0} className="p-1 text-[#737373] hover:text-[#171717] disabled:opacity-30" onClick={() => setSteps((ss) => { const c = [...ss]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; return c; })}><ArrowUp className="w-4 h-4" /></button>
-                      <button type="button" aria-label="Move down" disabled={i === steps.length - 1} className="p-1 text-[#737373] hover:text-[#171717] disabled:opacity-30" onClick={() => setSteps((ss) => { const c = [...ss]; [c[i + 1], c[i]] = [c[i], c[i + 1]]; return c; })}><ArrowDown className="w-4 h-4" /></button>
-                      {steps.length > 1 && <button type="button" aria-label="Remove step" className="p-1 text-[#737373] hover:text-[#C84A4A]" onClick={() => setSteps((ss) => ss.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
+                      <button type="button" aria-label="Move up" disabled={i === 0} className="p-1 text-[#6B6B6B] hover:text-[#171717] disabled:opacity-30" onClick={() => setSteps((ss) => { const c = [...ss]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; return c; })}><ArrowUp className="w-4 h-4" /></button>
+                      <button type="button" aria-label="Move down" disabled={i === steps.length - 1} className="p-1 text-[#6B6B6B] hover:text-[#171717] disabled:opacity-30" onClick={() => setSteps((ss) => { const c = [...ss]; [c[i + 1], c[i]] = [c[i], c[i + 1]]; return c; })}><ArrowDown className="w-4 h-4" /></button>
+                      {steps.length > 1 && <button type="button" aria-label="Remove step" className="p-1 text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setSteps((ss) => ss.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
                     </span>
                   )}
                 </div>
                 <div className="grid grid-cols-7 gap-1.5">
                   {s.days.map((tplId, d) => (
                     <div key={d}>
-                      <div className="text-[11px] text-[#737373] text-center mb-0.5">{DOW[(payStart + d) % 7]}</div>
+                      <div className="text-[11px] text-[#6B6B6B] text-center mb-0.5">{DOW[(payStart + d) % 7]}</div>
                       <Select disabled={!canWrite} value={tplId ?? ''} onChange={(e) => setStep(i, { days: s.days.map((x, j) => (j === d ? (e.target.value || null) : x)) })}>{opts}</Select>
                     </div>
                   ))}
@@ -239,7 +239,7 @@ const PatternDetail: React.FC<{
               </div>
             ))}
             {canWrite && steps.length < 12 && <Btn onClick={() => setSteps((ss) => [...ss, blankStep(ss.length + 1)])}><Plus className="w-3.5 h-3.5" />Add a weekly template</Btn>}
-            {totalWeeks > 12 && <p className="text-[12px] text-[#C84A4A]">The rotation is {totalWeeks} weeks; the longest is 12.</p>}
+            {totalWeeks > 12 && <p className="text-[12px] text-[#BC3F3F]">The rotation is {totalWeeks} weeks; the longest is 12.</p>}
           </div>
         )}
 
@@ -248,19 +248,19 @@ const PatternDetail: React.FC<{
           {crews.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <Input disabled={!canWrite} value={c.name} onChange={(e) => setCrews((cs) => cs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} className="max-w-[180px]" />
-              <span className="text-[12px] text-[#737373]">starts</span>
+              <span className="text-[12px] text-[#6B6B6B]">starts</span>
               {weekly ? (
                 <>
                   <Input disabled={!canWrite} type="number" min={0} max={Math.max(0, totalWeeks - 1)} value={c.offsetDays / 7} onChange={(e) => setCrews((cs) => cs.map((x, j) => (j === i ? { ...x, offsetDays: Math.max(0, Math.min(totalWeeks - 1, Math.round(Number(e.target.value) || 0))) * 7 } : x)))} className="max-w-[90px]" />
-                  <span className="text-[11px] text-[#737373]">weeks into the rotation</span>
+                  <span className="text-[11px] text-[#6B6B6B]">weeks into the rotation</span>
                 </>
               ) : (
                 <>
                   <Input disabled={!canWrite} type="number" min={0} max={pattern.cycleDays - 1} value={c.offsetDays} onChange={(e) => setCrews((cs) => cs.map((x, j) => (j === i ? { ...x, offsetDays: Math.max(0, Math.min(pattern.cycleDays - 1, Number(e.target.value) || 0)) } : x)))} className="max-w-[90px]" />
-                  <span className="text-[11px] text-[#737373]">days into the cycle</span>
+                  <span className="text-[11px] text-[#6B6B6B]">days into the cycle</span>
                 </>
               )}
-              {canWrite && crews.length > 1 && <button className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setCrews((cs) => cs.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
+              {canWrite && crews.length > 1 && <button className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setCrews((cs) => cs.filter((_, j) => j !== i))}><Trash2 className="w-4 h-4" /></button>}
             </div>
           ))}
           {canWrite && <Btn onClick={() => setCrews((cs) => [...cs, { name: `Crew ${String.fromCharCode(65 + cs.length)}`, offsetDays: 0 }])}><Plus className="w-3.5 h-3.5" />Add crew</Btn>}
@@ -268,7 +268,7 @@ const PatternDetail: React.FC<{
 
         <label className="flex items-center gap-2 text-[12px]"><input type="checkbox" disabled={!canWrite} checked={observesHolidays} onChange={(e) => setObservesHolidays(e.target.checked)} />Skip generating a work shift on days marked as a holiday</label>
 
-        {canWrite && <div className="flex items-center gap-2"><Btn variant="primary" disabled={busy || !dirty} onClick={save}>Save changes</Btn>{dirty && <span className="text-[12px] text-[#B7791F]">Unsaved changes</span>}</div>}
+        {canWrite && <div className="flex items-center gap-2"><Btn variant="primary" disabled={busy || !dirty} onClick={save}>Save changes</Btn>{dirty && <span className="text-[12px] text-[#8F6200]">Unsaved changes</span>}</div>}
       </Card>
 
       <AnalysisCard pattern={pattern} sequence={sequence} steps={weekly ? steps : null} crews={crews} />
@@ -286,9 +286,9 @@ const PatternDetail: React.FC<{
           {ver && ver.status === 'DRAFT' && canWrite && <Btn variant="success" disabled={busy} onClick={publish}>Publish roster</Btn>}
           {ver && <Pill tone={ver.status === 'PUBLISHED' ? 'good' : 'warn'}>{ver.status === 'PUBLISHED' ? 'Published' : 'Draft'}</Pill>}
         </div>
-        {!pattern.memberCount && <p className="text-[12px] text-[#C84A4A] mt-2">Add people to a crew above first.</p>}
-        {dirty && <p className="text-[12px] text-[#B7791F] mt-2">Save the changes to the pattern first.</p>}
-        {result && <p className="text-[12px] text-[#2F7D5A] mt-2">{result}</p>}
+        {!pattern.memberCount && <p className="text-[12px] text-[#BC3F3F] mt-2">Add people to a crew above first.</p>}
+        {dirty && <p className="text-[12px] text-[#8F6200] mt-2">Save the changes to the pattern first.</p>}
+        {result && <p className="text-[12px] text-[#2A7553] mt-2">{result}</p>}
         {pattern.versionId && <p className="text-[12px] mt-2">Open <button className="underline" onClick={() => go('schedule-timeline')}>Schedule Timeline</button> and pick "{pattern.name}" from the version list to see, edit or drag the shifts.</p>}
       </Card>
     </div>
@@ -312,7 +312,7 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
     return () => { live = false; clearTimeout(t); };
   }, [key]);
   const mark = (l: string) => (l === 'OK' ? '✓' : l === 'INFO' ? 'i' : '!');
-  const tone = (l: string) => (l === 'OK' ? 'text-[#2F7D5A]' : l === 'INFO' ? 'text-[#525252]' : 'text-[#B7791F] font-medium');
+  const tone = (l: string) => (l === 'OK' ? 'text-[#2A7553]' : l === 'INFO' ? 'text-[#525252]' : 'text-[#8F6200] font-medium');
   return (
     <Card title="What this pattern means" sub="Worked out from the days above as you change them, against your company limits. It does not look at who is in the crews.">
       {error && <Banner kind="err">{error}</Banner>}
@@ -324,7 +324,7 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
           </ul>
           <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
             <table className="w-full text-[12px]">
-              <thead className="bg-[#FAFAF8] text-[#737373] border-b border-[#E5E5E0]">
+              <thead className="bg-[#FAFAF8] text-[#6B6B6B] border-b border-[#E5E5E0]">
                 <tr><th className="p-2 text-left">Crew</th><th className="p-2 text-right">Hours a week (average)</th><th className="p-2 text-right">Most in any 7 days</th><th className="p-2 text-right">Longest run</th><th className="p-2 text-right">Shortest rest</th><th className="p-2 text-right">Weekend days a week</th><th className="p-2 text-right">Weekends fully off</th></tr>
               </thead>
               <tbody>
@@ -342,7 +342,7 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
               </tbody>
             </table>
           </div>
-          {data.contractHours && <p className="text-[11px] text-[#737373]">Compared with a {data.contractHours}-hour week (this WFM group's full-time hours), and with the limits in Configuration › Scheduling Rules.</p>}
+          {data.contractHours && <p className="text-[11px] text-[#6B6B6B]">Compared with a {data.contractHours}-hour week (this WFM group's full-time hours), and with the limits in Configuration › Scheduling Rules.</p>}
         </>
       )}
     </Card>
@@ -368,8 +368,8 @@ const PreviewCard: React.FC<{ pattern: RotationPattern; dirty: boolean }> = ({ p
         <Field label="Staffing target from"><Select value={source} onChange={(e) => setSource(e.target.value)}><option value="FORECAST">The published forecast</option><option value="MANUAL">Coverage windows (set manually)</option></Select></Field>
         <Btn variant="primary" disabled={busy || dirty || !pattern.memberCount} onClick={check}>{busy ? 'Checking…' : 'Check coverage'}</Btn>
       </div>
-      {dirty && <p className="text-[12px] text-[#B7791F]">Save the changes to the pattern first: the check uses the saved pattern.</p>}
-      {!pattern.memberCount && <p className="text-[12px] text-[#737373]">Add people to a crew first.</p>}
+      {dirty && <p className="text-[12px] text-[#8F6200]">Save the changes to the pattern first: the check uses the saved pattern.</p>}
+      {!pattern.memberCount && <p className="text-[12px] text-[#6B6B6B]">Add people to a crew first.</p>}
       {error && <Banner kind="err">{error}</Banner>}
       {data && data.available === false && <Banner kind="warn">{data.reason}</Banner>}
       {data && data.available === true && (
@@ -393,7 +393,9 @@ const blankAssign: Assign = { crewName: '', effectiveFrom: '', effectiveTo: '', 
 
 const MembersPanel: React.FC<{ pattern: RotationPattern; canWrite: boolean; templates: ShiftTemplate[] }> = ({ pattern, canWrite, templates }) => {
   const [tick, setTick] = useState(0);
-  const emps = useApi<Employee[]>(`/workforce/employees?groupId=${pattern.wfmGroupId}&status=ACTIVE`);
+  // people come a page at a time, searchable, so a group of thousands opens as fast as a small one; anyone already in a crew is always shown
+  const [find, setFind] = useState(''); const [shown, setShown] = useState(100);
+  const emps = useApi<Employee[]>(`/workforce/employees?groupId=${pattern.wfmGroupId}&status=ACTIVE&limit=${shown}${find.trim() ? `&q=${encodeURIComponent(find.trim())}` : ''}`);
   const current = useApi<RotationMember[]>(`/scheduling/rotations/${pattern.id}/members`, [pattern.id, tick]);
   const [assign, setAssign] = useState<Record<string, Assign>>({});
   useEffect(() => { setAssign(Object.fromEntries((current.data ?? []).map((m) => [m.employeeId, { crewName: m.crewName, effectiveFrom: m.effectiveFrom ?? '', effectiveTo: m.effectiveTo ?? '', startCycleDay: m.startCycleDay == null ? '' : String(m.startCycleDay) }]))); }, [current.data]);
@@ -424,13 +426,14 @@ const MembersPanel: React.FC<{ pattern: RotationPattern; canWrite: boolean; temp
     <Card title="Crew members" sub={`Who is in each crew, and optionally when. Leave the dates blank for someone who is simply always in the crew; set them for a mid-cycle join or leave. "Starts at" puts a person at a point in the ${weekly ? 'rotation' : 'cycle'} on the day they join, instead of following the crew.`}>
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="ok" onClose={() => setNotice('')}>{notice}</Banner>}
-      {!emps.data?.length ? <Empty title="No people in this WFM group yet" /> : (
+      <div className="mb-2 max-w-xs"><Input aria-label="Find a person" placeholder="Find a person by name or number" value={find} onChange={(e) => { setFind(e.target.value); setShown(100); }} /></div>
+      {!emps.data?.length ? <Empty title={find.trim() ? 'No one matches that search' : 'No people in this WFM group yet'} /> : (
         <div className="max-h-[420px] overflow-y-auto divide-y divide-[#F0F0EC] border border-[#E5E5E0] rounded-lg">
           {emps.data.map((e) => {
             const a = assign[e.id] ?? blankAssign;
             return (
               <div key={e.id} className="flex flex-wrap items-center justify-between gap-3 px-3 py-1.5">
-                <span className="text-[13px] min-w-[160px]">{e.name} <span className="text-[11px] text-[#737373] font-mono">{e.employeeNumber}</span></span>
+                <span className="text-[13px] min-w-[160px]">{e.name} <span className="text-[11px] text-[#6B6B6B] font-mono">{e.employeeNumber}</span></span>
                 <div className="flex flex-wrap items-center gap-2">
                   <Select disabled={!canWrite} value={a.crewName} onChange={(ev) => setAssign((s) => ({ ...s, [e.id]: { ...a, crewName: ev.target.value } }))} className="!w-auto min-w-[160px]">
                     <option value="">Not in this pattern</option>{pattern.crews.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
@@ -440,13 +443,14 @@ const MembersPanel: React.FC<{ pattern: RotationPattern; canWrite: boolean; temp
                       <option value="">Starts with the crew</option>{starts.map((s) => <option key={s.value} value={s.value}>Starts at {s.label}</option>)}
                     </Select>
                     <Input type="date" title="Joins on (optional)" disabled={!canWrite} value={a.effectiveFrom} onChange={(ev) => setAssign((s) => ({ ...s, [e.id]: { ...a, effectiveFrom: ev.target.value } }))} className="!w-auto" />
-                    <span className="text-[11px] text-[#737373]">to</span>
+                    <span className="text-[11px] text-[#6B6B6B]">to</span>
                     <Input type="date" title="Leaves after (optional)" disabled={!canWrite} value={a.effectiveTo} onChange={(ev) => setAssign((s) => ({ ...s, [e.id]: { ...a, effectiveTo: ev.target.value } }))} className="!w-auto" />
                   </>}
                 </div>
               </div>
             );
           })}
+          {emps.data.length >= shown && <div className="px-3 py-2"><button type="button" className="text-[12px] underline" onClick={() => setShown(shown + 200)}>Show more people</button></div>}
         </div>
       )}
       {canWrite && <Btn variant="primary" disabled={busy} onClick={save}>Save crew members</Btn>}
@@ -458,7 +462,7 @@ const MembersPanel: React.FC<{ pattern: RotationPattern; canWrite: boolean; temp
 const FillCard: React.FC<{ pattern: RotationPattern; canGenerate: boolean; go: (sub: string) => void }> = ({ pattern, canGenerate, go }) => {
   const { can } = useForecast();
   const pay = useApi<{ start: number }>(`/scheduling/rotations/pay-week?groupId=${pattern.wfmGroupId}`);
-  const emps = useApi<Employee[]>(`/workforce/employees?groupId=${pattern.wfmGroupId}&status=ACTIVE`);
+  const emps = useApi<{ people: number }>(`/workforce/employees/summary?groupId=${pattern.wfmGroupId}&status=ACTIVE`);
   const crew = useApi<RotationMember[]>(`/scheduling/rotations/${pattern.id}/members`, [pattern.id, pattern.memberCount]);
   const payStart = pay.data?.start ?? 0;
   const [from, setFrom] = useState(() => onOrAfter(pattern.anchorDate > todayIso() ? pattern.anchorDate : todayIso(), 0));
@@ -469,8 +473,7 @@ const FillCard: React.FC<{ pattern: RotationPattern; canGenerate: boolean; go: (
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [made, setMade] = useState<ScheduleVersion | null>(null);
-  const inCrew = new Set((crew.data ?? []).map((m) => m.employeeId));
-  const free = (emps.data ?? []).filter((e) => !inCrew.has(e.id));
+  const free = { length: Math.max(0, (emps.data?.people ?? 0) - (crew.data?.length ?? 0)) };   // active people in the group who are not in a crew
   const go2 = async () => {
     setBusy(true); setError(''); setMade(null);
     try {
@@ -479,7 +482,7 @@ const FillCard: React.FC<{ pattern: RotationPattern; canGenerate: boolean; go: (
   };
   return (
     <Card title="Fill the gaps from the forecast" sub="The rotation covers the base. This builds a separate draft that schedules the people who are not in its crews, to cover only what the rotation leaves short. The rotation roster is not changed.">
-      <p className="text-[12px] text-[#525252]">{emps.data ? `${free.length} of ${emps.data.length} active people are not in this pattern's crews and can be scheduled.` : ''}{emps.data && free.length === 0 ? ' Add people to the WFM group, or take some out of the crews, first.' : ''}</p>
+      <p className="text-[12px] text-[#525252]">{emps.data ? `${free.length} of ${emps.data.people} active people are not in this pattern's crews and can be scheduled.` : ''}{emps.data && free.length === 0 ? ' Add people to the WFM group, or take some out of the crews, first.' : ''}</p>
       <div className="flex flex-wrap items-end gap-3">
         <Field label="From" hint={`Starts on a ${DOW_LONG[payStart]}, the pay week`}><Input type="date" value={from} onChange={(e) => setFrom(onOrAfter(e.target.value, payStart))} /></Field>
         <Field label="For"><Select value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} week{n > 1 ? 's' : ''}</option>)}</Select></Field>

@@ -263,6 +263,24 @@ describe('schedule quality', () => {
       const list = (await call(admin, 'GET', `/scheduling/versions?groupId=${ctx.group.id}`)).json.find((x: any) => x.id === ctx.v1.id);
       assert.ok(list.stale.length >= 1);
     });
+    it('says how much the demand changed, and rebuilds a draft on the new forecast with the same settings, keeping the old schedule', async () => {
+      const ch = (await call(admin, 'GET', `/scheduling/versions/${ctx.v1.id}/forecast-change`)).json;
+      assert.equal(ch.available, true, JSON.stringify(ch));
+      assert.ok(ch.builtHours > 0 && ch.nowHours > 0, JSON.stringify(ch));
+      assert.equal(typeof ch.changePercent, 'number'); assert.equal(typeof ch.coverageNow, 'number'); assert.ok(ch.forecastName);
+      const before = (await call(admin, 'GET', `/scheduling/versions?groupId=${ctx.group.id}`)).json.length;
+      const r = await call(admin, 'POST', `/scheduling/versions/${ctx.v1.id}/regenerate`, {});
+      assert.equal(r.status, 201, r.text); assert.equal(r.json.kind, 'VERSION');
+      const nv = r.json.version;
+      assert.equal(nv.status, 'DRAFT'); assert.notEqual(nv.id, ctx.v1.id); assert.equal(nv.periodStart, ctx.v1.periodStart);
+      assert.deepEqual(nv.settings.weights, ctx.v1.settings.weights, 'same priorities');
+      assert.equal(nv.settings.weekStart, ctx.v1.settings.weekStart, 'same pay week');
+      assert.notEqual(nv.forecastVersionId, ctx.v1.forecastVersionId, 'built on the newer forecast');
+      assert.deepEqual(nv.stale, [], 'and it is current');
+      assert.equal((await call(admin, 'GET', `/scheduling/versions?groupId=${ctx.group.id}`)).json.length, before + 1, 'the old schedule is kept');
+      assert.equal((await call(admin, 'GET', `/scheduling/versions/${ctx.v1.id}`)).status, 200);
+      await call(admin, 'DELETE', `/scheduling/versions/${nv.id}`);
+    });
     it('can be published as before, and with checks enforced need a reason', async () => {
       const fresh = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: ctx.from, weeks: 1, timeLimitSec: 20 });
       assert.equal(fresh.status, 201, fresh.text);

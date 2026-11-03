@@ -1,14 +1,23 @@
 /**
- * AG Grid Enterprise, themed to the platform palette. The licence key is read from VITE_AG_GRID_LICENSE;
- * without it the grid still works but shows AG Grid's evaluation watermark.
+ * AG Grid Community (MIT licence), themed to the platform palette. Nothing here needs a licence key: no screen uses a paid (Enterprise) feature, and the
+ * Enterprise package is not installed, so there is no evaluation watermark and nothing to buy for a production build.
  */
 import React from 'react';
 import { AgGridReact, AgGridReactProps } from 'ag-grid-react';
-import { AllEnterpriseModule, LicenseManager, ModuleRegistry, themeQuartz } from 'ag-grid-enterprise';
+import {
+  ModuleRegistry, themeQuartz, ClientSideRowModelModule, ClientSideRowModelApiModule, InfiniteRowModelModule, RowSelectionModule, CellStyleModule, RowStyleModule,
+  TextEditorModule, NumberEditorModule, CheckboxEditorModule, SelectEditorModule, LargeTextEditorModule, CustomEditorModule, TextFilterModule, NumberFilterModule,
+  DateFilterModule, QuickFilterModule, ExternalFilterModule, ColumnAutoSizeModule, PinnedRowModule, ColumnApiModule, RenderApiModule, CellApiModule, RowApiModule,
+  ScrollApiModule, EventApiModule, TooltipModule, ValidationModule, LocaleModule, PaginationModule, RowAutoHeightModule,
+} from 'ag-grid-community';
 
-ModuleRegistry.registerModules([AllEnterpriseModule]);
-const licence = (import.meta as any).env?.VITE_AG_GRID_LICENSE as string | undefined;
-if (licence) LicenseManager.setLicenseKey(licence);
+// Only what the screens use (the full community bundle also carries export, undo/redo, drag-and-drop and more that nothing here needs): a smaller download on first load.
+ModuleRegistry.registerModules([
+  ClientSideRowModelModule, ClientSideRowModelApiModule, InfiniteRowModelModule, RowSelectionModule, CellStyleModule, RowStyleModule,
+  TextEditorModule, NumberEditorModule, CheckboxEditorModule, SelectEditorModule, LargeTextEditorModule, CustomEditorModule, TextFilterModule, NumberFilterModule,
+  DateFilterModule, QuickFilterModule, ExternalFilterModule, ColumnAutoSizeModule, PinnedRowModule, ColumnApiModule, RenderApiModule, CellApiModule, RowApiModule,
+  ScrollApiModule, EventApiModule, TooltipModule, ValidationModule, LocaleModule, PaginationModule, RowAutoHeightModule,
+]);
 
 export const gridTheme = themeQuartz.withParams({
   fontFamily: 'inherit', fontSize: 13, foregroundColor: '#171717', backgroundColor: '#FFFFFF',

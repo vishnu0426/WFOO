@@ -1,17 +1,19 @@
 import { Router, type Request } from 'express';
-import bcrypt from 'bcryptjs';
+import { checkPassword, hashPassword } from '../passwordHash.ts';
 import { z } from 'zod';
 import { withTenant, raw } from '../db.ts';
-import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, me, permissionsFor, requires, revokeToken, signToken, type Principal, type Role } from '../auth.ts';
+import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, dropUserState, me, permissionsFor, requires, revokeToken, signToken, type Principal, type Role } from '../auth.ts';
 import { checkNewPassword } from '../passwordPolicy.ts';
 import { config } from '../config.ts';
 import { audit } from '../audit.ts';
 import { HttpError, bad, notFound, parse } from '../http.ts';
 import { dropCache, redis } from '../infra.ts';
+import { discoveryOn, DISCOVERY_OFF_MSG, ORG_REQUIRED_MSG, ORG_UNKNOWN_MSG, validOrgCode } from './orgLogin.ts';
 
 export const publicAuth = Router();
 export const authed = Router();
 
+const DUMMY_HASH = '$2b$12$bDvbNw7qj/0du6DHal8lJumzGh/JvA/5XCy91sJfOuCVHATP9E73G';   // a cost-12 hash of nothing anyone knows: a sign-in for a name that does not exist still costs one comparison
 const Login = z.object({ tenant: z.string().optional(), username: z.string().min(1), password: z.string().min(1) });
 
 async function sessionFor(tenantId: string, userId: string) {
@@ -33,21 +35,67 @@ export async function changeOwnPassword(p: Principal, req: Request, currentPassw
   const limitKey = `wfm:pwchange:${p.userId}`;
   if ((Number(await redis.get(limitKey).catch(() => 0)) || 0) >= 5) throw new HttpError(429, 'TOO_MANY_ATTEMPTS', 'Too many attempts. Try again in 15 minutes.');
   const user = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT id, username, display_name, role, password_hash FROM users WHERE tenant_id = :t AND id = $1', [p.userId]));
-  if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+  if (!user || !(await checkPassword(currentPassword, user.passwordHash))) {
     await redis.multi().incr(limitKey).expire(limitKey, 900).exec().catch(() => {});
     throw bad('Current password is incorrect.');
   }
   const problem = checkNewPassword(newPassword, { current: currentPassword, username: user.username });
   if (problem) throw bad(problem);
   await withTenant(p.tenantId, async (tx) => {
-    await tx.exec('UPDATE users SET password_hash = $2, must_change_password = false, password_changed_at = now() WHERE tenant_id = :t AND id = $1', [p.userId, await bcrypt.hash(newPassword, 12)]);
+    await tx.exec('UPDATE users SET password_hash = $2, must_change_password = false, password_changed_at = now() WHERE tenant_id = :t AND id = $1', [p.userId, await hashPassword(newPassword, 12)]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: p.userId, entityName: user.username, diffSummary: p.mustChangePassword ? 'Replaced a temporary password' : 'Changed their own password' });
   });
   await redis.del(limitKey).catch(() => {});
+  await dropUserState(p.tenantId, p.userId);
   if (p.mustChangePassword) await revokeToken(p);          // a temporary-password session ends here; the fresh token below replaces it. A voluntary change leaves the current session alone.
   const token = signToken({ userId: user.id, tenantId: p.tenantId, role: user.role, name: user.displayName, username: user.username });
   return { token, ...(await sessionFor(p.tenantId, user.id)) };
 }
+
+
+// ---------------------------------------------------------------- signing in without knowing the organisation code
+
+/** A few lookups per address per quarter of an hour: enough for a person, too few for someone guessing codes or email addresses. */
+async function allow(req: Request, what: string, max: number) {
+  const key = `wfm:${what}:${req.ip}`;
+  const n = Number(await redis.get(key).catch(() => 0)) || 0;
+  if (n >= max) throw new HttpError(429, 'TOO_MANY_ATTEMPTS', 'Too many tries from this device. Wait a few minutes and try again.');
+  await redis.multi().incr(key).expire(key, 900).exec().catch(() => {});
+}
+
+/** What the sign-in screen needs before anyone types: whether there is only one organisation (then no code is needed), and whether email lookup is on. */
+publicAuth.get('/auth/login-options', async (req, res) => {
+  await allow(req, 'login-options', 60);                 // anyone can ask, so it is limited like the other lookups
+  const tenants = await raw<{ code: string; name: string }>('SELECT code, name FROM tenants ORDER BY name');
+  // the organisation's name is only given out while lookups are switched on (LOGIN_DISCOVERY=false keeps it private; the sign-in screen then asks for the code)
+  res.json({ singleOrganisation: tenants.length === 1 && discoveryOn() ? { code: tenants[0].code, name: tenants[0].name } : null, discovery: discoveryOn() });
+});
+
+/** Is this a real organisation code? Used when the code comes from a link, a web address or the last sign-in on the device. Says only its name. */
+publicAuth.get('/auth/org/:code', async (req, res) => {
+  await allow(req, 'org', 60);
+  const code = String(req.params.code ?? '');
+  const t = validOrgCode(code) ? (await raw<{ code: string; name: string }>('SELECT code, name FROM tenants WHERE lower(code) = lower($1)', [code.trim()]))[0] : undefined;
+  if (!t) throw new HttpError(404, 'ORG_UNKNOWN', ORG_UNKNOWN_MSG);
+  res.json({ code: t.code, name: t.name });
+});
+
+/**
+ * "Find my organisation": the person types their work email (or username) and gets the organisations that have an active account for it, to choose from.
+ * It does reveal that an account exists to whoever asks, so it is rate limited and can be switched off with LOGIN_DISCOVERY=false.
+ */
+publicAuth.post('/auth/discover', async (req, res) => {
+  if (!discoveryOn()) throw new HttpError(404, 'NOT_AVAILABLE', DISCOVERY_OFF_MSG);
+  const b = parse(z.object({ identifier: z.string().trim().min(3).max(120) }), req.body);
+  await allow(req, 'discover', 15);
+  const id = b.identifier.toLowerCase(), normalized = id.replace(/[^a-z0-9._-]+/g, '');
+  const found: { code: string; name: string }[] = [];
+  for (const t of await raw<{ id: string; code: string; name: string }>('SELECT id, code, name FROM tenants ORDER BY name')) {
+    const hit = await withTenant(t.id, (tx) => tx.one<{ id: string }>(`SELECT id FROM users WHERE tenant_id = :t AND status = 'ACTIVE' AND (lower(email) = $1 OR lower(username) = $1 OR lower(username) = $2) LIMIT 1`, [id, normalized]));
+    if (hit) found.push({ code: t.code, name: t.name });
+  }
+  res.json({ organisations: found });
+});
 
 publicAuth.post('/auth/login', async (req, res) => {
   const b = parse(Login, req.body);
@@ -58,16 +106,28 @@ publicAuth.post('/auth/login', async (req, res) => {
 
   const tenants = await raw<{ id: string; code: string }>('SELECT id, code FROM tenants');
   const tenant = b.tenant ? tenants.find((t) => t.code.toLowerCase() === b.tenant!.toLowerCase()) : tenants.length === 1 ? tenants[0] : undefined;
-  if (!tenant) throw bad(b.tenant ? 'Unknown organisation' : 'Say which organisation to sign in to (tenant)');
+  if (!tenant) throw b.tenant ? new HttpError(400, 'ORG_UNKNOWN', ORG_UNKNOWN_MSG) : new HttpError(400, 'ORG_REQUIRED', ORG_REQUIRED_MSG);
 
   // a username is derived from the employee number with anything outside a-z0-9._- stripped (see selfAdmin's /logins),
   // so "1002@agnoshin.com" (the employee number, easy to type by habit) and "1002agnoshin.com" (the real username)
   // look almost identical -- accept either, rather than let that trip someone up every time they sign in
   const normalized = b.username.toLowerCase().replace(/[^a-z0-9._-]+/g, '');
-  const user = await withTenant(tenant.id, (tx) => tx.one<any>('SELECT * FROM users WHERE tenant_id = :t AND (lower(username) = lower($1) OR lower(username) = $2)', [b.username, normalized]));
-  const ok = user && user.status === 'ACTIVE' && (await bcrypt.compare(b.password, user.passwordHash));
+  let user = await withTenant(tenant.id, (tx) => tx.one<any>('SELECT * FROM users WHERE tenant_id = :t AND (lower(username) = lower($1) OR lower(username) = $2)', [b.username, normalized]));
+  // a work email works as a username too, so the person who found their organisation by email can carry on with it; only when it names exactly one account
+  if (!user && b.username.includes('@')) {
+    const byEmail = await withTenant(tenant.id, (tx) => tx.q<any>('SELECT * FROM users WHERE tenant_id = :t AND lower(email) = lower($1) LIMIT 2', [b.username.trim()]));
+    if (byEmail.length === 1) user = byEmail[0];
+  }
+  // an organisation can require single sign-on; the administrator keeps a password so a broken identity provider cannot lock everyone out
+  const sso = await withTenant(tenant.id, (tx) => tx.one<{ enabled: boolean; passwordLogin: boolean }>('SELECT enabled, password_login FROM sso_providers WHERE tenant_id = :t'));
+  if (sso?.enabled && !sso.passwordLogin && user && user.role !== 'WFM_ADMIN') throw new HttpError(403, 'SSO_REQUIRED', 'Your organisation uses single sign-on. Use the single sign-on button.');
+  // always run one bcrypt comparison, so the time taken does not tell an outsider whether the username exists
+  const compared = await checkPassword(b.password, user?.passwordHash ?? DUMMY_HASH);
+  const ok = user && user.status === 'ACTIVE' && compared;
   if (!ok) {
     await redis.multi().incr(limitKey).expire(limitKey, 900).exec().catch(() => {});
+    // failed attempts are evidence for security reviews: record them (and the lock-out) against the account when there is one
+    if (user) await withTenant(tenant.id, (tx) => audit(tx, { userId: user.id, tenantId: tenant.id, role: user.role, name: user.displayName, username: user.username, jti: '' }, req, { action: 'LOGIN_FAILED', entityType: 'USER', entityId: user.id, entityName: user.username, after: { reason: user.status !== 'ACTIVE' ? 'account disabled' : 'wrong password', attempt: tries + 1 } })).catch(() => {});
     throw new HttpError(401, 'INVALID_CREDENTIALS', 'Invalid username or password');
   }
   await redis.del(limitKey).catch(() => {});
@@ -111,7 +171,7 @@ authed.post('/users', requires('users:write'), async (req, res) => {
   const created = await withTenant(p.tenantId, async (tx) => {
     const u = await tx.one<any>(
       `INSERT INTO users (tenant_id, username, display_name, email, role, password_hash, employee_id, must_change_password) VALUES (:t, $1, $2, $3, $4, $5, $6, $7::boolean) RETURNING id, username, display_name AS user_name, email, role, status, employee_id`,
-      [b.username, b.displayName, b.email ?? null, b.role, await bcrypt.hash(b.password, 12), b.employeeId ?? null, config.forcePasswordChange]);
+      [b.username, b.displayName, b.email ?? null, b.role, await hashPassword(b.password, 12), b.employeeId ?? null, config.forcePasswordChange]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'USER', entityId: u!.id, entityName: b.username, after: { username: b.username, role: b.role } });
     return u;
   });
@@ -124,7 +184,7 @@ authed.patch('/users/:id', requires('users:write'), async (req, res) => {
     const before = await tx.one<any>('SELECT id, username, display_name, email, role, status FROM users WHERE tenant_id = :t AND id = $1', [id]);
     if (!before) throw notFound('User');
     if (id === p.userId && (b.role && b.role !== before.role || b.status === 'DISABLED')) throw bad('You cannot change your own role or disable your own account');
-    const hash = b.password ? await bcrypt.hash(b.password, 12) : null;
+    const hash = b.password ? await hashPassword(b.password, 12) : null;
     const after = await tx.one<any>(
       `UPDATE users SET display_name = coalesce($2, display_name), email = CASE WHEN $3::boolean THEN $4 ELSE email END, role = coalesce($5, role),
               status = coalesce($6, status), password_hash = coalesce($7, password_hash), must_change_password = must_change_password OR $8::boolean WHERE tenant_id = :t AND id = $1
@@ -133,6 +193,7 @@ authed.patch('/users/:id', requires('users:write'), async (req, res) => {
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: id, entityName: before.username, before: { role: before.role, status: before.status }, after: { role: after!.role, status: after!.status, passwordReset: !!b.password } });
     return after;
   });
+  await dropUserState(p.tenantId, id);
   res.json(out);
 });
 

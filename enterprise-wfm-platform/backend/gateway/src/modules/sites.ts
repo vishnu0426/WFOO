@@ -14,8 +14,9 @@ import { audit } from '../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { dropCache } from '../infra.ts';
 import { aggregateStaff, dayRange, loadGroup, runStaffing, versionRows, type Group } from './forecast/service.ts';
-import { liveStats, loadVersion } from './scheduleRoutes.ts';
+import { lightLive, loadVersion, POOL_WHERE } from './scheduleRoutes.ts';
 import { hhmm } from './workforceRoutes.ts';
+import { tzFmt } from '../tzFormat.ts';
 
 export const sitesRoutes = Router();    // mounted at /config
 export const rollupRoutes = Router();   // mounted at /scheduling/rollup
@@ -130,7 +131,7 @@ sitesRoutes.get('/groups/:id/pool', requires('config:read'), async (req, res) =>
 
 const offsetMin = (tz: string, day: string) => {
   const [y, m, d] = day.split('-').map(Number), at = new Date(Date.UTC(y, m - 1, d, 12));
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at);
+  const parts = tzFmt('en-GB', tz, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(at);
   let diff = (+parts.find((x) => x.type === 'hour')!.value * 60 + +parts.find((x) => x.type === 'minute')!.value) - 12 * 60;
   if (diff > 720) diff -= 1440; if (diff < -720) diff += 1440;
   return diff;
@@ -145,21 +146,37 @@ rollupRoutes.get('/', requires('schedule:read'), async (req, res) => {
      WHERE v.tenant_id = :t AND v.status = 'PUBLISHED' AND v.period_start <= $2::date AND v.period_end >= $1::date ORDER BY v.wfm_group_id, v.seq DESC`, [q.from, q.to]));
   const days = dayRange(q.from, q.to, 60);
   const groups: any[] = [];
-  const loaded: { row: any; v: any; live: Awaited<ReturnType<typeof liveStats>> }[] = [];
-  for (const row of list) { const v = await withTenant(p.tenantId, (tx) => loadVersion(tx, row.id)); loaded.push({ row, v, live: await liveStats(p.tenantId, v) }); }
+  // Each group needs its requirement, its shifts and how many people are free each day: not every person's rules and a check of every shift, which is what made this
+  // screen take as long as the groups are big. The free count is one query per group.
+  const freeByDay = async (groupId: string, versionId: string, from: string, to: string) => {
+    const rows = await withTenant(p.tenantId, (tx) => tx.q<{ day: string; free: number }>(
+      `SELECT d::date::text AS day, count(*)::int AS free
+         FROM generate_series($2::date, $3::date, interval '1 day') d, employees e
+        WHERE e.tenant_id = :t AND e.status = 'ACTIVE' AND ${POOL_WHERE}
+          AND NOT EXISTS (SELECT 1 FROM schedule_shifts s WHERE s.tenant_id = :t AND s.employee_id = e.id AND s.day = d::date AND s.version_id = $4)
+          AND NOT EXISTS (SELECT 1 FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id WHERE s.tenant_id = :t AND s.employee_id = e.id AND s.day = d::date
+                            AND v.status = 'PUBLISHED' AND v.wfm_group_id <> $1 AND (v.publish_through IS NULL OR s.day <= v.publish_through))
+          AND NOT EXISTS (SELECT 1 FROM time_off t WHERE t.tenant_id = :t AND t.employee_id = e.id AND t.status = 'APPROVED' AND t.start_day <= d::date AND t.end_day >= d::date)
+        GROUP BY d ORDER BY d`, [groupId, from, to, versionId]));
+    return new Map(rows.map((r) => [r.day, r.free]));
+  };
+  const loaded: { row: any; v: any; live: Awaited<ReturnType<typeof lightLive>> & { free: Map<string, number> } }[] = [];
+  for (const row of list) {
+    const v = await withTenant(p.tenantId, (tx) => loadVersion(tx, row.id));
+    const [light, free] = await Promise.all([lightLive(p.tenantId, v), freeByDay(v.wfmGroupId, v.id, v.periodStart, v.periodEnd)]);
+    loaded.push({ row, v, live: { ...light, free } });
+  }
   // the chart day: the one asked for if any schedule covers it, otherwise the first day that has data, so the chart is never blank
   const chartDay = q.day && loaded.some((l) => l.live.days.includes(q.day!)) ? q.day : days.find((d) => loaded.some((l) => l.live.days.includes(d))) ?? null;
   for (const { row, v, live } of loaded) {
     const idx = new Map(live.days.map((d, i) => [d, i]));
     const sched = new Array(live.days.length * SPD).fill(0);
     for (const s of live.shifts) { const i = idx.get(s.day); if (i === undefined) continue; for (let g = i * SPD + s.startSlot; g < Math.min(sched.length, i * SPD + s.startSlot + s.lengthSlots); g++) sched[g]++; }
-    const busyElsewhere = (d: string) => new Set(live.ctx.others.filter((o) => o.day === d).map((o) => o.employeeId));
     const per = days.filter((d) => idx.has(d)).map((d) => {
       const i = idx.get(d)!;
       let need = 0, have = 0, under = 0, underIntervals = 0;
       for (let s = 0; s < SPD; s++) { const g = i * SPD + s, r = live.required[g]; need += r; have += sched[g]; if (sched[g] < r) { under += r - sched[g]; underIntervals++; } }
-      const working = new Set(live.shifts.filter((s) => s.day === d).map((s) => s.employeeId)), off = busyElsewhere(d);
-      const free = live.ctx.employees.filter((e: any) => e.status === 'ACTIVE' && !working.has(e.id) && !off.has(e.id) && !live.ctx.timeOff.some((o: any) => o.employeeId === e.id && o.startDay <= d && o.endDay >= d)).length;
+      const free = live.free.get(d) ?? 0;
       return { day: d, requiredHours: r1(need / 4), scheduledHours: r1(have / 4), coveragePercent: need ? r1((1 - under / need) * 100) : 100, underIntervals, underSlots: r1(under), needSlots: r1(need), available: free };
     });
     const series = chartDay && idx.has(chartDay) ? (() => {

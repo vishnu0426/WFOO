@@ -117,6 +117,17 @@ describe('analyseShortage', () => {
     assert.ok(r.blocks[0].actions.some((a) => a.type === 'OVERTIME'));
     assert.equal(r.topCauses[0].key, 'NOT_ALLOWED');
   });
+  it('proposes a shift template for a window no template reaches, and says how many people it would free up', () => {
+    const required = new Array(days.length * SPD).fill(0);
+    for (let s = 0; s < 32; s++) required[s] = 2;                       // 00:00-08:00, and the only template starts at 16:00
+    const r = analyseShortage({ ctx, days, shifts: [], required, helpers, targetCoverage: 90, coveragePercent: 0 });
+    const a = r.blocks[0].actions.find((x) => x.type === 'ADD_TEMPLATE');
+    assert.ok(a?.proposal, 'a proposal is offered');
+    assert.equal(a!.proposal!.earliestStart, '00:00');
+    assert.equal(a!.proposal!.durationHours, 8);
+    assert.ok(a!.proposal!.days[0].eligible >= 2, 'people blocked only by the missing template could take it');
+    assert.ok(a!.proposal!.coverageAfter > a!.proposal!.coverageBefore);
+  });
   it('says so when the target is met', () => {
     const required = new Array(days.length * SPD).fill(0);
     const r = analyseShortage({ ctx, days, shifts: [], required, helpers, targetCoverage: 90, coveragePercent: 100 });

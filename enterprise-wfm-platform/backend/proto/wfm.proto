@@ -9,6 +9,10 @@ service Engine {
   rpc Intraday(IntradayRequest) returns (IntradayResponse);
   // phase 2: shift assignment by constraint programming (OR-Tools CP-SAT)
   rpc Schedule(ScheduleRequest) returns (ScheduleResponse);
+  // Same solve, but reports progress window by window and stops when the caller cancels the call.
+  rpc ScheduleStream(ScheduleRequest) returns (stream ScheduleEvent);
+  // Plays random call arrivals against a schedule's staffing and reports what customers would experience.
+  rpc Simulate(SimRequest) returns (SimResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +164,7 @@ message SchedEmployee {
   int32 prior_week_slots = 12;   // paid slots already worked earlier in day 0's calendar week
   int32 prior_week_days = 13;    // shifts already worked earlier in that week
   int32 prior_lead_days = 14;    // calendar days of that week that fall before day 0 and were looked at (0: no history for this person)
+  int32 prior_weekend = 15;      // weekend shifts worked in the windows solved before this one, so weekend fairness spans the whole plan
 }
 
 // A shift this person could work: employee x day x template x start time, already filtered for availability and time off.
@@ -193,6 +198,7 @@ message ScheduleRequest {
   repeated SkillRequirement skill_requirements = 17;   // two or more: coverage is judged per skill instead of as one headcount
   bool wrap = 18;                           // assume the period repeats: a last-day shift that runs past midnight covers the first hours of day 0
   int32 week_start = 19;                    // weekday a pay week begins on, Monday = 0 (the default) ... Sunday = 6; weekly hour and day limits follow it
+  string backend = 20;                      // solver to use: empty/AUTO = the engine's failover chain; CPSAT | GUROBI | HIGHS | GREEDY | TIMEFOLD, or a comma list tried in order
 }
 
 // People needed per slot for one skill (days * 96 values).
@@ -220,4 +226,66 @@ message ScheduleResponse {
   int32 constraints = 8;
   int32 under_slots = 9;         // person-slots still uncovered
   int32 over_slots = 10;
+  string backend = 11;           // which solver produced this answer
+  repeated string attempts = 12; // every solver tried, in order, and how each ended ("cpsat: UNKNOWN", "gurobi: error ...")
+}
+
+// Progress of a long solve. The last event has done = true and carries the result.
+message ScheduleEvent {
+  int32 chunk = 1;               // windows finished
+  int32 chunks = 2;              // windows in all
+  string phase = 3;              // PREPARING | SOLVING | DONE
+  string note = 4;
+  bool done = 5;
+  ScheduleResponse result = 6;
+}
+
+// ---------------------------------------------------------------------------
+// simulation: a schedule stress-tested against random call arrivals
+// ---------------------------------------------------------------------------
+
+// One 15-minute interval of a contiguous stretch: expected calls, handling time and the people on the phones.
+message SimInterval {
+  double volume = 1;             // calls expected in the interval
+  double aht_sec = 2;
+  double agents = 3;             // people available to take calls (already net of breaks and meals)
+}
+
+message SimRequest {
+  repeated SimInterval intervals = 1;   // contiguous, 96 per day
+  int32 answer_sec = 2;                 // service level threshold
+  int32 patience_sec = 3;               // how long a caller waits before giving up (mean)
+  int32 replications = 4;               // independent random runs of the whole stretch
+  double volume_cv = 5;                 // forecast error: the stretch's volume is scaled by a random factor with this spread (0 = the forecast is exact)
+  int32 seed = 6;
+  int32 slots_per_day = 7;              // 96 by default; used to report per day
+}
+
+message SimIntervalResult {
+  double sl_mean = 1;            // share answered within the threshold, averaged over the replications
+  double sl_low = 2;             // the 10th percentile: a bad but not freak run
+  double asa_sec = 3;
+  double abandon = 4;            // share of callers who gave up
+  double occupancy = 5;
+  double offered = 6;            // average calls offered
+}
+
+message SimDay {
+  double sl_mean = 1;
+  double sl_low = 2;
+  double abandon = 3;
+  double occupancy = 4;
+  double offered = 5;
+}
+
+message SimResponse {
+  repeated SimIntervalResult intervals = 1;
+  repeated SimDay days = 2;
+  double sl_mean = 3;
+  double abandon = 4;
+  double occupancy = 5;
+  double offered = 6;
+  int32 replications = 7;
+  double wall_sec = 8;
+  repeated double sl_by_rep = 9;  // service level of each replication over the whole stretch
 }

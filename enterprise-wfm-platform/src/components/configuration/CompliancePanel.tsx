@@ -23,7 +23,7 @@ export const CompliancePanel: React.FC = () => {
   const catalog = useApi<Spec[]>('/compliance/catalog');
   const packs = useApi<Pack[]>('/compliance/packs', [tick]);
   const assigns = useApi<Assignment[]>('/compliance/assignments', [tick]);
-  const teams = useApi<Team[]>('/workforce/teams');
+  const teams = useApi<Team[]>('/workforce/teams?fields=pick');
   const [sel, setSel] = useState<string>('');
   const [draft, setDraft] = useState<Pack | null>(null);
   const [error, setError] = useState('');
@@ -63,7 +63,7 @@ export const CompliancePanel: React.FC = () => {
           {(packs.data ?? []).map((p) => (
             <button key={p.id} onClick={() => setSel(p.id)} className={`text-left p-3 rounded-lg border transition-colors ${sel === p.id ? 'border-[#171717] bg-[#FAFAF8]' : 'border-[#E5E5E0] hover:bg-[#FAFAF8]'}`}>
               <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-[13px]">{p.name}</span>{p.builtIn && <Pill tone="info">Ready-made</Pill>}</div>
-              <div className="text-[11px] text-[#737373] mt-1">{p.region || 'No region'} · {p.rules.length} rule{p.rules.length === 1 ? '' : 's'} · used in {p.usedBy} place{p.usedBy === 1 ? '' : 's'}</div>
+              <div className="text-[11px] text-[#6B6B6B] mt-1">{p.region || 'No region'} · {p.rules.length} rule{p.rules.length === 1 ? '' : 's'} · used in {p.usedBy} place{p.usedBy === 1 ? '' : 's'}</div>
             </button>
           ))}
         </div>
@@ -88,14 +88,14 @@ export const CompliancePanel: React.FC = () => {
                 const s = spec.get(r.type);
                 return (
                   <div key={r.id + i} className="p-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                    <div className="w-72 min-w-[16rem]"><div className="font-semibold text-[13px]">{s?.label ?? r.type}</div><div className="text-[11px] text-[#737373]">{s?.help}</div></div>
+                    <div className="w-72 min-w-[16rem]"><div className="font-semibold text-[13px]">{s?.label ?? r.type}</div><div className="text-[11px] text-[#6B6B6B]">{s?.help}</div></div>
                     <div className="flex flex-wrap items-center gap-3 flex-1">
                       {s?.params.map((p) => (
                         <label key={p.key} className="flex items-center gap-1.5 text-[12px] text-[#525252]">{p.label}
                           {p.kind === 'boolean'
                             ? <input type="checkbox" checked={!!r.params[p.key]} disabled={ro} onChange={(e) => setParam(i, p.key, e.target.checked)} />
                             : <Input className="!w-24" type={p.kind === 'time' ? 'time' : 'number'} min={p.min} max={p.max} step={p.kind === 'number' && p.max && p.max <= 24 ? 0.5 : 1} value={r.params[p.key]} disabled={ro} onChange={(e) => setParam(i, p.key, p.kind === 'number' ? Number(e.target.value) : e.target.value)} />}
-                          {p.unit && <span className="text-[#737373]">{p.unit}</span>}
+                          {p.unit && <span className="text-[#6B6B6B]">{p.unit}</span>}
                         </label>
                       ))}
                     </div>
@@ -103,7 +103,7 @@ export const CompliancePanel: React.FC = () => {
                       <Select className="!w-auto" value={r.severity} disabled={ro || s?.informational} onChange={(e) => setRule(i, { severity: e.target.value as Rule['severity'] })} aria-label="Severity">
                         <option value="BLOCK">Blocks publishing</option><option value="WARN">Warns only</option>
                       </Select>
-                      {!ro && <button aria-label="Remove rule" className="text-[#737373] hover:text-[#C84A4A]" onClick={() => setDraft({ ...draft, rules: draft.rules.filter((_, j) => j !== i) })}><Trash2 className="w-4 h-4" /></button>}
+                      {!ro && <button aria-label="Remove rule" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => setDraft({ ...draft, rules: draft.rules.filter((_, j) => j !== i) })}><Trash2 className="w-4 h-4" /></button>}
                     </div>
                   </div>
                 );
@@ -116,7 +116,7 @@ export const CompliancePanel: React.FC = () => {
                 <option value="">Add a rule…</option>
                 {(catalog.data ?? []).map((s) => <option key={s.type} value={s.type}>{s.label}</option>)}
               </Select>
-              <span className="text-[11px] text-[#737373]">A rule that blocks stops publishing and the scheduler leaves out shifts that would break it. A warning is only reported.</span>
+              <span className="text-[11px] text-[#6B6B6B]">A rule that blocks stops publishing and the scheduler leaves out shifts that would break it. A warning is only reported.</span>
             </div>
           )}
         </Card>
@@ -125,10 +125,10 @@ export const CompliancePanel: React.FC = () => {
       <Card title="Where each pack applies" sub="The most specific choice wins: a team's pack, else its WFM group's, else the organisation's. With none chosen, only the scheduling rules and each person's contract apply.">
         <div className="space-y-3 max-w-3xl">
           <AssignRow label="Whole organisation" value={at('TENANT', null)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('TENANT', null, v)} />
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373] pt-2">WFM groups</div>
-          {groups.length === 0 && <p className="text-[12px] text-[#737373]">No WFM groups yet.</p>}
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] pt-2">WFM groups</div>
+          {groups.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No WFM groups yet.</p>}
           {groups.map((g) => <AssignRow key={g.id} label={g.name} value={at('GROUP', g.id)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('GROUP', g.id, v)} />)}
-          {(teams.data?.length ?? 0) > 0 && <div className="text-[11px] font-semibold uppercase tracking-wider text-[#737373] pt-2">Teams</div>}
+          {(teams.data?.length ?? 0) > 0 && <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] pt-2">Teams</div>}
           {(teams.data ?? []).map((t) => <AssignRow key={t.id} label={t.name} value={at('TEAM', t.id)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('TEAM', t.id, v)} />)}
         </div>
       </Card>

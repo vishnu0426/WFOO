@@ -78,7 +78,7 @@ export const CoverageView: React.FC<{ version: ScheduleVersion; versions: Schedu
       <button onClick={toggle} className="w-full flex items-center justify-between px-4 py-3 text-left">
         <div>
           <div className="text-[14px] font-semibold text-[#171717]">Coverage against the forecast</div>
-          <div className="text-[12px] text-[#737373]">How many people are scheduled against how many are needed. Click any interval to see who is working it and why others are not.</div>
+          <div className="text-[12px] text-[#6B6B6B]">How many people are scheduled against how many are needed. Click any interval to see who is working it and why others are not.</div>
         </div>
         <span className="text-[12px] text-[#525252]">{open ? 'Hide' : 'Show'}</span>
       </button>
@@ -101,7 +101,7 @@ export const CoverageView: React.FC<{ version: ScheduleVersion; versions: Schedu
             {tab === 'DAY' && (
               <>
                 <Seg options={[{ id: '15', label: '15 min' }, { id: '30', label: '30 min' }, { id: '60', label: 'Hour' }]} value={grain} onChange={setGrain} />
-                <label className="flex items-center gap-1.5 text-[12px]" title="Shrinkage is time people are scheduled but not on the phones (breaks, training, absence). Ticked, both lines show people on the phones."><input type="checkbox" checked={onPhones} onChange={(e) => setOnPhones(e.target.checked)} />People on the phones <span className="text-[#737373]">(after {Math.round((cov.data?.shrinkage ?? 0) * 100)}% shrinkage)</span></label>
+                <label className="flex items-center gap-1.5 text-[12px]" title="Shrinkage is time people are scheduled but not on the phones (breaks, training, absence). Ticked, both lines show people on the phones."><input type="checkbox" checked={onPhones} onChange={(e) => setOnPhones(e.target.checked)} />People on the phones <span className="text-[#6B6B6B]">(after {Math.round((cov.data?.shrinkage ?? 0) * 100)}% shrinkage)</span></label>
                 <label className="flex items-center gap-1.5 text-[12px]" title="What share of calls would be answered in time with this many people, from the forecast volume."><input type="checkbox" checked={showSL} onChange={(e) => setShowSL(e.target.checked)} />Expected service level</label>
                 {others.length > 0 && (
                   <label className="flex items-center gap-1.5 text-[12px]">Compare with
@@ -146,7 +146,7 @@ export const CoverageView: React.FC<{ version: ScheduleVersion; versions: Schedu
                 </ResponsiveContainer>
               </div>
               {/* how far out each interval is: easier to read than the gap between two lines */}
-              <div className="mt-1 text-[11px] text-[#737373]">How far from the need, per interval: above zero is surplus, below is a shortage.</div>
+              <div className="mt-1 text-[11px] text-[#6B6B6B]">How far from the need, per interval: above zero is surplus, below is a shortage.</div>
               <div style={{ height: 120 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={rows} margin={{ top: 4, right: showSL ? 48 : 12, bottom: 0, left: 0 }} onClick={onChartClick} style={{ cursor: 'pointer' }}>
@@ -162,7 +162,7 @@ export const CoverageView: React.FC<{ version: ScheduleVersion; versions: Schedu
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              {cov.data?.projected && <p className="mt-2 text-[11px] text-[#B7791F] bg-[#F5EBD9] border border-[#E9D9B4] rounded px-2.5 py-1.5">This day is beyond the short-term forecast's reach. Its requirement is projected from the long-term forecast, so treat it with less confidence.</p>}
+              {cov.data?.projected && <p className="mt-2 text-[11px] text-[#8F6200] bg-[#F5EBD9] border border-[#E9D9B4] rounded px-2.5 py-1.5">This day is beyond the short-term forecast's reach. Its requirement is projected from the long-term forecast, so treat it with less confidence.</p>}
             </div>
           )}
 
@@ -199,10 +199,10 @@ const Tip: React.FC<any> = ({ active, payload, label, showSL, compareSeq }) => {
     <div className="rounded-md border border-[#E5E5E0] bg-white px-3 py-2 text-[12px] shadow-md">
       <div className="font-semibold">{label}</div>
       <div>Needed <b>{p.needed}</b> · Scheduled <b>{p.scheduled}</b></div>
-      <div className={p.delta < 0 ? 'text-[#C84A4A] font-medium' : p.delta > 0 ? 'text-[#B7791F]' : 'text-[#2F7D5A]'}>{p.delta < 0 ? `${-p.delta} short` : p.delta > 0 ? `${p.delta} over` : 'exactly covered'}</div>
+      <div className={p.delta < 0 ? 'text-[#BC3F3F] font-medium' : p.delta > 0 ? 'text-[#8F6200]' : 'text-[#2A7553]'}>{p.delta < 0 ? `${-p.delta} short` : p.delta > 0 ? `${p.delta} over` : 'exactly covered'}</div>
       {p.compare !== undefined && <div className="text-[#4F6F8F]">v{compareSeq}: {p.compare}</div>}
-      {showSL && p.sl !== null && p.sl !== undefined && <div className="text-[#2F7D5A]">Expected service level {p.sl}%</div>}
-      <div className="text-[#737373] mt-1">Click for who is working it</div>
+      {showSL && p.sl !== null && p.sl !== undefined && <div className="text-[#2A7553]">Expected service level {p.sl}%</div>}
+      <div className="text-[#6B6B6B] mt-1">Click for who is working it</div>
     </div>
   );
 };
@@ -229,8 +229,8 @@ export const Heatmap: React.FC<{ heat: Cov['heat']; daily: Cov['daily']; onPick:
         <div className="min-w-[760px]">
           <div className="grid" style={{ gridTemplateColumns: '120px repeat(24, minmax(0, 1fr)) 56px' }}>
             <div />
-            {Array.from({ length: 24 }, (_, h) => <div key={h} className="text-[10px] text-[#737373] text-center pb-1">{String(h).padStart(2, '0')}</div>)}
-            <div className="text-[10px] text-[#737373] text-right pb-1">Covered</div>
+            {Array.from({ length: 24 }, (_, h) => <div key={h} className="text-[10px] text-[#6B6B6B] text-center pb-1">{String(h).padStart(2, '0')}</div>)}
+            <div className="text-[10px] text-[#6B6B6B] text-right pb-1">Covered</div>
             {heat.map((r) => {
               const cov = daily.find((d) => d.day === r.day);
               return (
@@ -264,7 +264,7 @@ const IntervalPanel: React.FC<{ data: Interval | null; loading: boolean; picked:
         <div className="font-semibold">{dayName(picked.day)} · {hhmm(picked.slot)}</div>
         <button type="button" className="text-[12px] underline" onClick={onClose}>Close</button>
       </div>
-      {loading && !data && <div className="text-[12px] text-[#737373]">Looking at who is working…</div>}
+      {loading && !data && <div className="text-[12px] text-[#6B6B6B]">Looking at who is working…</div>}
       {data && (
         <>
           <div className="flex flex-wrap items-center gap-2">
@@ -278,8 +278,8 @@ const IntervalPanel: React.FC<{ data: Interval | null; loading: boolean; picked:
             <div>
               <div className="text-[12px] font-semibold mb-1">Working now ({data.working.length})</div>
               <ul className="max-h-44 overflow-auto space-y-0.5 text-[12px]">
-                {data.working.slice(0, 40).map((w) => <li key={w.employeeId} className="flex justify-between gap-2"><span>{w.name}</span><span className="text-[#737373] tabular-nums">{hhmm(w.startSlot)}–{hhmm(w.endSlot % 96)}</span></li>)}
-                {data.working.length > 40 && <li className="text-[#737373]">and {data.working.length - 40} more</li>}
+                {data.working.slice(0, 40).map((w) => <li key={w.employeeId} className="flex justify-between gap-2"><span>{w.name}</span><span className="text-[#6B6B6B] tabular-nums">{hhmm(w.startSlot)}–{hhmm(w.endSlot % 96)}</span></li>)}
+                {data.working.length > 40 && <li className="text-[#6B6B6B]">and {data.working.length - 40} more</li>}
               </ul>
             </div>
             <div>
@@ -288,7 +288,7 @@ const IntervalPanel: React.FC<{ data: Interval | null; loading: boolean; picked:
                 {data.notWorking.map((g) => (
                   <li key={g.key}>
                     <span className="font-medium">{g.people}</span> {g.text}
-                    {g.key === 'COULD_WORK' && g.names.length > 0 && <span className="text-[#737373]"> ({g.names.slice(0, 5).join(', ')}{g.people > 5 ? '…' : ''})</span>}
+                    {g.key === 'COULD_WORK' && g.names.length > 0 && <span className="text-[#6B6B6B]"> ({g.names.slice(0, 5).join(', ')}{g.people > 5 ? '…' : ''})</span>}
                   </li>
                 ))}
               </ul>

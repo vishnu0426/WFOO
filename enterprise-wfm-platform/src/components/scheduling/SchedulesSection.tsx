@@ -3,12 +3,13 @@
  * the page — the scheduling equivalent of Forecasting › Forecasts. Click one to open it on the Schedule Timeline.
  * Drafts and archived schedules can be deleted, one at a time or several at once. A published schedule cannot: publish a newer one and it is archived.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { api, dayYear, ScheduleVersion, when } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
+import { MultiSelect } from '../common/MultiSelect';
 
 const STATUS_LABEL: Record<string, string> = { DRAFT: 'Draft', PUBLISHED: 'Published', ARCHIVED: 'Archived' };
 const STATUS_TONE: Record<string, 'good' | 'neutral'> = { PUBLISHED: 'good', DRAFT: 'neutral', ARCHIVED: 'neutral' };
@@ -18,22 +19,20 @@ const NOT_PUBLISHED = 'A published schedule cannot be deleted. Publish a newer o
 export const SchedulesSection: React.FC<{ open: (v: ScheduleVersion) => void; onChanged?: () => void }> = ({ open, onChanged }) => {
   const { groups, can } = useForecast();
   const [tick, setTick] = useState(0);
-  const all = useApi<ScheduleVersion[]>('/scheduling/versions', [tick]);
-  const [status, setStatus] = useState('All statuses');
-  const [groupFilter, setGroupFilter] = useState('');
+  const [statuses, setStatuses] = useState<string[]>([]);
+  const [groupFilter, setGroupFilter] = useState<string[]>([]);
   const [query, setQuery] = useState('');
+  // the filters are applied by the server and the list comes a page at a time, so it opens as fast with thousands of schedules as with ten
+  const [asked, setAsked] = useState(''); const [shown, setShown] = useState(50);
+  useEffect(() => { const t = setTimeout(() => setAsked(query.trim()), 300); return () => clearTimeout(t); }, [query]);
+  const all = useApi<ScheduleVersion[]>(`/scheduling/versions?limit=${shown}${statuses.length ? `&status=${statuses.join(',')}` : ''}${groupFilter.length ? `&groupIds=${groupFilter.join(',')}` : ''}${asked ? `&q=${encodeURIComponent(asked)}` : ''}`, [tick]);
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ kind: 'ok' | 'err' | 'warn'; text: string } | null>(null);
   const canDelete = can('schedule:generate');
   const gname = (v: ScheduleVersion) => v.groupName ?? groups.find((g) => g.id === v.wfmGroupId)?.name ?? '–';
 
-  const rows = useMemo(() => (all.data ?? []).filter((v) =>
-    (status === 'All statuses' || v.status === status.toUpperCase()) &&
-    (!groupFilter || v.wfmGroupId === groupFilter) &&
-    (v.name.toLowerCase().includes(query.toLowerCase()) || `v${v.seq}`.includes(query.toLowerCase()) || gname(v).toLowerCase().includes(query.toLowerCase()))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ).sort((a, b) => updated(b).localeCompare(updated(a))), [all.data, status, groupFilter, query, groups]);
+  const rows = useMemo(() => [...(all.data ?? [])].sort((a, b) => updated(b).localeCompare(updated(a))), [all.data]);
 
   const deletable = rows.filter((v) => v.status !== 'PUBLISHED');
   const chosen = deletable.filter((v) => picked.includes(v.id));
@@ -62,12 +61,12 @@ export const SchedulesSection: React.FC<{ open: (v: ScheduleVersion) => void; on
       actions={canDelete && chosen.length > 0 ? <Btn disabled={busy} onClick={() => remove(chosen)}><Trash2 className="w-3.5 h-3.5" />Delete {chosen.length} selected</Btn> : undefined}>
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-56"><Field label="Search"><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search schedules" /></Field></div>
-        <div className="w-40"><Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value)}>{['All statuses', 'Draft', 'Published', 'Archived'].map((s) => <option key={s} value={s}>{s}</option>)}</Select></Field></div>
-        <div className="w-56"><Field label="Group"><Select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}><option value="">All groups</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select></Field></div>
-        <span className="text-[12px] text-[#737373] ml-auto">{rows.length} schedule{rows.length === 1 ? '' : 's'}</span>
+        <div className="w-40"><Field label="Status"><MultiSelect ariaLabel="Status" allLabel="All statuses" noun={['status', 'statuses']} value={statuses} onChange={setStatuses} options={[{ value: 'DRAFT', label: 'Draft' }, { value: 'PUBLISHED', label: 'Published' }, { value: 'ARCHIVED', label: 'Archived' }]} className="w-full" /></Field></div>
+        <div className="w-56"><Field label="Group"><MultiSelect ariaLabel="Groups" allLabel="All groups" noun={['group', 'groups']} value={groupFilter} onChange={setGroupFilter} options={groups.map((g) => ({ value: g.id, label: g.name }))} className="w-full" /></Field></div>
+        <span className="text-[12px] text-[#6B6B6B] ml-auto">{rows.length} schedule{rows.length === 1 ? '' : 's'}</span>
       </div>
       {note && <Banner kind={note.kind} onClose={() => setNote(null)}>{note.text}</Banner>}
-      {all.error && <p className="text-[12px] text-[#C84A4A]">{all.error}</p>}
+      {all.error && <p className="text-[12px] text-[#BC3F3F]">{all.error}</p>}
       {rows.length === 0 && !all.loading ? (
         <Empty title="No schedules yet">Generate the first one under Scheduling › Generate Schedule.</Empty>
       ) : (
@@ -81,23 +80,24 @@ export const SchedulesSection: React.FC<{ open: (v: ScheduleVersion) => void; on
                 {canDelete && v.status !== 'PUBLISHED' && <input type="checkbox" aria-label={`Select ${v.name}`} checked={picked.includes(v.id)} onChange={() => toggle(v.id)} />}
               </td>
               <td className="p-3 font-semibold"><button className="hover:underline" onClick={(e) => { e.stopPropagation(); open(v); }}>{v.name}</button>{v.stale && v.stale.length > 0 && <span className="ml-2"><Pill tone="warn" title={v.stale.join(' ')}>Out of date</Pill></span>}</td>
-              <td className="p-3 text-[#737373]">{gname(v)}</td>
-              <td className="p-3 text-[12px] text-[#737373]">{dayYear(v.periodStart)} → {dayYear(v.periodEnd)}</td>
+              <td className="p-3 text-[#6B6B6B]">{gname(v)}</td>
+              <td className="p-3 text-[12px] text-[#6B6B6B]">{dayYear(v.periodStart)} → {dayYear(v.periodEnd)}</td>
               <td className="p-3"><Pill tone={STATUS_TONE[v.status]}>{STATUS_LABEL[v.status]}</Pill></td>
               <td className="p-3 text-[12px]">v{v.seq}</td>
               <td className="p-3 text-[12px]">{v.stats?.coverage ? `${Math.round(v.stats.coverage.percent)}%` : '–'}</td>
               <td className="p-3 text-[12px]">{v.stats?.people ?? '–'}</td>
-              <td className="p-3 text-[12px] text-[#737373]">{when(updated(v))}</td>
+              <td className="p-3 text-[12px] text-[#6B6B6B]">{when(updated(v))}</td>
               <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
                 {canDelete && (
                   <button aria-label={`Delete ${v.name}`} title={v.status === 'PUBLISHED' ? NOT_PUBLISHED : 'Delete this schedule'} disabled={busy || v.status === 'PUBLISHED'}
-                    className="text-[#737373] hover:text-[#C84A4A] disabled:opacity-30 disabled:hover:text-[#737373]" onClick={() => remove([v])}><Trash2 className="w-4 h-4" /></button>
+                    className="text-[#6B6B6B] hover:text-[#BC3F3F] disabled:opacity-30 disabled:hover:text-[#6B6B6B]" onClick={() => remove([v])}><Trash2 className="w-4 h-4" /></button>
                 )}
               </td>
             </tr>
           ))}
         </Table>
       )}
+      {rows.length >= shown && <button type="button" className="text-[12px] underline" onClick={() => setShown(shown + 100)}>Show older schedules</button>}
     </Card>
   );
 };

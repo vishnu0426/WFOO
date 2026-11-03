@@ -39,6 +39,8 @@ async function agentFor(employeeId: string) {
   (ctx.agents ??= {})[employeeId] = a;
   return a;
 }
+// only this suite's templates: other suites leave theirs in the same organisation, and the generator offers every template unless told which to use
+const ownTemplates = async () => (await call(admin, 'GET', '/scheduling/templates')).json.filter((t: any) => t.name.endsWith(RUN)).map((t: any) => t.id);
 const setPolicy = async (patch: Record<string, unknown>) => { const cur = (await call(admin, 'GET', '/self-service/policy')).json; const r = await call(admin, 'PUT', '/self-service/policy', { ...cur, ...patch }); assert.equal(r.status, 200, r.text); };
 
 describe('self-service', () => {
@@ -54,10 +56,11 @@ describe('self-service', () => {
     for (const s of ['submit', 'approve', 'publish']) assert.equal((await call(admin, 'POST', `/forecast/versions/${f.json.id}/${s}`, {})).status, 200);
     assert.equal((await call(admin, 'POST', '/workforce/teams', { name: `Team ${RUN}` })).status, 201);
     for (const [n, a, b] of [['Early', '06:00', '08:00'], ['Day', '08:30', '10:30'], ['Late', '11:30', '13:30']]) await call(admin, 'POST', '/scheduling/templates', { name: `${n} ${RUN}`, workDays: [0, 1, 2, 3, 4, 5, 6], earliestStart: a, latestStart: b, startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30 });
-    const lines = ['employee_number,first_name,last_name,team,wfm_group,employment_type,weekly_hours,days_per_week'];
-    for (let i = 1; i <= 30; i++) lines.push(`S${RUN}-${i},Agent${i},Self${i},Team ${RUN},Self ${RUN},FULL_TIME,40,5`);
+    // contract 40 h over five shifts, allowed up to 48 h and six days: the room that lets a colleague take an extra shift or an overtime offer
+    const lines = ['employee_number,first_name,last_name,team,wfm_group,employment_type,weekly_hours,max_weekly_hours,days_per_week'];
+    for (let i = 1; i <= 30; i++) lines.push(`S${RUN}-${i},Agent${i},Self${i},Team ${RUN},Self ${RUN},FULL_TIME,40,48,6`);
     assert.equal((await call(admin, 'POST', '/workforce/employees/import', { csv: lines.join('\n'), dryRun: false })).json.committed, true);
-    const v = await call(admin, 'POST', '/scheduling/versions', { groupId: g.json.id, from: iso(addDays(new Date(), 4)), weeks: 1, timeLimitSec: 45 });
+    const v = await call(admin, 'POST', '/scheduling/versions', { groupId: g.json.id, from: iso(addDays(new Date(), 4)), weeks: 1, timeLimitSec: 45, templateIds: await ownTemplates() });
     assert.equal(v.status, 201, v.text); ctx.version = v.json;
     assert.equal((await call(admin, 'POST', `/scheduling/versions/${v.json.id}/publish`)).status, 200);
     ctx.shifts = (await call(admin, 'GET', `/scheduling/versions/${v.json.id}/shifts`)).json;
@@ -167,15 +170,17 @@ describe('self-service', () => {
     const offered = await call(ctx.a.token, 'POST', '/me/swaps', { kind: 'GIVEAWAY', shiftId: giver.id, note: 'Cannot make it' });
     assert.equal(offered.status, 201, offered.text); assert.equal(offered.json.status, 'OPEN');
     let t: any = null, taken: any = null;
+    const refused: string[] = [];
     for (const cand of takers) {              // a refused attempt (for example too little rest) leaves the shift on the board, so try the next person
       const c = { employeeId: cand, ...(await agentFor(cand)) };
       if (t === null) assert.ok((await call(c.token, 'GET', '/me/swaps')).json.board.some((s: any) => s.id === offered.json.id));
       const r = await call(c.token, 'POST', `/me/swaps/${offered.json.id}/take`);
       if (r.status === 200) { t = c; taken = r; break; }
       assert.equal(r.status, 409, r.text);
+      refused.push(r.json?.error?.message ?? r.text);
       assert.equal((await call(ctx.a.token, 'GET', '/me/swaps')).json.mine.find((x: any) => x.id === offered.json.id).status, 'OPEN');
     }
-    assert.ok(t, 'someone can take it');
+    assert.ok(t, `someone can take it; ${takers.length} tried, refused for: ${[...new Set(refused)].join(' | ')}`);
     assert.equal((await call(ctx.a.token, 'POST', `/me/swaps/${offered.json.id}/take`)).status, 409);                                          // it is taken now
     assert.equal(taken.json.status, 'APPROVED'); assert.equal(taken.json.autoApproved, true);
     const mineAfter = await call(t.token, 'GET', `/me/schedule?from=${giver.day}&to=${giver.day}`);
@@ -190,6 +195,7 @@ describe('self-service', () => {
     const other = ctx.shifts.find((s: any) => s.day === giver.day && s.employeeId !== ctx.a.employeeId);
     const o = { employeeId: other.employeeId, ...(await agentFor(other.employeeId)) };
     const offered = await call(ctx.a.token, 'POST', '/me/swaps', { kind: 'GIVEAWAY', shiftId: giver.id });
+    assert.equal(offered.status, 201, offered.text);
     const blocked = await call(o.token, 'POST', `/me/swaps/${offered.json.id}/take`);
     assert.equal(blocked.status, 409, blocked.text);
     assert.match(blocked.json.error.message, /two shifts|overlap|already/i);
@@ -205,17 +211,17 @@ describe('self-service', () => {
     const india = (await call(admin, 'GET', '/compliance/packs')).json.find((p: any) => p.code === 'IN_OSH_2020');
     assert.equal((await call(admin, 'PUT', '/compliance/assignments', { scopeType: 'GROUP', scopeId: ctx.group.id, packId: india.id })).status, 200);
     // nobody here has agreed to night work, so no shift may run into the 19:00 to 06:00 window
-    const v = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: iso(addDays(new Date(), 12)), weeks: 1, timeLimitSec: 45 });
+    const v = await call(admin, 'POST', '/scheduling/versions', { groupId: ctx.group.id, from: iso(addDays(new Date(), 12)), weeks: 1, timeLimitSec: 45, templateIds: await ownTemplates() });
     assert.equal(v.status, 201, v.text);
     const shifts = (await call(admin, 'GET', `/scheduling/versions/${v.json.id}/shifts`)).json;
     assert.ok(shifts.length > 0);
     assert.ok(shifts.every((x: any) => x.startSlot + x.lengthSlots <= 19 * 4), 'no shift reaches the night window');
     const val = await call(admin, 'GET', `/scheduling/versions/${v.json.id}/validate`);
     assert.equal(val.json.ok, true, val.text);
-    assert.equal(v.json.stats.hours.premium, 0);
+    assert.equal(v.json.stats.hours.premium, 0, `premium hours ${JSON.stringify(v.json.stats.hours)}; shift lengths ${[...new Set(shifts.map((x: any) => x.lengthSlots))]}; solver ${JSON.stringify(v.json.stats.solver)}`);
     // once a person consents to night work, the late shifts are open to them again
     const emp = shifts[0].employeeId;
-    assert.equal((await call(admin, 'PUT', `/workforce/employees/${emp}`, { nightShiftConsent: true })).status, 200);
+    assert.equal((await call(admin, 'PUT', `/workforce/employees/${emp}`, { reason: 'Test change', nightShiftConsent: true })).status, 200);
     assert.equal((await call(admin, 'GET', `/workforce/employees/${emp}`)).json.nightShiftConsent, true);
     assert.equal((await call(admin, 'PUT', '/compliance/assignments', { scopeType: 'GROUP', scopeId: ctx.group.id, packId: null })).status, 200);
   });

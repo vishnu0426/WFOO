@@ -34,7 +34,7 @@ export const Card: React.FC<{ title?: React.ReactNode; sub?: React.ReactNode; ac
       <div className="flex items-start justify-between gap-3">
         <div>
           {title && <h2 className="text-[15px] font-semibold text-[#171717]">{title}</h2>}
-          {sub && <p className="text-[12px] text-[#737373] mt-0.5">{sub}</p>}
+          {sub && <p className="text-[12px] text-[#6B6B6B] mt-0.5">{sub}</p>}
         </div>
         {actions}
       </div>
@@ -44,8 +44,8 @@ export const Card: React.FC<{ title?: React.ReactNode; sub?: React.ReactNode; ac
 );
 
 const PILL: Record<string, string> = {
-  good: 'bg-[#EAF5EF] text-[#2F7D5A] border-[#2F7D5A]/20', bad: 'bg-[#FCEBEC] text-[#C84A4A] border-[#C84A4A]/20',
-  warn: 'bg-[#FFF5DD] text-[#B7791F] border-[#B7791F]/20', neutral: 'bg-[#F5F5F2] text-[#525252] border-[#E5E5E0]', info: 'bg-[#EDF3F8] text-[#4F6F8F] border-[#4F6F8F]/20',
+  good: 'bg-[#EAF5EF] text-[#2A7553] border-[#2F7D5A]/20', bad: 'bg-[#FCEBEC] text-[#BC3F3F] border-[#C84A4A]/20',
+  warn: 'bg-[#FFF5DD] text-[#8F6200] border-[#B7791F]/20', neutral: 'bg-[#F5F5F2] text-[#525252] border-[#E5E5E0]', info: 'bg-[#EDF3F8] text-[#4F6F8F] border-[#4F6F8F]/20',
 };
 export const Pill: React.FC<{ tone?: keyof typeof PILL; children: React.ReactNode }> = ({ tone = 'neutral', children }) => (
   <span className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded border whitespace-nowrap ${PILL[tone]}`}>{children}</span>
@@ -55,11 +55,11 @@ export const Field: React.FC<{ label: string; hint?: string; children: React.Rea
   <label className="block text-[12px] font-semibold text-[#171717]">
     {label}
     <div className="mt-1 font-normal">{children}</div>
-    {hint && <div className="text-[11px] font-normal text-[#737373] mt-0.5">{hint}</div>}
+    {hint && <div className="text-[11px] font-normal text-[#6B6B6B] mt-0.5">{hint}</div>}
   </label>
 );
 
-const fieldCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#737373]';
+const fieldCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#6B6B6B]';
 export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', ...rest }) => <input {...rest} className={`${fieldCls} ${className}`} />;
 export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className = '', ...rest }) => <select {...rest} className={`${fieldCls} ${className}`} />;
 export const Textarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({ className = '', ...rest }) => <textarea {...rest} className={`${fieldCls} ${className}`} />;
@@ -83,7 +83,7 @@ export const Modal: React.FC<{ title?: React.ReactNode; onClose: () => void; chi
       {title && (
         <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[#E5E5E0]">
           <h2 className="text-[15px] font-semibold text-[#171717]">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="text-[#A3A3A3] hover:text-[#171717] text-[20px] leading-none">&times;</button>
+          <button onClick={onClose} aria-label="Close" className="text-[#6B6B6B] hover:text-[#171717] text-[20px] leading-none">&times;</button>
         </div>
       )}
       <div className="p-5">{children}</div>
@@ -92,20 +92,20 @@ export const Modal: React.FC<{ title?: React.ReactNode; onClose: () => void; chi
   );
 };
 
-export const Busy: React.FC<{ text?: string }> = ({ text = 'Loading…' }) => <div className="text-[13px] text-[#737373] py-6 text-center">{text}</div>;
+export const Busy: React.FC<{ text?: string }> = ({ text = 'Loading…' }) => <div className="text-[13px] text-[#6B6B6B] py-6 text-center">{text}</div>;
 export const Empty: React.FC<{ title: string; children?: React.ReactNode }> = ({ title, children }) => (
   <div className="text-center py-8 space-y-1">
     <div className="text-[13px] font-semibold text-[#171717]">{title}</div>
-    {children && <div className="text-[12px] text-[#737373] max-w-sm mx-auto">{children}</div>}
+    {children && <div className="text-[12px] text-[#6B6B6B] max-w-sm mx-auto">{children}</div>}
   </div>
 );
 
 /** A colored dashboard number, the enterprise-dashboard pattern for "the thing you'd check first" (hours this week, balances, counts). */
 export const Stat: React.FC<{ label: string; value: React.ReactNode; sub?: string; color?: string }> = ({ label, value, sub, color = 'var(--color-accent)' }) => (
   <div className="bg-white border border-[#E5E5E0] rounded-lg p-4" style={{ borderTop: `3px solid ${color}` }}>
-    <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">{label}</div>
+    <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider">{label}</div>
     <div className="text-[22px] font-bold mt-1" style={{ color }}>{value}</div>
-    {sub && <div className="text-[11px] text-[#737373] mt-0.5">{sub}</div>}
+    {sub && <div className="text-[11px] text-[#6B6B6B] mt-0.5">{sub}</div>}
   </div>
 );
 

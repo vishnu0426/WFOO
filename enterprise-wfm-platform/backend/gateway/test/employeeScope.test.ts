@@ -82,7 +82,7 @@ describe('employee and team scope at generate time, and the cross-group schedule
     const e = await call(admin, 'POST', '/workforce/employees', { employeeNumber: `SO${RUN}`, firstName: 'Outside', lastName: 'Person', primaryGroupId: other.json.id, weeklyContractHours: 40, maxWeeklyHours: 40 });
     assert.equal(e.status, 201, e.text);
     assert.equal((await call(admin, 'GET', `/workforce/employees?groupId=${ctx.group.id}`)).json.some((x: any) => x.id === e.json.id), false, 'not a member yet');
-    const linked = await call(admin, 'PUT', `/workforce/employees/${e.json.id}`, { eligibleGroupIds: [...e.json.eligibleGroupIds, ctx.group.id] });
+    const linked = await call(admin, 'PUT', `/workforce/employees/${e.json.id}`, { reason: 'Test change', eligibleGroupIds: [...e.json.eligibleGroupIds, ctx.group.id] });
     assert.equal(linked.status, 200, linked.text);
     assert.deepEqual(new Set(linked.json.eligibleGroupIds), new Set([other.json.id, ctx.group.id]));
     assert.equal(linked.json.primaryGroupId, other.json.id, 'primary group is unchanged');
