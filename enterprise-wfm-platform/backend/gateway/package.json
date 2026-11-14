@@ -19,6 +19,7 @@
     "bcryptjs": "^3.0.0",
     "compression": "^1.8.2",
     "cors": "^2.8.5",
+    "date-holidays": "^3.38.0",
     "express": "^5.0.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.0.0",

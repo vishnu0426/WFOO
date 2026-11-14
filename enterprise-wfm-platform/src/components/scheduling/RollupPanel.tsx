@@ -3,6 +3,7 @@
  * coverage per day, how many people are free and could be asked to cover, and one clock (UTC) for the day so sites in different
  * time zones can be compared. Gaps here are what VTO & Overtime offers and shift swaps are for.
  */
+import { Waiting } from '../common/loading';
 import React, { useMemo, useState } from 'react';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { dec, weekFloor } from '../../services/api';
@@ -38,12 +39,12 @@ export const RollupPanel: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <Card title="Multi-site view" sub="Published schedules for the week, by site and group. Hours are worked out from each group's published forecast; the chart puts every site on one clock (UTC)."
+      <Card title="Day by day" sub="Published schedules for the week, by site and group. Hours are worked out from each group's published forecast; the chart puts every site on one clock (UTC)."
         actions={<div className="flex flex-wrap items-center gap-3">
           <Field label="Week starting"><Input type="date" value={from} onChange={(e) => e.target.value && setPicked(e.target.value)} /></Field>
           <Field label="Chart day"><Select value={data?.day ?? day} onChange={(e) => setDay(e.target.value)}>{days.map((d) => <option key={d} value={d}>{new Date(d + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}</Select></Field>
         </div>}>
-        {r.loading && !data && <Busy text="Reading every published schedule…" />}
+        {r.loading && !data && <Waiting what="the roll-up" shape="table" reload={r.reload} />}
         {r.error && <Banner kind="err">{r.error}</Banner>}
         {data && data.groups.length === 0 && <Empty title="No published schedules this week">Publish a schedule for at least one group to see it here. Assign groups to sites in Configuration › Sites & Skills.</Empty>}
         {data && data.groups.length > 0 && (

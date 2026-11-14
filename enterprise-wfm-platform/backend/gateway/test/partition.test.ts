@@ -130,3 +130,31 @@ describe('parts that each look like the whole group', async () => {
     assert.deepEqual(stratifiedIndexes(['a', 'b'], 5).map((p) => p.length), [1, 1]);
   });
 });
+
+describe('one answer from the parts of a group', async () => {
+  const { combineParts } = await import('../src/modules/partition.ts');
+  const part = (o: Partial<any> = {}) => ({ status: 'OPTIMAL', gap: 0, wall_sec: 1, variables: 10, constraints: 5, objective: 100, best_bound: 100, backend: 'cpsat', attempts: ['cpsat: optimal'], assignments: [{ employee: 1, day: 0 }], ...o });
+  it('a single solve keeps its own status and gap', () => {
+    const r = combineParts([part({ gap: 0.004, objective: 100, best_bound: 99.6 })], null);
+    assert.equal(r.status, 'OPTIMAL'); assert.equal(r.gap, 0.004); assert.equal(r.partitioned, false);
+  });
+  it('is never OPTIMAL for a group solved in parts, even when every part is optimal for its share', () => {
+    const r = combineParts([part(), part()], [[0], [1]]);
+    assert.equal(r.status, 'FEASIBLE'); assert.equal(r.partsOptimal, 2); assert.equal(r.partitioned, true); assert.equal(r.gap, 0);
+  });
+  it('judges the gap for the whole group: the parts\' objectives and bounds are added up', () => {
+    // one part is 10% from its bound on a small objective, the other is nearly perfect on a big one: the whole is about 1.5% off, not 10%
+    const r = combineParts([part({ objective: 100, best_bound: 90, gap: 0.1, status: 'FEASIBLE' }), part({ objective: 900, best_bound: 899, gap: 0.0011, status: 'FEASIBLE' })], [[0], [1]]);
+    assert.equal(r.objective, 1000); assert.equal(r.best_bound, 989); assert.equal(r.gap, 0.011); assert.equal(r.partsOptimal, 0);
+  });
+  it('a part with nothing proven (the starting roster) shows up as a wide gap for the whole', () => {
+    const r = combineParts([part({ objective: 500, best_bound: 0, gap: 1, status: 'FEASIBLE' }), part()], [[0], [1]]);
+    assert.ok(r.gap > 0.6, `gap ${r.gap}`);
+  });
+  it('INFEASIBLE or UNKNOWN in any part is the status of the whole, and people are numbered across the whole group', () => {
+    assert.equal(combineParts([part(), part({ status: 'INFEASIBLE' })], [[0], [1]]).status, 'INFEASIBLE');
+    assert.equal(combineParts([part(), part({ status: 'UNKNOWN' })], [[0], [1]]).status, 'UNKNOWN');
+    const r = combineParts([part({ assignments: [{ employee: 2, day: 0 }] }), part({ assignments: [{ employee: 1, day: 1 }] })], [[0, 5], [7]]);
+    assert.deepEqual(r.assignments.map((a) => a.employee), [6, 8]);
+  });
+});

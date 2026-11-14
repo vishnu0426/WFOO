@@ -4,6 +4,7 @@
  * shows what would happen: problems that would stop it, warnings, and the effect on cover. Clean changes can be approved automatically
  * (Configuration › Self-Service Rules); the rest wait here.
  */
+import { Waiting } from '../common/loading';
 import React, { useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { api, dec, when } from '../../services/api';
@@ -52,7 +53,7 @@ export const SwapsPanel: React.FC = () => {
             <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded font-semibold ${filter === id ? 'bg-white shadow-xs text-[#171717]' : 'text-[#6B6B6B]'}`}>{label}</button>
           ))}
         </div>}>
-        {list.loading && !list.data && <Busy text="Loading…" />}
+        {list.loading && !list.data && <Waiting what="swaps" shape="table" reload={list.reload} />}
         {list.error && <Banner kind="err">{list.error}</Banner>}
         {list.data && list.data.length === 0 && <Empty title={filter ? 'Nothing is waiting' : 'No swap requests yet'}>{filter ? 'Requests that need a manager show up here.' : 'When colleagues trade shifts in the app, the requests are listed here.'}</Empty>}
         <div className="space-y-3">
@@ -77,9 +78,9 @@ export const SwapsPanel: React.FC = () => {
                 {s.note && <p className="text-[12px] text-[#525252]">“{s.note}”</p>}
                 {(c.blockers?.length || c.warnings?.length || c.coverageBefore !== undefined) && (
                   <div className="text-[12px] space-y-1">
-                    {c.blockers?.map((m, i) => <div key={i} className="text-[#BC3F3F]">✕ {m}</div>)}
+                    {c.blockers?.map((m, i) => <div key={i} className="text-[#BC3F3F]">Blocked: {m}</div>)}
                     {c.warnings?.map((m, i) => <div key={i} className="text-[#8F6200]">! {m}</div>)}
-                    {c.ok && !c.warnings?.length && <div className="text-[#2A7553]">✓ Every rule is met</div>}
+                    {c.ok && !c.warnings?.length && <div className="text-[#2A7553]">Every rule is met</div>}
                     {c.coverageBefore !== undefined && <div className="text-[#6B6B6B]">Coverage {dec(c.coverageBefore)}% to {dec(c.coverageAfter ?? c.coverageBefore)}%</div>}
                   </div>
                 )}

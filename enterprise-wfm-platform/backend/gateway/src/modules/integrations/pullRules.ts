@@ -73,6 +73,12 @@ export function checkDbValue(field: 'day' | 'time', v: unknown): string | null {
   return null;
 }
 
+/** The interval length a relay's source keeps, from the connector's own setting; 15 when it is not set. */
+export const relayIntervalMinutes = (config: Record<string, any> | null | undefined): number => {
+  const n = Number(config?.intervalMinutes);
+  return n === 30 || n === 60 ? n : 15;
+};
+
 /** Settings that only make sense together, checked when a connector is saved. */
 export function checkPresetConfig(preset: Preset, config: Record<string, any>): void {
   if (preset.id === 'DATABASE_POSTGRES_PULL') {

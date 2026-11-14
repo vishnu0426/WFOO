@@ -7,7 +7,7 @@
 export const IMPACT_FIELDS = {
   serviceLevelGoal: 'service level goal', serviceLevelThresholdSec: 'answer-within time', targetOccupancy: 'occupancy cap', shrinkagePercent: 'shrinkage',
   method: 'staffing method', patienceSec: 'customer patience', blended: 'blended pool', fteHoursWeek: 'full-time hours', payWeekStart: 'pay week start',
-  timezone: 'time zone', status: 'status',
+  timezone: 'time zone', status: 'status', chatEfficiency: 'chat efficiency',
 } as const;
 
 /** Plain-language names of the impact fields this edit really changes (a value sent back unchanged does not count). */

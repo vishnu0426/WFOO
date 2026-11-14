@@ -3,6 +3,7 @@
  * them in the app, close the round, then decide the result by seniority, lottery or the best overall outcome. Awarding builds a draft schedule
  * from the winning patterns; a pattern that would break a rule for someone is never given to them. Review the draft in Schedule Timeline and publish.
  */
+import { Waiting } from '../common/loading';
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { api, dowOfDay, nextWeekStart, ShiftTemplate, WEEKDAY_NAMES, when } from '../../services/api';
@@ -96,7 +97,7 @@ export const BidsPanel: React.FC = () => {
             <div className="flex gap-2"><Btn variant="primary" onClick={create} disabled={busy || !valid}>Create round</Btn><Btn onClick={() => setDraft(null)}>Cancel</Btn></div>
           </div>
         )}
-        {rounds.loading && !rounds.data && <Busy text="Loading…" />}
+        {rounds.loading && !rounds.data && <Waiting what="bidding rounds" shape="table" reload={rounds.reload} />}
         {rounds.data && mine.length === 0 && !draft && <Empty title="No bid rounds yet">Create a round to let people choose their weekly pattern.</Empty>}
         <div className="space-y-2">
           {mine.map((r) => {
@@ -113,7 +114,7 @@ export const BidsPanel: React.FC = () => {
                 </button>
                 {open === r.id && (
                   <div className="p-3 border-t border-[#E5E5E0] space-y-4">
-                    {!d ? <Busy text="Loading…" /> : (
+                    {!d ? <Waiting what="this round" shape="lines" /> : (
                       <>
                         <div className="text-[12px] text-[#525252]">{d.submitted} of {d.eligible} eligible people have ranked their choices.</div>
                         <Table head={['Pattern', 'Days', 'Time', 'Paid', 'Places', 'First choice of', 'Can hold it', 'Awarded']} right={[3, 4, 5, 6, 7]}>

@@ -3,6 +3,7 @@
  * the page — the scheduling equivalent of Forecasting › Forecasts. Click one to open it on the Schedule Timeline.
  * Drafts and archived schedules can be deleted, one at a time or several at once. A published schedule cannot: publish a newer one and it is archived.
  */
+import { Waiting } from '../common/loading';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { api, dayYear, ScheduleVersion, when } from '../../services/api';
@@ -67,7 +68,7 @@ export const SchedulesSection: React.FC<{ open: (v: ScheduleVersion) => void; on
       </div>
       {note && <Banner kind={note.kind} onClose={() => setNote(null)}>{note.text}</Banner>}
       {all.error && <p className="text-[12px] text-[#BC3F3F]">{all.error}</p>}
-      {rows.length === 0 && !all.loading ? (
+      {all.data === null && !all.error ? <Waiting what="schedules" shape="table" reload={all.reload} /> : rows.length === 0 && !all.loading ? (
         <Empty title="No schedules yet">Generate the first one under Scheduling › Generate Schedule.</Empty>
       ) : (
         <Table head={[

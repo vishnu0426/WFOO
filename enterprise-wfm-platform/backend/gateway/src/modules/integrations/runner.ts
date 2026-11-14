@@ -230,6 +230,26 @@ export async function testDatabaseQuery(connector: any, config: Record<string, a
   return { columns, rowCount: rows.length, sample: rows.slice(0, 5).map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v instanceof Date ? v.toISOString() : v]))), problems };
 }
 
+/** What a REST pull would see right now, with nothing saved: whether the address, the key and the answer's shape work. For a customer's own account, before the first real run. */
+export async function testRestPull(connector: any, preset: Preset, fetchImpl?: FetchFn) {
+  const config = openFields(connector.config, CONFIG_SECRET_KEYS);
+  const base = String(config.baseUrl ?? '').trim(), path = String(config.volumeEndpoint ?? '').trim();
+  if (!base || !path) throw new Error('The connector needs a base URL and a historical volume endpoint.');
+  const today = new Date(), yesterday = new Date(today.getTime() - 86_400_000);
+  const url = `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`.replace(/\{from\}/g, isoDay(yesterday)).replace(/\{to\}/g, isoDay(today));
+  const json = await pullJson(connector.id, preset, connector.config, url, fetchImpl ?? ((u, init) => safeFetch(u, { ...(init as any), signal: AbortSignal.timeout(30_000) }) as any));
+  const rows = findRows(json);
+  const problems: string[] = [];
+  if (!rows.length) problems.push('The source answered, but with no rows for the last day. If that is expected, the connection works and there is just nothing to see yet.');
+  else {
+    const maps = await withWorkspace(connector.tenantId, connector.workspaceId, (tx) => loadFieldMaps(tx, connector.id));
+    const sample = rows.slice(0, 5).map((r) => mapFields(r, maps));
+    for (const f of ['day', 'time', 'volume']) if (sample.every((m) => m[f] === undefined || m[f] === null || m[f] === '')) problems.push(`Nothing is mapped to ${f}. Check the field mapping against the columns shown.`);
+  }
+  const columns = [...new Set(rows.slice(0, 20).flatMap((r) => Object.keys(r)))];
+  return { columns, rowCount: rows.length, sample: rows.slice(0, 5), problems };
+}
+
 /** Runs one pull or file pick-up now, records it in the history, and never throws: a failure is a FAILED run the planner can see. */
 export async function runConnector(connector: any, trigger: Exclude<RunTrigger, 'PUSH'>, deps: { sftp?: SftpLike; fetchImpl?: FetchFn; db?: DbClientLike; backfill?: boolean } = {}): Promise<{ status: string; message: string; rowsIn: number; rowsOk: number; rowsRejected: number }> {
   const started = new Date();

@@ -4,15 +4,18 @@
  * rolled into a payroll export -- regular, overtime and premium hours per person per day, the thing nowhere else in
  * the platform produces even though overtime-premium *hours* are already computed for compliance.
  */
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
 import { payWeekFor } from './payWeek.ts';
-import { me, requires } from '../auth.ts';
+import { me, requires, requiresAny, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
-import { bad, isoDay, notFound, parse } from '../http.ts';
+import { bad, HttpError, isoDay, notFound, parse } from '../http.ts';
 import { parseCsv, parseDay, parseMinute } from './csv.ts';
 import { dowOf } from './scheduleRoutes.ts';
+import { applyExcuses, classifyDay, EXCUSABLE, graceMinutes, ISSUES, minutesFromDay, nowMinutesFrom, REASONS, weekView, type ExcusableKind, type Issue } from './attendanceMath.ts';
+import { loadPolicy } from './policyRoutes.ts';
+import { approverLevel, teamLimit } from './approvals.ts';
 import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
 import { addDays } from './forecast/service.ts';
 
@@ -139,34 +142,58 @@ attendance.delete('/punches/:id', requires('workforce:write'), async (req, res) 
 
 // ---------------------------------------------------------------- summary and payroll export
 
-export async function summarize(tx: Tx, groupId: string | null, from: string, to: string) {
+export async function summarize(tx: Tx, groupId: string | null, from: string, to: string, scope: { teamIds: string[]; self: string | null } | null = null, now = new Date()) {
   const payStart = (await payWeekFor(tx, groupId)).start;   // overtime is counted per pay week: the group's, else the company's
+  const grace = graceMinutes((await loadPolicy(tx)).adherenceGraceSeconds);
   const emps = await tx.q<any>(
-    `SELECT id, employee_number, first_name || ' ' || last_name AS name, weekly_contract_hours FROM employees
-     WHERE tenant_id = :t AND ($1::uuid IS NULL OR primary_group_id = $1 OR eligible_group_ids @> ARRAY[$1::uuid])`, [groupId]);
+    `SELECT id, employee_number, first_name || ' ' || last_name AS name, weekly_contract_hours, team_id FROM employees
+     WHERE tenant_id = :t AND ($1::uuid IS NULL OR primary_group_id = $1 OR eligible_group_ids @> ARRAY[$1::uuid])
+       AND ($2::uuid[] IS NULL OR team_id = ANY($2::uuid[]) OR id = $3::uuid)`, [groupId, scope ? scope.teamIds : null, scope?.self ?? null]);
   const empIds = emps.map((e) => e.id);
-  if (!empIds.length) return { days: [], weeks: [], payStart };
+  if (!empIds.length) return { days: [], weeks: [], payStart, graceMinutes: grace };
   const punches = await tx.q<any>(
-    `SELECT employee_id, day::text AS day, clock_in::text AS clock_in, clock_out::text AS clock_out FROM attendance_punches
+    `SELECT id, employee_id, day::text AS day, to_char(clock_in AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS clock_in, to_char(clock_out AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS clock_out, source FROM attendance_punches
      WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) AND day >= $2 AND day <= $3 ORDER BY employee_id, day, clock_in`, [empIds, from, to]);
+  const excuses = await tx.q<any>(
+    `SELECT id, employee_id, day::text AS day, kind, reason_code, note, paid, level, excused_by, excused_at FROM attendance_exceptions WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) AND day >= $2 AND day <= $3`, [empIds, from, to]);
+  const excByKey = new Map<string, any[]>();
+  for (const x of excuses) { const k = `${x.employeeId}|${x.day}`; excByKey.set(k, [...(excByKey.get(k) ?? []), x]); }
   const shifts = await tx.q<any>(
-    `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, ${TPL_JOIN_COLS} FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
+    `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, g.timezone AS tz, ${TPL_JOIN_COLS} FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
+     JOIN wfm_groups g ON g.id = v.wfm_group_id
      LEFT JOIN shift_templates t ON t.id = s.template_id WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = ANY($1::uuid[]) AND s.day >= $2 AND s.day <= $3`, [empIds, from, to]);
   const empById = new Map(emps.map((e) => [e.id, e]));
-  const schedByKey = new Map(shifts.map((s) => [`${s.employeeId}|${s.day}`, r1(((s.lengthSlots - joinedUnpaidMeal(s, s.lengthSlots)) / 4))]));
+  // a person can have more than one shift on a day (a split shift): hours add up, and the day runs from the first start to the last end
+  const sched = new Map<string, { hours: number; startMin: number; endMin: number; tz: string }>();
+  for (const s of shifts) {
+    const k = `${s.employeeId}|${s.day}`, h = (s.lengthSlots - joinedUnpaidMeal(s, s.lengthSlots)) / 4, a = s.startSlot * 15, b = (s.startSlot + s.lengthSlots) * 15, cur = sched.get(k);
+    sched.set(k, cur ? { hours: cur.hours + h, startMin: Math.min(cur.startMin, a), endMin: Math.max(cur.endMin, b), tz: cur.tz } : { hours: h, startMin: a, endMin: b, tz: s.tz ?? 'UTC' });
+  }
   const punchByKey = new Map<string, any[]>();
   for (const pu of punches) { const k = `${pu.employeeId}|${pu.day}`; punchByKey.set(k, [...(punchByKey.get(k) ?? []), pu]); }
+  const hhmm = (m: number) => `${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
-  const dayKeys = new Set<string>([...schedByKey.keys(), ...punchByKey.keys()]);
+  const dayKeys = new Set<string>([...sched.keys(), ...punchByKey.keys()]);
   const days = [...dayKeys].map((k) => {
     const [employeeId, day] = k.split('|');
-    const scheduledHours = schedByKey.get(k) ?? 0;
+    const sc = sched.get(k);
     const ps = punchByKey.get(k) ?? [];
-    const actualHours = r1(ps.reduce((s, pu) => s + (pu.clockOut ? hoursOf(pu.clockIn, pu.clockOut) : 0), 0));
-    const open = ps.some((pu) => !pu.clockOut);
-    const status = !ps.length && scheduledHours > 0 ? 'MISSED' : ps.length && scheduledHours === 0 ? 'UNSCHEDULED' : open ? 'OPEN' : 'MATCHED';
+    const r = classifyDay({
+      sched: sc ? { hours: r1(sc.hours), startMin: sc.startMin, endMin: sc.endMin } : null,
+      punches: ps.map((pu) => ({ inMin: minutesFromDay(pu.clockIn, day), outMin: pu.clockOut ? minutesFromDay(pu.clockOut, day) : null })),
+      nowMin: nowMinutesFrom(day, sc?.tz ?? 'UTC', now), graceMin: grace,
+    });
+    const scheduledHours = r1(sc?.hours ?? 0);
     const e = empById.get(employeeId);
-    return { employeeId, employeeNumber: e?.employeeNumber ?? '', name: e?.name ?? '', day, scheduledHours, actualHours, varianceHours: r1(actualHours - scheduledHours), status, punches: ps.map((pu) => ({ clockIn: pu.clockIn, clockOut: pu.clockOut })) };
+    // only the excuses for a problem the day really has are shown and applied
+    const excused = (excByKey.get(k) ?? []).filter((x) => (r.issues as string[]).includes(x.kind));
+    const issues = applyExcuses(r.issues, excused.map((x) => x.kind as ExcusableKind));
+    const status = r.status === 'MISSED' && excused.some((x) => x.kind === 'missed') ? 'EXCUSED' : r.status;
+    return {
+      employeeId, employeeNumber: e?.employeeNumber ?? '', name: e?.name ?? '', day, scheduledHours, actualHours: r.actualHours, varianceHours: r1(r.actualHours - scheduledHours), status,
+      lateMinutes: r.lateMinutes, earlyLeaveMinutes: r.earlyLeaveMinutes, due: r.due, issues, excused: excused.map((x) => ({ id: x.id as string, kind: x.kind as ExcusableKind, reasonCode: x.reasonCode as string, note: x.note as string, paid: !!x.paid, level: x.level as string, by: x.excusedBy as string, at: x.excusedAt as string })), paidExcuse: excused.some((x) => x.kind === 'missed' && x.paid), shift: sc ? `${hhmm(sc.startMin)}–${hhmm(sc.endMin)}` : null,
+      punches: ps.map((pu) => ({ id: pu.id, clockIn: pu.clockIn, clockOut: pu.clockOut, source: pu.source })),
+    };
   }).sort((a, b) => a.name.localeCompare(b.name) || (a.day < b.day ? -1 : 1));
 
   const weekMap = new Map<string, { employeeId: string; weekStart: string; actualHours: number; scheduledHours: number }>();
@@ -176,24 +203,125 @@ export async function summarize(tx: Tx, groupId: string | null, from: string, to
     w.actualHours += d.actualHours; w.scheduledHours += d.scheduledHours; weekMap.set(key, w);
   }
   const weeks = [...weekMap.values()].map((w) => { const e = empById.get(w.employeeId); const contract = e?.weeklyContractHours ?? 0; return { ...w, employeeNumber: e?.employeeNumber ?? '', name: e?.name ?? '', actualHours: r1(w.actualHours), scheduledHours: r1(w.scheduledHours), overtimeHours: r1(Math.max(0, w.actualHours - contract)) }; });
-  return { days, weeks, payStart };
+  return { days, weeks, payStart, graceMinutes: grace };
 }
 
 attendance.get('/summary', requires('workforce:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ groupId: uuid.optional(), from: z.string().regex(isoDay), to: z.string().regex(isoDay) }), req.query);
-  res.json(await withTenant(p.tenantId, (tx) => summarize(tx, q.groupId ?? null, q.from, q.to)));
+  res.json(await withTenant(p.tenantId, async (tx) => summarize(tx, q.groupId ?? null, q.from, q.to, await teamLimit(tx, p))));
+});
+
+attendance.get('/week', requires('workforce:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({
+    groupId: uuid.optional(), from: z.string().regex(isoDay), to: z.string().regex(isoDay), issue: z.enum(ISSUES as [Issue, ...Issue[]]).optional(), q: z.string().max(80).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0),
+  }), req.query);
+  if (q.to < q.from) throw bad('The end date is before the start date');
+  const s = await withTenant(p.tenantId, async (tx) => summarize(tx, q.groupId ?? null, q.from, q.to, await teamLimit(tx, p)));
+  res.json({ from: q.from, to: q.to, payStart: s.payStart, graceMinutes: s.graceMinutes, ...weekView(s.days, s.weeks, { issue: q.issue, q: q.q, limit: q.limit, offset: q.offset }) });
+});
+
+// ---------------------------------------------------------------- excusing a problem
+
+const ExcuseFields = { reasonCode: z.enum(REASONS), note: z.string().trim().max(300).default(''), paid: z.boolean().default(false) };
+const excuseDto = (r: any) => ({ id: r.id, employeeId: r.employeeId, day: r.day, kind: r.kind as ExcusableKind, reasonCode: r.reasonCode as string, note: r.note as string, paid: !!r.paid, level: r.level as string, by: r.excusedBy as string, at: r.excusedAt as string });
+
+/**
+ * Excuse problems for people on days, all or nothing. Who may: a manager anywhere, a supervisor for their own team (the same rule as leave). Refused for a day that has not happened
+ * yet, and for a day inside a payroll run that is approved or exported (reopen the run first), so a figure that has been paid on does not change underneath it.
+ */
+export async function excuseItems(tx: Tx, p: Principal, req: Request | null, items: { employeeId: string; day: string; kind: ExcusableKind }[], o: { reasonCode: string; note: string; paid: boolean }) {
+  if (o.reasonCode === 'OTHER' && o.note.trim().length < 3) throw bad('Say what happened when the reason is "Other"');
+  const seen = new Set<string>(), uniq = items.filter((i) => { const k = `${i.employeeId}|${i.day}|${i.kind}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  if (!uniq.length) return { excused: 0 };
+  const ids = [...new Set(uniq.map((i) => i.employeeId))];
+  const emps = new Map((await tx.q<any>('SELECT id, first_name || \' \' || last_name AS name, primary_group_id FROM employees WHERE tenant_id = :t AND id = ANY($1::uuid[])', [ids])).map((e) => [e.id as string, e]));
+  for (const id of ids) if (!emps.has(id)) throw notFound('Employee');
+  const horizon = addDays(new Date().toISOString().slice(0, 10), 1);
+  const future = uniq.find((i) => i.day > horizon);
+  if (future) throw bad(`${future.day} has not happened yet, so there is nothing to excuse.`);
+  let level: 'MANAGER' | 'SUPERVISOR' = 'MANAGER';
+  for (const id of ids) { const l = await approverLevel(tx, p, id, 'workforce:write'); if (l === 'SUPERVISOR') level = 'SUPERVISOR'; }
+  await assertNotLocked(tx, uniq.map((i) => ({ day: i.day, groupId: emps.get(i.employeeId).primaryGroupId })));
+  await tx.exec(
+    `INSERT INTO attendance_exceptions (tenant_id, employee_id, day, kind, reason_code, note, paid, level, excused_by, excused_by_id)
+     SELECT :t, e, d::date, k, $4, $5, $6, $7, $8, $9 FROM unnest($1::uuid[], $2::text[], $3::text[]) AS x(e, d, k)
+     ON CONFLICT (tenant_id, employee_id, day, kind) DO UPDATE SET reason_code = EXCLUDED.reason_code, note = EXCLUDED.note, paid = EXCLUDED.paid, level = EXCLUDED.level,
+       excused_by = EXCLUDED.excused_by, excused_by_id = EXCLUDED.excused_by_id, excused_at = now()`,
+    [uniq.map((i) => i.employeeId), uniq.map((i) => i.day), uniq.map((i) => i.kind), o.reasonCode, o.note, o.paid, level, p.name, p.userId]);
+  await audit(tx, p, req, { action: 'CREATE', entityType: 'ATTENDANCE_EXCEPTION', entityId: ids.length === 1 ? ids[0] : 'many', entityName: ids.length === 1 ? `${emps.get(ids[0]).name}, ${uniq.length} day${uniq.length === 1 ? '' : 's'}` : `${ids.length} people, ${uniq.length} problems`,
+    reason: o.reasonCode, after: { reasonCode: o.reasonCode, note: o.note, paid: o.paid, level, items: uniq.slice(0, 100) } });
+  return { excused: uniq.length };
+}
+
+/** A pay period that is approved or exported is closed to changes. */
+async function assertNotLocked(tx: Tx, days: { day: string; groupId: string | null }[]) {
+  const lo = days.reduce((a, b) => (b.day < a ? b.day : a), days[0].day), hi = days.reduce((a, b) => (b.day > a ? b.day : a), days[0].day);
+  const runs = await tx.q<any>(`SELECT wfm_group_id, period_start::text AS s, period_end::text AS e FROM payroll_runs WHERE tenant_id = :t AND status IN ('APPROVED', 'EXPORTED') AND period_end >= $1::date AND period_start <= $2::date`, [lo, hi]);
+  for (const d of days) {
+    const r = runs.find((x) => x.s <= d.day && x.e >= d.day && (!x.wfmGroupId || x.wfmGroupId === d.groupId));
+    if (r) throw new HttpError(409, 'PAY_PERIOD_LOCKED', `Payroll for ${r.s} to ${r.e} is already approved, so ${d.day} is closed. Reopen that payroll run first.`);
+  }
+}
+
+attendance.post('/exceptions', requiresAny('workforce:write', 'requests:approve'), async (req, res) => {
+  const p = me(req), b = parse(z.object({ items: z.array(z.object({ employeeId: uuid, day: z.string().regex(isoDay), kind: z.enum(EXCUSABLE as [ExcusableKind, ...ExcusableKind[]]) })).min(1).max(500), ...ExcuseFields }), req.body);
+  res.status(201).json(await withTenant(p.tenantId, (tx) => excuseItems(tx, p, req, b.items, b)));
+});
+
+/**
+ * Excuse every person-day of one kind that the screen is showing under a filter (a clock outage that hit the whole floor): the server finds them itself, so it covers every page and not
+ * only the one on screen.
+ */
+attendance.post('/exceptions/by-filter', requiresAny('workforce:write', 'requests:approve'), async (req, res) => {
+  const p = me(req), b = parse(z.object({ groupId: uuid.optional(), from: z.string().regex(isoDay), to: z.string().regex(isoDay), issue: z.enum(EXCUSABLE as [ExcusableKind, ...ExcusableKind[]]), q: z.string().max(80).optional(), ...ExcuseFields }), req.body);
+  if (b.to < b.from) throw bad('The end date is before the start date');
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const s = await summarize(tx, b.groupId ?? null, b.from, b.to, await teamLimit(tx, p));
+    const q = (b.q ?? '').trim().toLowerCase();
+    const items = s.days.filter((d) => d.issues.includes(b.issue) && (!q || `${d.name} ${d.employeeNumber}`.toLowerCase().includes(q))).map((d) => ({ employeeId: d.employeeId, day: d.day, kind: b.issue }));
+    if (!items.length) return { matched: 0, excused: 0 };
+    if (items.length > 2000) throw bad(`That is ${items.length} days at once. Narrow it to one group or a search, or excuse them in smaller sets.`);
+    return { matched: items.length, ...(await excuseItems(tx, p, req, items, b)) };
+  });
+  res.status(201).json(out);
+});
+
+attendance.get('/exceptions', requires('workforce:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ employeeId: uuid.optional(), from: z.string().regex(isoDay).optional(), to: z.string().regex(isoDay).optional() }), req.query);
+  const rows = await withTenant(p.tenantId, async (tx) => {
+    const lim = await teamLimit(tx, p);
+    return tx.q<any>(
+      `SELECT x.*, x.day::text AS day, e.first_name || ' ' || e.last_name AS employee_name, e.employee_number FROM attendance_exceptions x JOIN employees e ON e.id = x.employee_id
+        WHERE x.tenant_id = :t AND ($1::uuid IS NULL OR x.employee_id = $1) AND ($2::date IS NULL OR x.day >= $2) AND ($3::date IS NULL OR x.day <= $3)
+          AND ($4::uuid[] IS NULL OR e.team_id = ANY($4::uuid[]) OR e.id = $5::uuid) ORDER BY x.day DESC, e.employee_number LIMIT 1000`, [q.employeeId ?? null, q.from ?? null, q.to ?? null, lim ? lim.teamIds : null, lim?.self ?? null]);
+  });
+  res.json(rows.map((r) => ({ ...excuseDto(r), employeeName: r.employeeName, employeeNumber: r.employeeNumber })));
+});
+
+attendance.delete('/exceptions/:id', requiresAny('workforce:write', 'requests:approve'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  await withTenant(p.tenantId, async (tx) => {
+    const r = await tx.one<any>('SELECT x.*, x.day::text AS day, e.primary_group_id FROM attendance_exceptions x JOIN employees e ON e.id = x.employee_id WHERE x.tenant_id = :t AND x.id = $1', [id]);
+    if (!r) throw notFound('Excuse');
+    await approverLevel(tx, p, r.employeeId, 'workforce:write');
+    await assertNotLocked(tx, [{ day: r.day, groupId: r.primaryGroupId }]);
+    await tx.exec('DELETE FROM attendance_exceptions WHERE tenant_id = :t AND id = $1', [id]);
+    await audit(tx, p, req, { action: 'DELETE', entityType: 'ATTENDANCE_EXCEPTION', entityId: id, entityName: `${r.day} ${r.kind}`, before: excuseDto(r) });
+  });
+  res.json({ ok: true });
 });
 
 attendance.get('/payroll-export.csv', requires('workforce:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ groupId: uuid.optional(), from: z.string().regex(isoDay), to: z.string().regex(isoDay) }), req.query);
-  const { days, weeks, payStart } = await withTenant(p.tenantId, (tx) => summarize(tx, q.groupId ?? null, q.from, q.to));
+  const { days, weeks, payStart } = await withTenant(p.tenantId, async (tx) => summarize(tx, q.groupId ?? null, q.from, q.to, await teamLimit(tx, p)));
   const otByWeek = new Map(weeks.map((w) => [`${w.employeeId}|${w.weekStart}`, w]));
   const rows = ['employee_number,name,day,scheduled_hours,actual_hours,regular_hours,overtime_hours,status'];
   for (const d of days) {
     const w = otByWeek.get(`${d.employeeId}|${mondayOf(d.day, payStart)}`);
     // weekly overtime (actual hours over the person's weekly contract) apportioned across the week's days by each day's share of actual hours
     const ot = w && w.actualHours > 0 ? r1((d.actualHours / w.actualHours) * w.overtimeHours) : 0;
-    const reg = r1(d.actualHours - ot);
+    const reg = d.status === 'EXCUSED' && d.paidExcuse ? d.scheduledHours : r1(d.actualHours - ot);   // an excused missed day marked as paid is paid at the scheduled hours
     rows.push([d.employeeNumber, `"${d.name}"`, d.day, d.scheduledHours, d.actualHours, reg, ot, d.status].join(','));
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8').setHeader('Content-Disposition', `attachment; filename="payroll-${q.from}-to-${q.to}.csv"`).send(rows.join('\n'));

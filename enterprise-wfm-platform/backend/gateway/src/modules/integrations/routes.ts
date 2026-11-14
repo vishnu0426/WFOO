@@ -25,8 +25,9 @@ import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { PRESETS, presetById, presetsByCategory, configSchemaFor, type Category } from './presets.ts';
 import { mapFields, suggestEntityMatches, type FieldMap } from './mapping.ts';
 import { startSubscription, stopSubscription } from './natsSubscriber.ts';
-import { applyLiveRows, loadFieldMaps, pullSupport, recordRun, runConnector, stageBackfillRows, summariseLive, testDatabaseQuery } from './runner.ts';
-import { checkPresetConfig } from './pullRules.ts';
+import { applyLiveRows, loadFieldMaps, pullSupport, recordRun, runConnector, stageBackfillRows, summariseLive, testDatabaseQuery, testRestPull } from './runner.ts';
+import { checkPresetConfig, relayIntervalMinutes } from './pullRules.ts';
+import { readinessOf } from './readiness.ts';
 import { checkSchedule, firstRunAt, type Schedule } from './schedule.ts';
 import { openFields } from '../../secrets.ts';
 
@@ -54,7 +55,7 @@ integrationsAdmin.get('/catalog', requires('config:read'), async (_req, res) => 
   res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=600');   // defined by the code, changes only with a release
   const byCategory: Record<string, unknown> = {};
   for (const cat of ['ACD', 'CRM', 'HRMS', 'DATABASE', 'ONPREM', 'SFTP'] as Category[]) {
-    byCategory[cat] = presetsByCategory(cat).map((p) => ({ id: p.id, label: p.label, method: p.method, authType: p.authType, fields: p.fields, note: p.note ?? null, writesTo: p.writesTo, canPull: pullSupport(p, {}).canPull }));
+    byCategory[cat] = presetsByCategory(cat).map((p) => ({ id: p.id, label: p.label, method: p.method, authType: p.authType, fields: p.fields, note: p.note ?? null, guide: p.guide ?? null, readiness: readinessOf(p.id), writesTo: p.writesTo, canPull: pullSupport(p, {}).canPull }));
   }
   res.json(byCategory);
 });
@@ -64,8 +65,10 @@ integrationsAdmin.get('/catalog', requires('config:read'), async (_req, res) => 
 integrationsAdmin.get('/', requires('config:read'), async (req, res) => {
   const p = me(req), groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
   const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
-    `SELECT *, backfill_through::text AS backfill_through FROM integration_connectors WHERE tenant_id = :t AND ($1::uuid IS NULL OR wfm_group_id = $1 OR wfm_group_id IS NULL) ORDER BY name`, [groupId]));
-  res.json(rows.map((r) => connectorDto(r)));
+    `SELECT c.*, c.backfill_through::text AS backfill_through,
+            (SELECT coalesce(sum(r.rows_ok), 0)::int FROM integration_runs r WHERE r.tenant_id = c.tenant_id AND r.connector_id = c.id AND r.started_at > now() - interval '24 hours') AS rows_24h
+       FROM integration_connectors c WHERE c.tenant_id = :t AND ($1::uuid IS NULL OR c.wfm_group_id = $1 OR c.wfm_group_id IS NULL) ORDER BY c.name`, [groupId]));
+  res.json(rows.map((r) => ({ ...connectorDto(r), rows24h: r.method === 'STREAM_SUBSCRIBE' ? null : r.rows24h })));      // a stream keeps no per-delivery history, so it has no count to show
 });
 
 integrationsAdmin.get('/:id', requires('config:read'), async (req, res) => {
@@ -128,6 +131,9 @@ integrationsAdmin.post('/', requires('config:write'), async (req, res) => {
     if (preset.defaultMaps?.length) await tx.exec(
       'INSERT INTO integration_field_maps (tenant_id, connector_id, target_field, source_path, transform) SELECT :t, $1, x.f, x.s, x.tr FROM unnest($2::text[], $3::text[], $4::text[]) AS x(f, s, tr)',
       [c!.id, preset.defaultMaps.map((m) => m.targetField), preset.defaultMaps.map((m) => m.sourcePath), preset.defaultMaps.map((m) => m.transform ?? '')]);
+    if (preset.defaultEventRules?.length) await tx.exec(
+      `INSERT INTO integration_event_rules (tenant_id, connector_id, event_type, action, state, reason) SELECT :t, $1, x.e, x.a, x.s, x.r FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS x(e, a, s, r) ON CONFLICT DO NOTHING`,
+      [c!.id, preset.defaultEventRules.map((r) => r.eventType), preset.defaultEventRules.map((r) => r.action), preset.defaultEventRules.map((r) => r.state ?? null), preset.defaultEventRules.map((r) => r.reason ?? null)]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'INTEGRATION_CONNECTOR', entityId: c!.id, entityName: b.name, after: { category: b.category, preset: preset.id } });
     return c;
   });
@@ -187,8 +193,9 @@ integrationsAdmin.post('/:id/test-pull', requires('config:write'), async (req, r
   const p = me(req), id = parse(uuid, req.params.id);
   const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT * FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));
   if (!c) throw notFound('Connector');
-  if (c.preset !== 'DATABASE_POSTGRES_PULL') throw bad('Only a database connector has a query to test.');
-  try { res.json(await testDatabaseQuery(c, openFields(c.config, CONFIG_SECRET_KEYS))); }
+  const preset = presetById(c.preset);
+  if (c.preset !== 'DATABASE_POSTGRES_PULL' && !(preset?.method === 'API_PULL' && pullSupport(preset, openFields(c.config, CONFIG_SECRET_KEYS)).canPull)) throw bad('This connector has nothing to test from here: the source sends its data to us.');
+  try { res.json(c.preset === 'DATABASE_POSTGRES_PULL' ? await testDatabaseQuery(c, openFields(c.config, CONFIG_SECRET_KEYS)) : await testRestPull(c, preset!)); }
   catch (e: any) { throw bad(e.message); }
 });
 
@@ -380,7 +387,7 @@ integrationsPublic.post('/:id/backfill', async (req, res) => {
   if (!connector) throw notFound('Connector');
   const b = parse(RawRows.extend({ through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }), req.body);
   const started = new Date();
-  const out = await stageBackfillRows(connector, b.rows, b.through).catch(async (e: any) => {
+  const out = await stageBackfillRows(connector, b.rows, b.through, { intervalMin: relayIntervalMinutes(connector.config) }).catch(async (e: any) => {
     await recordRun(connector, 'PUSH', 'BACKFILL', started, { rowsIn: b.rows.length, rowsOk: 0, rowsRejected: b.rows.length, message: e.message, failed: true }).catch(() => {});
     throw e;
   });
@@ -399,7 +406,7 @@ integrationsPublic.post('/:id/live', async (req, res) => {
   const b = parse(RawRows, req.body);
 
   const started = new Date();
-  const out = await applyLiveRows(connector, preset, b.rows).catch(async (e: any) => {
+  const out = await applyLiveRows(connector, preset, b.rows, { intervalMin: relayIntervalMinutes(connector.config) }).catch(async (e: any) => {
     await recordRun(connector, 'PUSH', 'LIVE', started, { rowsIn: b.rows.length, rowsOk: 0, rowsRejected: b.rows.length, message: e.message, failed: true }).catch(() => {});
     throw e;
   });

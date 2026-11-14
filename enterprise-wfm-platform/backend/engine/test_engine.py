@@ -124,11 +124,11 @@ def test_reconcile():
 
 
 def test_erlang():
-    n_c, sl_c, _, _ = staffing.solve_agents(20 * 300 / 900, 300, wfm_pb2.ChannelParams(service_level=0.8, answer_sec=20, occupancy_cap=1.0), "erlang_c")
+    n_c, sl_c, *_ = staffing.solve_agents(20 * 300 / 900, 300, wfm_pb2.ChannelParams(service_level=0.8, answer_sec=20, occupancy_cap=1.0), "erlang_c")
     print("erlang c agents for 6.67 erlangs:", n_c, round(sl_c, 3))
     assert sl_c >= 0.8 and n_c >= 8
     p = wfm_pb2.ChannelParams(service_level=0.8, answer_sec=20, occupancy_cap=1.0, patience_sec=120)
-    n_a, sl_a, _, ab = staffing.solve_agents(40, 300, p, "erlang_a")
+    n_a, sl_a, _, ab, *_ = staffing.solve_agents(40, 300, p, "erlang_a")
     n_c, *_ = staffing.solve_agents(40, 300, p, "erlang_c")
     print("40 erlangs: erlang_c", n_c, "erlang_a", n_a, "abandon", round(ab, 3))
     assert n_a <= n_c, "Erlang A never needs more agents than Erlang C"

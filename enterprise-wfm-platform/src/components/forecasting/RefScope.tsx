@@ -3,32 +3,46 @@
  * a page header with the forecast's status, a toolbar that picks the group, type and forecast, and the empty states.
  * Also the few form controls those screens need, in the same look as the toolbar.
  */
-import React from "react";
+import React, { useState } from "react";
 import { STATUS_LABEL, isNew } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { Empty } from "./ui";
+import { ContextBar } from "./ContextBar";
 import { PageHeader, Select, StatusPill, Toolbar } from "../wfm/app-shell";
 
-export function RefScope({ crumb, title, description, actions, toolbar, needs = "forecast", emptyHint, children }: {
-  crumb: string; title: string; description: string; actions?: React.ReactNode; toolbar?: React.ReactNode; needs?: "forecast" | "group"; emptyHint?: string; children: (v: NonNullable<ReturnType<typeof useForecast>["version"]>) => React.ReactNode;
+const SHOW_ARCHIVED = "wfm_show_archived_forecasts";
+
+export function RefScope({ crumb, title, description, actions, toolbar, context, needs = "forecast", emptyHint, bare, children }: {
+  /** no page header: the page around it draws one (a page with tabs) */ bare?: boolean;
+  crumb: string; title: string; description: string; actions?: React.ReactNode; toolbar?: React.ReactNode; /** "day": the shared context bar for a page that works on one day, instead of the group, type and forecast boxes */ context?: "day"; needs?: "forecast" | "group"; emptyHint?: string; children: (v: NonNullable<ReturnType<typeof useForecast>["version"]>) => React.ReactNode;
 }) {
   const { groups, group, setGroupId, versions, version, setVersionId, kind, setKind, go, can } = useForecast();
+  // archived forecasts are put away: the picker hides them unless asked (the one being looked at always stays in the list)
+  const [showArchived, setShowArchived] = useState(() => localStorage.getItem(SHOW_ARCHIVED) === "1");
   if (!group) return null;
-  const header = (
+  const ofKind = versions.filter((v) => v.kind === kind);
+  const archived = ofKind.filter((v) => v.status === "ARCHIVED").length;
+  const listed = ofKind.filter((v) => showArchived || v.status !== "ARCHIVED" || v.id === version?.id);
+  const header = bare ? null : (
     <PageHeader breadcrumb={["Forecasting", crumb]} title={title} description={description}
       actions={<>{version && <StatusPill status={version.status} />}{actions}</>} />
   );
-  const scope = (
-    <Toolbar>
+  const scope = version && context ? (
+    <div className="sticky top-0 z-30 bg-background"><ContextBar mode="day" shownGrain="30" /></div>
+  ) : (
+    <div className="sticky top-0 z-30 bg-background"><Toolbar>
       <Select label="Group" value={group.id} options={groups.map((g) => ({ id: g.id, label: g.name }))} onChange={(id) => setGroupId(id)} />
       <Select label="Type" value={kind} options={[{ id: "SHORT", label: "Short-term" }, { id: "LONG", label: "Long-term" }]} onChange={(k) => setKind(k as "SHORT" | "LONG")} />
       {version && (
         <Select label="Forecast" value={version.id}
-          options={versions.filter((v) => v.kind === kind).map((v) => ({ id: v.id, label: `${v.status === "PUBLISHED" ? "● " : ""}${v.name} — ${STATUS_LABEL[v.status].toLowerCase()}${isNew(v) ? " — NEW" : ""}` }))}
+          options={listed.map((v) => ({ id: v.id, label: `${v.status === "PUBLISHED" ? "● " : ""}${v.name} — ${STATUS_LABEL[v.status].toLowerCase()}${isNew(v) ? " — NEW" : ""}` }))}
           onChange={(id) => setVersionId(id)} />
       )}
+      {version && archived > 0 && (
+        <label className="flex h-9 items-center gap-2 text-[13px] text-muted-foreground"><input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); localStorage.setItem(SHOW_ARCHIVED, e.target.checked ? "1" : "0"); }} />Show archived ({archived})</label>
+      )}
       {toolbar}
-    </Toolbar>
+    </Toolbar></div>
   );
   if (!version) {
     return (
@@ -85,10 +99,25 @@ export function RefTable({ head, right = [], children }: { head: string[]; right
     <div className="overflow-x-auto">
       <table className="num w-full text-[13px]">
         <thead className="border-y bg-surface text-left text-[12px] text-subtle-foreground">
-          <tr>{head.map((h, i) => <th key={h + i} className={`px-6 py-2 font-medium ${right.includes(i) ? "text-right" : ""}`}>{h}</th>)}</tr>
+          <tr>{head.map((h, i) => <th key={h + i} className={`px-6 py-2 font-medium ${right.includes(i) ? "text-right" : ""}`}>{h === "" ? <span className="sr-only">Actions</span> : h}</th>)}</tr>
         </thead>
         <tbody>{children}</tbody>
       </table>
+    </div>
+  );
+}
+
+/** The frame for a screen that works on a whole group rather than one forecast (Accuracy): the same breadcrumb header and Group box as its sibling screens. */
+export function GroupScope({ crumb, title, description, bare, children }: { crumb: string; title: string; description: string; bare?: boolean; children: React.ReactNode }) {
+  const { groups, group, setGroupId } = useForecast();
+  if (!group) return null;
+  return (
+    <div>
+      {!bare && <PageHeader breadcrumb={["Forecasting", crumb]} title={title} description={description} />}
+      <div className="sticky top-0 z-30 bg-background"><Toolbar>
+        <Select label="Group" value={group.id} options={groups.map((g) => ({ id: g.id, label: g.name }))} onChange={(id) => setGroupId(id)} />
+      </Toolbar></div>
+      {children}
     </div>
   );
 }

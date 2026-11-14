@@ -1,0 +1,21 @@
+# The Timefold solver service (backend/timefold-service): Timefold Solver Community Edition (Apache 2.0) behind a small HTTP API for the scheduling engine.
+# Build:  docker build -f docker/Dockerfile.timefold -t agnowfm-timefold .
+# Run:    docker run -p 127.0.0.1:8090:8090 -e BIND=0.0.0.0 -e TIMEFOLD_TOKEN=<secret> agnowfm-timefold
+# Then set TIMEFOLD_URL=http://<host>:8090 (and the same TIMEFOLD_TOKEN) in the engine's environment, and ask for the solver "timefold" (or add it to SOLVER_CHAIN).
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /src
+COPY backend/timefold-service/pom.xml ./
+RUN mvn -B -q dependency:go-offline
+COPY backend/timefold-service/src ./src
+RUN mvn -B -q package -DskipTests
+
+FROM eclipse-temurin:21-jre
+RUN useradd --system --no-create-home timefold
+WORKDIR /app
+COPY --from=build /src/target/timefold-service.jar ./
+USER timefold
+ENV PORT=8090 BIND=0.0.0.0
+EXPOSE 8090
+HEALTHCHECK --interval=30s --timeout=3s CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT}"]
+# a token is required in production: without TIMEFOLD_TOKEN anyone who can reach the port can use the solver
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "timefold-service.jar"]

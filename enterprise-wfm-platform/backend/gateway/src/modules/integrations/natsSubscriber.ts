@@ -14,15 +14,31 @@ import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
 import { presetById, type Preset } from './presets.ts';
 import { mapFields, type FieldMap } from './mapping.ts';
+import { decideAgentMessage, type EventRule } from './agentMessage.ts';
+import { forgetAllConnectors, forgetConnector, worthRecording } from './recordThrottle.ts';
 
 const sc = StringCodec();
 const live = new Map<string, { nc: NatsConnection; sub: Subscription }>();
 
-async function loadFieldMaps(connectorId: string, tenantId: string): Promise<FieldMap[]> {
+/** A live feed sends many messages a second; the settings that decide what each one means change rarely, so they are read once in a while, not per message. */
+const SETTINGS_TTL_MS = 15_000;
+const mapCache = new Map<string, { at: number; maps: FieldMap[] }>();
+const ruleCache = new Map<string, { at: number; rule: EventRule; unflushed: number }>();
+/** Test-only: forget what has been cached, and what was last written about each connector. */
+export const _resetSubscriberCachesForTests = () => { mapCache.clear(); ruleCache.clear(); forgetAllConnectors(); };
+
+async function loadFieldMaps(connectorId: string, tenantId: string, preset?: Preset): Promise<FieldMap[]> {
+  const hit = mapCache.get(connectorId);
+  if (hit && Date.now() - hit.at < SETTINGS_TTL_MS) return hit.maps;
   const rows = await withTenant(tenantId, (tx) => tx.q<any>(
     'SELECT target_field, source_path, transform FROM integration_field_maps WHERE tenant_id = :t AND connector_id = $1', [connectorId]));
-  return rows.map((r) => ({ targetField: r.targetField, sourcePath: r.sourcePath, transform: (r.transform || null) as FieldMap['transform'] }));
+  let maps: FieldMap[] = rows.map((r) => ({ targetField: r.targetField, sourcePath: r.sourcePath, transform: (r.transform || null) as FieldMap['transform'] }));
+  // a connector made before its preset shipped a field map starts from the preset's, instead of rejecting every message until someone maps by hand
+  if (!maps.length && preset?.defaultMaps?.length) maps = preset.defaultMaps.map((m) => ({ targetField: m.targetField, sourcePath: m.sourcePath, transform: (m.transform || null) as FieldMap['transform'] }));
+  mapCache.set(connectorId, { at: Date.now(), maps });
+  return maps;
 }
+
 
 /** `sampleRaw`, when given, is kept in `last_sample` independently of success/failure -- it's what the drag-and-drop
  * field mapper in Integration Station builds its draggable source list from, so it has to survive the mapping
@@ -33,6 +49,7 @@ async function loadFieldMaps(connectorId: string, tenantId: string): Promise<Fie
  * The RETURNING clause reads the row's PRE-update error on the same write, so detecting the transition costs
  * nothing extra. */
 async function mark(connectorId: string, tenantId: string, ok: boolean, message?: string, sampleRaw?: unknown) {
+  if (!worthRecording(connectorId, ok, message)) return;
   try {
     const rows = await withTenant(tenantId, (tx) => tx.q<any>(
       `WITH old AS (SELECT last_error, name FROM integration_connectors WHERE tenant_id = :t AND id = $1)
@@ -74,43 +91,38 @@ async function resolveEmployeeNumber(connectorId: string, tenantId: string, sour
  * `seen_count` defaults to 0 and is only bumped by the ON CONFLICT branch, so a result of 0 means this exact
  * INSERT just created the row -- the one moment worth telling someone about, not every later sighting while it
  * sits unresolved. */
-async function recordEventType(connectorId: string, tenantId: string, connectorName: string, eventType: string) {
+async function recordEventType(connectorId: string, tenantId: string, connectorName: string, eventType: string): Promise<EventRule> {
+  const key = `${connectorId}|${eventType}`;
+  const hit = ruleCache.get(key);
+  if (hit && Date.now() - hit.at < SETTINGS_TTL_MS) { hit.unflushed++; return hit.rule; }       // counted now, written with the next refresh
+  const add = hit?.unflushed ?? 0;
   const rows = await withTenant(tenantId, (tx) => tx.q<any>(
     `INSERT INTO integration_event_rules (tenant_id, connector_id, event_type) VALUES (:t, $1, $2)
-     ON CONFLICT (connector_id, event_type) DO UPDATE SET seen_count = integration_event_rules.seen_count + 1, last_seen_at = now()
-     RETURNING action, state, reason, seen_count`, [connectorId, eventType]));
+     ON CONFLICT (connector_id, event_type) DO UPDATE SET seen_count = integration_event_rules.seen_count + 1 + $3::int, last_seen_at = now()
+     RETURNING action, state, reason, seen_count`, [connectorId, eventType, add]));
   const r = rows[0];
   if (r.seenCount === 0 && r.action === 'PENDING') publish(tenantId, ['integration', 'event-type-pending'], { connectorId, name: connectorName, eventType });
-  return { action: r.action as 'PENDING' | 'STATE' | 'SKIP', state: r.state as string | null, reason: r.reason as string | null };
+  const rule: EventRule = { action: r.action, state: r.state, reason: r.reason };
+  ruleCache.set(key, { at: Date.now(), rule, unflushed: 0 });
+  return rule;
 }
 
 async function handleOne(connector: any, preset: Preset, subject: string, data: Uint8Array) {
   let raw: unknown;
   try { raw = JSON.parse(sc.decode(data)); } catch { return mark(connector.id, connector.tenantId, false, `Message on '${subject}' is not JSON: ${sc.decode(data).slice(0, 300)}`); }
-  const maps = await loadFieldMaps(connector.id, connector.tenantId);
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return mark(connector.id, connector.tenantId, false, `Message on '${subject}' is not a JSON object: ${sc.decode(data).slice(0, 300)}`);
+  const maps = await loadFieldMaps(connector.id, connector.tenantId, preset);
   if (!maps.length) return mark(connector.id, connector.tenantId, false, sample(subject), raw); // no field map set up yet -- keep the real shape instead of guessing
   const m = mapFields(raw, maps);
   try {
     if (preset.writesTo === 'agent_state') {
-      let state = m.state !== undefined ? String(m.state) : undefined;
-      let reason = m.reason ? String(m.reason) : undefined;
-      if (m.eventType !== undefined) {
-        const rule = await recordEventType(connector.id, connector.tenantId, connector.name, String(m.eventType));
-        // only the event type decides what happens when the message carries no state of its own (logins, logouts,
-        // heartbeats); a message that already has a state (e.g. EVT_AGENT_READY with state=READY) goes straight
-        // through on that, the event-type rule is just there to count it -- it must never block a real state change
-        if (!state) {
-          if (rule.action === 'SKIP') return mark(connector.id, connector.tenantId, true, undefined, raw);
-          if (rule.action === 'PENDING') return mark(connector.id, connector.tenantId, false, `Event type '${m.eventType}' is waiting for a rule. Set it under RTA State Mapping.`, raw);
-          if (rule.state) state = rule.state;
-          if (rule.reason !== null && rule.reason !== undefined) reason = rule.reason;
-        } else if (rule.action === 'SKIP') {
-          return mark(connector.id, connector.tenantId, true, undefined, raw);
-        }
-      }
-      if (!m.employeeNumber || !state) return mark(connector.id, connector.tenantId, false, sample(subject), raw);
-      const employeeNumber = await resolveEmployeeNumber(connector.id, connector.tenantId, String(m.employeeNumber));
-      const out = await ingestAgentEvents(connector.tenantId, [{ employeeNumber, state, reason, at: m.at ? String(m.at) : undefined }]);
+      const rule = m.eventType !== undefined && String(m.eventType).trim() ? await recordEventType(connector.id, connector.tenantId, connector.name, String(m.eventType).trim()) : null;
+      const d = decideAgentMessage(m, rule);
+      if (d.kind === 'skip') return mark(connector.id, connector.tenantId, true, undefined, raw);
+      if (d.kind === 'pending') return mark(connector.id, connector.tenantId, false, `Event type '${d.eventType}' is waiting for a rule. Set it under RTA State Mapping.`, raw);
+      if (d.kind === 'unmapped') return mark(connector.id, connector.tenantId, false, `${sample(subject)} (no ${d.missing} found)`, raw);
+      const employeeNumber = await resolveEmployeeNumber(connector.id, connector.tenantId, d.employeeNumber);
+      const out = await ingestAgentEvents(connector.tenantId, [{ employeeNumber, state: d.state, reason: d.reason, at: d.at }]);
       return mark(connector.id, connector.tenantId, out.errors.length === 0, out.errors[0]?.message, raw);
     }
     if (preset.writesTo === 'interval_history') {
@@ -143,7 +155,8 @@ export async function startSubscription(connector: any): Promise<void> {
     });
   } catch (e: any) { return mark(connector.id, connector.tenantId, false, `Could not connect to ${servers.join(',')}: ${e.message}`); }
 
-  const sub = nc.subscribe(subject);
+  // one queue group per connector: when several gateway processes run, NATS hands each message to only one of them, so an event is stored once, not once per process
+  const sub = nc.subscribe(subject, { queue: `wfm-connector-${connector.id}` });
   live.set(connector.id, { nc, sub });
   const scoped = <T>(fn: () => Promise<T>) => withScope(connector.tenantId, connector.workspaceId, fn);
   await scoped(() => markConnected(connector.id, connector.tenantId));
@@ -167,6 +180,8 @@ export async function startSubscription(connector: any): Promise<void> {
 }
 
 export async function stopSubscription(connectorId: string): Promise<void> {
+  mapCache.delete(connectorId); forgetConnector(connectorId);
+  for (const k of ruleCache.keys()) if (k.startsWith(`${connectorId}|`)) ruleCache.delete(k);
   const s = live.get(connectorId);
   if (!s) return;
   live.delete(connectorId);

@@ -105,7 +105,10 @@ describe('forecast self-learning', { skip: DB ? false : 'needs DATABASE_URL to b
     assert.ok((await total(on.json.id)) > (await total(off.json.id)) * 1.03);
     assert.match((await call(token, 'POST', '/forecast/learning/run', { groupId })).json.note, /switched off/);
     await call(token, 'PUT', '/forecast/learning/settings', { groupId, enabled: true });
-    assert.ok((await call(token, 'DELETE', `/forecast/learning/factors?groupId=${groupId}`)).json.cleared > 0);
+    const noReason = await call(token, 'DELETE', `/forecast/learning/factors?groupId=${groupId}`);
+    assert.equal(noReason.status, 400, 'forgetting needs a reason'); assert.match(JSON.stringify(noReason.json), /Say why/);
+    assert.ok((await call(token, 'GET', `/forecast/learning?groupId=${groupId}`)).json.factors.length > 0, 'a refused request clears nothing');
+    assert.ok((await call(token, 'DELETE', `/forecast/learning/factors?groupId=${groupId}&reason=${encodeURIComponent('business changed')}`)).json.cleared > 0);
     assert.equal((await call(token, 'GET', `/forecast/learning?groupId=${groupId}`)).json.factors.length, 0);
   });
 

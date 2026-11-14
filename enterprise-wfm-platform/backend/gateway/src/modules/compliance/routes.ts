@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../../db.ts';
-import { me, requires } from '../../auth.ts';
+import { me, requires, requireUnscoped } from '../../auth.ts';
 import { audit } from '../../audit.ts';
 import { bad, conflict, notFound, parse } from '../../http.ts';
 import { dropCache } from '../../infra.ts';
@@ -15,7 +15,7 @@ export const compliance = Router();
 const uuid = z.string().uuid();
 
 /** Make sure the ready-made packs exist for this organisation (they are added once, then left alone). */
-async function ensureBuiltIns(tx: Tx) {
+export async function ensureBuiltIns(tx: Tx) {
   for (const b of BUILT_INS) {
     await tx.exec(
       `INSERT INTO compliance_packs (tenant_id, workspace_id, code, name, region, description, rules, built_in) VALUES (:t, :w, $1, $2, $3, $4, $5, true) ON CONFLICT (tenant_id, workspace_id, code) DO NOTHING`,
@@ -25,13 +25,17 @@ async function ensureBuiltIns(tx: Tx) {
 
 const packDto = (p: any, used = 0) => ({ id: p.id, code: p.code, name: p.name, region: p.region, description: p.description, rules: p.rules as Rule[], builtIn: p.builtIn, version: p.version, usedBy: used });
 
-/** The rules that apply to each person of a WFM group: their own override, else their team's pack, else the group's, else the organisation's, else none. */
+/** The rules that apply to each person of a WFM group: their own override, else their team's pack, else the group's, else the site's, else the region's, else the organisation's, else none. */
 export interface RuleSets { forTeam: (teamId: string | null | undefined, employeeId?: string | null) => Rule[]; group: Rule[]; packName: (teamId: string | null | undefined, employeeId?: string | null) => string | null }
 export async function loadRuleSets(tx: Tx, groupId: string): Promise<RuleSets> {
+  const place = await tx.one<{ siteId: string | null; regionId: string | null }>('SELECT g.site_id, s.region_id FROM wfm_groups g LEFT JOIN sites s ON s.id = g.site_id AND s.tenant_id = g.tenant_id WHERE g.tenant_id = :t AND g.id = $1', [groupId]);
   const rows = await tx.q<any>(
     `SELECT a.scope_type, a.scope_id, p.name, p.rules FROM compliance_assignments a JOIN compliance_packs p ON p.id = a.pack_id
-     WHERE a.tenant_id = :t AND (a.scope_type = 'TENANT' OR a.scope_type = 'TEAM' OR a.scope_type = 'EMPLOYEE' OR (a.scope_type = 'GROUP' AND a.scope_id = $1))`, [groupId]);
-  const tenant = rows.find((r) => r.scopeType === 'TENANT'), group = rows.find((r) => r.scopeType === 'GROUP');
+     WHERE a.tenant_id = :t AND (a.scope_type = 'TENANT' OR a.scope_type = 'TEAM' OR a.scope_type = 'EMPLOYEE' OR (a.scope_type = 'GROUP' AND a.scope_id = $1)
+       OR (a.scope_type = 'SITE' AND a.scope_id = $2::uuid) OR (a.scope_type = 'REGION' AND a.scope_id = $3::uuid))`, [groupId, place?.siteId ?? null, place?.regionId ?? null]);
+  // from the most general to the most specific: the organisation's pack, a region's, a site's, the group's
+  const tenant = rows.find((r) => r.scopeType === 'REGION') ?? rows.find((r) => r.scopeType === 'TENANT');
+  const group = rows.find((r) => r.scopeType === 'GROUP') ?? rows.find((r) => r.scopeType === 'SITE');
   const teams = new Map(rows.filter((r) => r.scopeType === 'TEAM').map((r) => [r.scopeId, r]));
   const employees = new Map(rows.filter((r) => r.scopeType === 'EMPLOYEE').map((r) => [r.scopeId, r]));
   const pick = (teamId: string | null | undefined, employeeId?: string | null) => (employeeId && employees.get(employeeId)) || (teamId && teams.get(teamId)) || group || tenant || null;
@@ -97,19 +101,23 @@ compliance.delete('/packs/:id', requires('config:write'), async (req, res) => {
 
 compliance.get('/assignments', requires('config:read'), async (req, res) => {
   const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>(
-    `SELECT a.scope_type, a.scope_id, a.pack_id, p.name AS pack_name, coalesce(g.name, t.name, e.first_name || ' ' || e.last_name, 'Whole organisation') AS scope_name
+    `SELECT a.scope_type, a.scope_id, a.pack_id, p.name AS pack_name, coalesce(g.name, t.name, e.first_name || ' ' || e.last_name, si.name, rg.name, 'Whole organisation') AS scope_name
      FROM compliance_assignments a JOIN compliance_packs p ON p.id = a.pack_id LEFT JOIN wfm_groups g ON g.id = a.scope_id AND a.scope_type = 'GROUP' LEFT JOIN teams t ON t.id = a.scope_id AND a.scope_type = 'TEAM'
-     LEFT JOIN employees e ON e.id = a.scope_id AND a.scope_type = 'EMPLOYEE' WHERE a.tenant_id = :t ORDER BY a.scope_type, scope_name`));
+     LEFT JOIN employees e ON e.id = a.scope_id AND a.scope_type = 'EMPLOYEE' LEFT JOIN sites si ON si.id = a.scope_id AND a.scope_type = 'SITE' LEFT JOIN regions rg ON rg.id = a.scope_id AND a.scope_type = 'REGION'
+     WHERE a.tenant_id = :t ORDER BY a.scope_type, scope_name`));
   res.json(rows.map((r) => ({ scopeType: r.scopeType, scopeId: r.scopeId, scopeName: r.scopeName, packId: r.packId, packName: r.packName })));
 });
 
 compliance.put('/assignments', requires('config:write'), async (req, res) => {
   const p = me(req);
-  const b = parse(z.object({ scopeType: z.enum(['TENANT', 'GROUP', 'TEAM', 'EMPLOYEE']), scopeId: uuid.nullable().optional(), packId: uuid.nullable() }), req.body);
-  if (b.scopeType !== 'TENANT' && !b.scopeId) throw bad('Say which group, team or employee this applies to');
+  const b = parse(z.object({ scopeType: z.enum(['TENANT', 'REGION', 'SITE', 'GROUP', 'TEAM', 'EMPLOYEE']), scopeId: uuid.nullable().optional(), packId: uuid.nullable() }), req.body);
+  if (b.scopeType !== 'TENANT' && !b.scopeId) throw bad('Say which region, site, group, team or employee this applies to');
+  if (b.scopeType === 'TENANT' || b.scopeType === 'REGION' || b.scopeType === 'SITE') requireUnscoped(req);   // rules for a whole site, region or the organisation are set by someone who sees all of it
   const key = b.scopeType === 'TENANT' ? 'tenant' : b.scopeId!;
   await withTenant(p.tenantId, async (tx) => {
     if (b.scopeType === 'GROUP' && !(await tx.one('SELECT 1 FROM wfm_groups WHERE tenant_id = :t AND id = $1', [b.scopeId]))) throw notFound('WFM group');
+    if (b.scopeType === 'SITE' && !(await tx.one('SELECT 1 FROM sites WHERE tenant_id = :t AND id = $1', [b.scopeId]))) throw notFound('Site');
+    if (b.scopeType === 'REGION' && !(await tx.one('SELECT 1 FROM regions WHERE tenant_id = :t AND id = $1', [b.scopeId]))) throw notFound('Region');
     if (b.scopeType === 'TEAM' && !(await tx.one('SELECT 1 FROM teams WHERE tenant_id = :t AND id = $1', [b.scopeId]))) throw notFound('Team');
     if (b.scopeType === 'EMPLOYEE' && !(await tx.one('SELECT 1 FROM employees WHERE tenant_id = :t AND id = $1', [b.scopeId]))) throw notFound('Employee');
     if (b.packId === null) {

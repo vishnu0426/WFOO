@@ -8,10 +8,20 @@ export type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
 
 export interface DayRow { day: string; intervals: number; volume: number; abandoned: number; ahtOutliers: number }
 export interface QueueInput { id: string; name: string; openSlot: number; closeSlot: number; volumeBasis: 'OFFERED' | 'ANSWERED'; rows: DayRow[] }
-export interface Finding { code: string; severity: Severity; message: string; days?: string[]; count?: number }
+/** BLOCK: a forecast cannot be built. CAUTION: go ahead, but it will be less accurate. TIP: optional housekeeping that changes nothing about this forecast's quality. */
+export type Kind = 'BLOCK' | 'CAUTION' | 'TIP';
+export type FixAction = 'IMPORT' | 'USE_OWN_HISTORY' | 'SET_ANSWERED' | 'SET_OFFERED' | 'ADD_EVENT';
+export interface Finding {
+  code: string; severity: Severity; message: string; days?: string[]; count?: number;
+  /** filled in for every finding: how serious it is for the planner, what is wrong in a few words, what it means for the forecast, and the one thing to do about it */
+  kind?: Kind; title?: string; effect?: string; fix?: { action: FixAction; label: string } | null;
+}
+export interface Length { level: 'GOOD' | 'OK' | 'LOW' | 'NONE'; days: number }
+export interface Freshness { level: 'CURRENT' | 'BEHIND' | 'OLD' | 'NONE'; daysBehind: number | null; lastDay: string | null }
 export interface QueueQuality {
   queueId: string; name: string; status: 'GOOD' | 'CHECK' | 'POOR'; firstDay: string | null; lastDay: string | null; days: number;
   abandonRatePct: number | null; volumeBasis: 'OFFERED' | 'ANSWERED'; repairedDays: number; findings: Finding[];
+  length: Length; freshness: Freshness;
 }
 
 const utc = (d: string) => { const [y, m, dd] = d.split('-').map(Number); return Date.UTC(y, m - 1, dd); };
@@ -21,15 +31,40 @@ const median = (xs: number[]) => { if (!xs.length) return 0; const s = [...xs].s
 const list = (days: string[], n = 6) => (days.length <= n ? days.join(', ') : `${days.slice(0, n).join(', ')} and ${days.length - n} more`);
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
-export const LOW = 0.25, HIGH = 3;            // a day under a quarter, or over three times, the usual for its weekday
+export const DEFAULT_STALE_DAYS = 3;
+export const LOW = 0.25, HIGH = 3;
 
-export function analyseQueue(q: QueueInput, today: string): QueueQuality {
+const own = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** The plain-language card for a finding: what is wrong, what it means, what to do. The long message (with the dates) stays as the detail. */
+export function advise(f: Finding): Finding {
+  const n = f.count ?? 0;
+  const by: Record<string, { title: string; effect: string; fix: Finding['fix'] }> = {
+    NO_HISTORY: { title: 'No history yet', effect: 'A forecast cannot be built without history.', fix: { action: 'IMPORT', label: 'Import history' } },
+    SHORT: { title: `Only ${own(n, 'day', 'days')} of history`, effect: f.severity === 'CRITICAL' ? 'The weekly pattern cannot be learned reliably yet, so the forecast will be rough.' : 'Enough to start. More history gives a steadier weekly pattern.', fix: { action: 'IMPORT', label: 'Import more history' } },
+    STALE: { title: `Newest data is ${own(n, 'day', 'days')} old`, effect: 'A forecast starts from the last full day, so it will be less sharp.', fix: { action: 'IMPORT', label: 'Import the latest data' } },
+    MISSING_DAYS: { title: `${own(n, 'day', 'days')} with no data`, effect: 'The forecast fills them from the same weekday, so it still works, but it is guessing for those days.', fix: { action: 'IMPORT', label: 'Import the missing days' } },
+    PARTIAL_DAYS: { title: `${own(n, 'day is', 'days are')} cut short`, effect: 'Those days under-count demand, so the forecast may run a little low.', fix: { action: 'IMPORT', label: 'Re-import those days' } },
+    LOW_DAYS: { title: `${own(n, 'day', 'days')} far below the usual`, effect: 'If demand was really normal, the forecast replaces them by itself. Nothing is needed unless they were real.', fix: null },
+    SPIKE_DAYS: { title: `${own(n, 'day', 'days')} far above the usual`, effect: 'The forecast replaces them as outliers. If a campaign or outage caused them, tell it so it can learn them.', fix: { action: 'ADD_EVENT', label: 'Add a special event' } },
+    ABANDON_BASIS: { title: `${n}% of callers abandoned`, effect: 'If the volume counts only answered calls, the forecast under-plans by about that much.', fix: { action: 'SET_ANSWERED', label: 'Count answered calls only' } },
+    ABANDON_MISSING: { title: 'No abandoned counts to add back', effect: 'This queue counts answered calls only, but the history has no abandoned calls, so nothing can be added back.', fix: { action: 'SET_OFFERED', label: 'Count every call that arrived' } },
+    AHT_ODD: { title: `${own(n, 'interval has', 'intervals have')} an odd handle time`, effect: 'Staffing for those intervals may be off. Check the data at its source.', fix: null },
+    BORROWED_SHAPE: { title: "Borrowing another queue's daily pattern", effect: 'Its volume still comes from its own history. It switches to its own pattern by itself once it has enough days.', fix: { action: 'USE_OWN_HISTORY', label: 'Use its own history now' } },
+    BORROWED_SHAPE_DONE: { title: 'Borrowed pattern no longer needed', effect: 'This queue has enough of its own history and already uses it. The setting does nothing now.', fix: { action: 'USE_OWN_HISTORY', label: 'Clear it (recommended)' } },
+  };
+  const a = by[f.code] ?? { title: f.message.split('.')[0], effect: '', fix: null };
+  return { ...f, kind: f.code === 'NO_HISTORY' ? 'BLOCK' : f.severity === 'INFO' ? 'TIP' : 'CAUTION', title: a.title, effect: a.effect, fix: a.fix };
+}            // a day under a quarter, or over three times, the usual for its weekday
+
+export function analyseQueue(q: QueueInput, today: string, opts: { staleAfterDays?: number } = {}): QueueQuality {
+  const staleAfter = Math.max(1, opts.staleAfterDays ?? DEFAULT_STALE_DAYS);
   const out: Finding[] = [];
   const rows = [...q.rows].sort((a, b) => (a.day < b.day ? -1 : 1));
-  const base: QueueQuality = { queueId: q.id, name: q.name, status: 'GOOD', firstDay: rows[0]?.day ?? null, lastDay: rows.at(-1)?.day ?? null, days: rows.length, abandonRatePct: null, volumeBasis: q.volumeBasis, repairedDays: 0, findings: out };
+  const base: QueueQuality = { queueId: q.id, name: q.name, status: 'GOOD', firstDay: rows[0]?.day ?? null, lastDay: rows.at(-1)?.day ?? null, days: rows.length, abandonRatePct: null, volumeBasis: q.volumeBasis, repairedDays: 0, findings: out, length: { level: 'NONE', days: 0 }, freshness: { level: 'NONE', daysBehind: null, lastDay: null } };
   if (!rows.length) {
     out.push({ code: 'NO_HISTORY', severity: 'CRITICAL', message: 'There is no interval history for this queue, so a forecast cannot be built. Import it under Data Management.' });
     base.status = 'POOR';
+    out[0] = advise(out[0]);
     return base;
   }
 
@@ -37,8 +72,11 @@ export function analyseQueue(q: QueueInput, today: string): QueueQuality {
   if (span < 28) out.push({ code: 'SHORT', severity: 'CRITICAL', count: span, message: `Only ${span} days of history. At least 4 weeks are needed to learn the weekly pattern, and 8 or more give a steadier forecast.` });
   else if (span < 56) out.push({ code: 'SHORT', severity: 'WARNING', count: span, message: `${span} days of history. It is enough to start, but 8 weeks or more give a steadier weekly pattern, and a year is needed to learn seasons.` });
 
-  const staleDays = Math.round((utc(today) - utc(last)) / 86_400_000);
-  if (staleDays > 2) out.push({ code: 'STALE', severity: staleDays > 7 ? 'CRITICAL' : 'WARNING', count: staleDays, message: `The newest data is ${staleDays} days old (${last}). A forecast starts from the last full day, so it will be less sharp.` });
+  const staleDays = Math.max(0, Math.round((utc(today) - utc(last)) / 86_400_000));
+  const veryOld = staleDays > Math.max(7, staleAfter * 2);
+  base.length = { level: span < 28 ? 'LOW' : span < 56 ? 'OK' : 'GOOD', days: span };
+  base.freshness = { level: staleDays <= staleAfter ? 'CURRENT' : veryOld ? 'OLD' : 'BEHIND', daysBehind: staleDays, lastDay: last };
+  if (staleDays > staleAfter) out.push({ code: 'STALE', severity: veryOld ? 'CRITICAL' : 'WARNING', count: staleDays, message: `The newest data is ${staleDays} days old (${last}). A forecast starts from the last full day, so it will be less sharp.` });
 
   const have = new Set(rows.map((r) => r.day));
   const missing: string[] = [];
@@ -78,5 +116,6 @@ export function analyseQueue(q: QueueInput, today: string): QueueQuality {
   base.status = has('CRITICAL') ? 'POOR' : has('WARNING') ? 'CHECK' : 'GOOD';
   const rank = { CRITICAL: 0, WARNING: 1, INFO: 2 };
   out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  for (let i = 0; i < out.length; i++) out[i] = advise(out[i]);
   return base;
 }

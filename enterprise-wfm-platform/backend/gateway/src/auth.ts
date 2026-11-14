@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { HttpError } from './http.ts';
 import { cached, key, redis } from './infra.ts';
-import { resolveDefaultWorkspaceId, scopeStore, withTenant, raw } from './db.ts';
+import { resolveDefaultWorkspaceId, scopeStore, withTenant, withWorkspace, raw } from './db.ts';
 
 export const PERMISSION_TO_MODULE: Record<string, string> = {
   'forecast:read': 'FORECASTING',
@@ -42,7 +42,7 @@ export async function getTenantEnabledModules(tenantId: string): Promise<string[
 export const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 export type Role = (typeof ROLES)[number];
 
-export interface Principal { userId: string; tenantId: string; workspaceId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean; /** an API key, not a person: it holds exactly these permissions and nothing its role would give */ scopes?: string[]; apiKey?: boolean }
+export interface Principal { userId: string; tenantId: string; workspaceId: string; role: Role; name: string; username: string; jti: string; /** signed in with a temporary password: only changing it is allowed until they do */ mustChangePassword?: boolean; /** an API key, not a person: it holds exactly these permissions and nothing its role would give */ scopes?: string[]; apiKey?: boolean; /** the WFM groups at the sites and regions this person is limited to; absent for someone who sees the whole organisation */ groupScope?: string[] }
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -87,10 +87,11 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     if (!raw) throw new HttpError(401, 'UNAUTHENTICATED', 'Sign in required');
     // an API key (wfm_<id>_<secret>) is another system reading from the platform; anything else is a signed-in person's token
     const p = raw.startsWith('wfm_') ? await (await import('./modules/developer.ts')).principalFromApiKey(raw) : await principalFromToken(raw);
+    if (!p.apiKey) p.groupScope = await groupScopeFor(p.tenantId, p.workspaceId, p.userId);
     req.principal = p;
     // a temporary password only opens the way to choosing a new one
     if (p.mustChangePassword && !ALLOWED_WHILE_TEMPORARY.test(req.originalUrl)) throw new HttpError(403, 'PASSWORD_CHANGE_REQUIRED', 'Choose a new password before you continue.');
-    scopeStore.run({ tenantId: p.tenantId, orgId: p.tenantId, workspaceId: p.workspaceId }, next);
+    scopeStore.run({ tenantId: p.tenantId, orgId: p.tenantId, workspaceId: p.workspaceId, ...(p.groupScope ? { groupScope: p.groupScope } : {}) }, next);
   } catch (e) { next(e instanceof HttpError ? e : new HttpError(401, 'UNAUTHENTICATED', 'Invalid or expired session')); }
 }
 
@@ -110,6 +111,28 @@ export async function principalFromToken(token: string): Promise<Principal> {
        FROM users u WHERE u.tenant_id = :t AND u.id = $1`, [String(d.sub)])));
   if (!st || st.status !== 'ACTIVE') throw new HttpError(401, 'UNAUTHENTICATED', 'Session ended');
   return { userId: String(d.sub), tenantId: d.tid, workspaceId, role: st.roles?.[workspaceId] ?? st.role, name: d.name, username: d.username, jti: String(d.jti), mustChangePassword: st.mcp === true };
+}
+
+/** The WFM groups a person may see, from the regions and sites they are limited to; undefined when they are not limited. A few seconds of cache, dropped when the limits change. */
+export async function groupScopeFor(tenantId: string, workspaceId: string, userId: string): Promise<string[] | undefined> {
+  const ids = await cached<string[] | null>(key(tenantId, 'userscope', userId, workspaceId), 5, () => withWorkspace(tenantId, workspaceId, async (tx) => {
+    const sc = await tx.q<{ scopeType: string; scopeId: string }>('SELECT scope_type, scope_id FROM user_scopes WHERE tenant_id = :t AND user_id = $1', [userId]);
+    if (!sc.length) return null;
+    const groups = await tx.q<{ id: string }>(
+      `SELECT g.id FROM wfm_groups g LEFT JOIN sites s ON s.id = g.site_id AND s.tenant_id = g.tenant_id WHERE g.tenant_id = :t AND (g.site_id = ANY($1::uuid[]) OR s.region_id = ANY($2::uuid[]))`,
+      [sc.filter((x) => x.scopeType === 'SITE').map((x) => x.scopeId), sc.filter((x) => x.scopeType === 'REGION').map((x) => x.scopeId)]);
+    return groups.map((x) => x.id);
+  }));
+  return ids ?? undefined;
+}
+export async function dropUserScope(tenantId: string, userId: string): Promise<void> {
+  const pat = key(tenantId, 'userscope', userId, '*');
+  const keys = await redis.keys(pat).catch(() => [] as string[]);
+  if (keys.length) await redis.del(...keys).catch(() => {});
+}
+/** Routes that change what the whole organisation looks like (sites, regions, people with access, organisation-wide rules) are for people who see all of it. */
+export function requireUnscoped(req: Request): void {
+  if (req.principal?.groupScope) throw new HttpError(403, 'FORBIDDEN', 'Your access is limited to some sites. Ask someone with access to the whole organisation to do this.');
 }
 
 /** Forget the cached account state so a change (disable, role, password reset) applies to open sessions at once. */

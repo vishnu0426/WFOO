@@ -648,3 +648,273 @@ def test_the_starting_roster_uses_the_people_whose_skill_is_short():
         req.options.add(employee=eid, day=0, template=0, start_slot=32, length_slots=16, paid_slots=16)
     res = scheduling.solve(req)
     assert sorted(a.employee for a in res.assignments) in ([1, 3], [2, 3]), [a.employee for a in res.assignments]
+
+
+# ---- days already worked for another group (the same person is in several WFM groups)
+
+def other_group_request(days=7, first_dow=0, worked_elsewhere=(), paid=32, **limits):
+    """One person needed all day every day, who already works the given days of the request for another group (so no option is offered on them)."""
+    req = history_request(days=days, first_dow=first_dow, n_emp=1)
+    emp = req.employees[0]
+    for k, v in limits.items():
+        setattr(emp, k, v)
+    keep = [o for o in req.options if o.day not in worked_elsewhere]
+    del req.options[:]
+    req.options.extend(keep)
+    emp.ext_paid.extend([paid if d in worked_elsewhere else 0 for d in range(days)])
+    return req
+
+
+@pytest.mark.parametrize("backend", ["", "cpsat", "highs", "scip", "greedy"])
+def test_days_worked_for_another_group_count_against_days_per_week(backend):
+    req = other_group_request(worked_elsewhere={0, 1, 2, 3}, max_days_week=5, max_consecutive=7)
+    req.backend = backend
+    res = scheduling.solve_period(req)
+    assert len(res.assignments) <= 1, f"{backend}: 4 days elsewhere + a 5-day maximum leaves one day, got {len(res.assignments)}"
+
+
+@pytest.mark.parametrize("backend", ["", "cpsat", "highs", "scip", "greedy"])
+def test_hours_worked_for_another_group_count_against_the_weekly_maximum(backend):
+    req = other_group_request(worked_elsewhere={0, 1, 2}, max_week_slots=160, max_days_week=7, max_consecutive=7)   # 40 h; 3 x 8 h elsewhere
+    req.backend = backend
+    res = scheduling.solve_period(req)
+    assert sum(a.length_slots for a in res.assignments) <= 160 - 3 * 32, f"{backend}: {sum(a.length_slots for a in res.assignments)}"
+
+
+@pytest.mark.parametrize("backend", ["", "cpsat", "highs", "scip", "greedy"])
+def test_days_worked_for_another_group_count_toward_days_in_a_row(backend):
+    # five days in a row elsewhere (Mon-Fri), a six-day maximum, no weekly limits: Saturday is the sixth, Sunday would be the seventh
+    req = other_group_request(worked_elsewhere={0, 1, 2, 3, 4}, max_consecutive=6, max_days_week=7, max_week_slots=0)
+    req.backend = backend
+    res = scheduling.solve_period(req)
+    assert len(res.assignments) <= 1, f"{backend}: {[a.day for a in res.assignments]}"
+
+
+def test_other_group_days_are_counted_in_each_week_of_a_long_plan():
+    # two weeks: 4 days elsewhere in week 1, none in week 2. Week 1 has one day left (5-day maximum), week 2 has five.
+    req = other_group_request(days=14, worked_elsewhere={0, 1, 2, 3}, max_days_week=5, max_consecutive=7)
+    res = scheduling.solve_period(req)
+    per_week = [sum(1 for a in res.assignments if (a.day // 7) == w) for w in (0, 1)]
+    assert per_week[0] <= 1, per_week
+    assert per_week[1] <= 5 and per_week[1] >= 4, per_week
+
+
+def test_a_run_of_days_elsewhere_carries_across_the_week_boundary():
+    # Thu-Sun elsewhere in week 1 (4 days) and a five-day maximum in a row: Monday and Tuesday of week 2 can be worked, the third day in a row cannot
+    req = other_group_request(days=14, worked_elsewhere={3, 4, 5, 6}, max_consecutive=5, max_days_week=7, max_week_slots=0)
+    res = scheduling.solve_period(req)
+    run, longest = 0, 0
+    worked = {a.day for a in res.assignments} | {3, 4, 5, 6}
+    for d in range(14):
+        run = run + 1 if d in worked else 0
+        longest = max(longest, run)
+    assert longest <= 5, sorted(worked)
+
+
+def test_without_other_group_days_nothing_changes():
+    req = other_group_request(worked_elsewhere=(), max_days_week=5)
+    res = scheduling.solve_period(req)
+    assert len(res.assignments) == 5
+
+
+# ---------------------------------------------------------------- a meal is not coverage, any number of skills, the starting roster's day limit
+
+def _one_person_request(backend, gap=True):
+    req = wfm_pb2.ScheduleRequest(days=1, first_dow=0, time_limit_sec=5, w_under=900, w_over=30, w_hours=0, workers=1, backend=backend)
+    req.required.extend([1 if 32 <= s < 48 else 0 for s in range(SPD)])
+    req.employees.add(id=1, max_week_slots=160, min_week_slots=0, max_consecutive=6, rest_slots=44, max_days_week=5)
+    o = req.options.add(employee=1, day=0, template=0, start_slot=32, length_slots=16, paid_slots=14)
+    if gap:
+        o.gap_start_slot, o.gap_slots = 38, 2             # half an hour away from the phones in the middle of the shift
+    return req
+
+
+@pytest.mark.parametrize("backend", ["cpsat", "highs", "scip", "greedy"])
+def test_a_meal_in_the_middle_of_a_shift_is_not_coverage(backend):
+    res = scheduling.solve(_one_person_request(backend))
+    assert [a.employee for a in res.assignments] == [1], res.attempts
+    assert res.under_slots == 2, f"{backend}: the two meal slots are uncovered, not counted as covered"
+    assert scheduling.solve(_one_person_request(backend, gap=False)).under_slots == 0
+
+
+def _skills_request(holders, n_skills, backend="cpsat"):
+    """One person per entry of `holders` (the skills each holds); every skill needs one person from 08:00 to 12:00."""
+    req = wfm_pb2.ScheduleRequest(days=1, first_dow=0, time_limit_sec=10, w_under=900, w_over=30, w_hours=0, workers=1, backend=backend)
+    window = [1 if 32 <= s < 48 else 0 for s in range(SPD)]
+    req.required.extend([n_skills * v for v in window])
+    for k in range(1, n_skills + 1):
+        req.skill_requirements.add(id=k).required.extend(window)
+    for eid, skills in enumerate(holders, start=1):
+        req.employees.add(id=eid, max_week_slots=160, min_week_slots=0, max_consecutive=6, rest_slots=44, max_days_week=5, skill_ids=skills)
+        req.options.add(employee=eid, day=0, template=0, start_slot=32, length_slots=16, paid_slots=16)
+    return req
+
+
+@pytest.mark.parametrize("backend", ["cpsat", "highs"])
+def test_coverage_is_judged_per_skill_for_eight_skills(backend):
+    full = _skills_request([[k] for k in range(1, 9)], 8, backend)
+    assert scheduling.solve(full).under_slots == 0, "one person for each of eight skills covers all eight"
+    # skills 1 and 2 are held by three people between them, but nobody holds skill 8: that skill stays short however many people there are
+    holders = [[1], [2], [3], [4], [5], [6], [7], [1, 2]]
+    res = scheduling.solve(_skills_request(holders, 8, backend))
+    assert res.under_slots == 16, (backend, res.under_slots)       # one person short for the 16 slots of 08:00 to 12:00
+    # a person who holds two skills serves one of them at a time: two people for three skills leave one skill short
+    res = scheduling.solve(_skills_request([[1, 2], [2, 3]], 3, backend))
+    assert res.under_slots == 16, (backend, res.under_slots)
+
+
+def test_the_starting_roster_gives_people_without_a_day_limit_a_full_week():
+    def shifts(limit, days=7):
+        req = build(n_emp=6, days=days, weekend=True)
+        req.backend, req.time_limit_sec = "greedy", 5
+        for e in req.employees:
+            e.max_days_week, e.min_week_slots = limit, 40 * 4
+        res = scheduling.solve(req)
+        return sorted(collections_counter(a.employee for a in res.assignments).values())
+    assert shifts(5) == [5] * 6
+    assert min(shifts(0)) >= 4, "no limit set means no limit, not one shift"
+
+
+def collections_counter(items):
+    import collections
+    return collections.Counter(items)
+
+
+# ---- enterprise policies: holidays, overtime, DST rest, fairness in hours
+
+def test_a_priced_holiday_is_staffed_only_where_it_pays():
+    req = build(n_emp=10, days=7)
+    for o in req.options:
+        if o.day == 2:
+            o.cost = 100000                                   # a holiday the organisation would rather leave alone: dearer than the cover it buys
+    res = scheduling.solve(req)
+    assert res.status in ("OPTIMAL", "FEASIBLE")
+    assert not [a for a in res.assignments if a.day == 2]
+
+
+def test_planned_overtime_is_used_only_when_it_is_priced_low_enough():
+    def worked(price):
+        req = build(n_emp=6, days=7)
+        req.w_overtime = price
+        for e in req.employees:
+            e.max_week_slots, e.min_week_slots, e.max_days_week = 48 * 4, 32 * 4, 6
+        for o in list(req.options):
+            o.length_slots = 36
+        for g in range(len(req.required)):
+            req.required[g] = req.required[g] * 3             # far more need than the contract hours can cover
+        res = scheduling.solve(req)
+        return sum(a.length_slots for a in res.assignments)
+    cheap, dear = worked(0), worked(100000)
+    assert dear <= 6 * 32 * 4 + 6 * 4, f"overtime used although it cost more than the cover: {dear}"
+    assert cheap > dear
+
+
+def test_rest_is_real_elapsed_time_across_a_clock_change():
+    def solve_with(adjust):
+        req = wfm_pb2.ScheduleRequest(days=2, first_dow=0, time_limit_sec=5, w_under=100, w_over=1, workers=2)
+        req.employees.add(id=0, rest_slots=44, max_week_slots=400, min_week_slots=0, max_consecutive=5, max_days_week=5)
+        req.required.extend([1 if (60 <= g < 92 or SPD + 40 <= g < SPD + 72) else 0 for g in range(2 * SPD)])
+        req.options.add(employee=0, day=0, template=0, start_slot=60, length_slots=32)          # 15:00-23:00
+        req.options.add(employee=0, day=1, template=0, start_slot=40, length_slots=32)          # 10:00-18:00: exactly 11 h later on the wall clock
+        req.dst_rest_adjust.extend(adjust)
+        return len(scheduling.solve(req).assignments)
+    assert solve_with([0, 0]) == 2                       # an ordinary night: 11 h is enough
+    assert solve_with([0, 4]) == 1                       # the clocks go forward in between: only 10 h really pass
+    assert solve_with([0, -4]) == 2                      # the clocks go back: 12 h really pass
+
+
+def test_unsocial_hours_are_spread_by_hours_not_by_shifts():
+    req = build(n_emp=8, days=14, weekend=True)
+    for o in req.options:
+        if (req.first_dow + o.day) % 7 >= 5:
+            o.length_slots = 32 if o.employee % 2 == 0 else 16
+    for e in req.employees:
+        e.max_week_slots = 40 * 4
+    res = scheduling.solve(req)
+    hours = defaultdict(int)
+    for a in res.assignments:
+        if (req.first_dow + a.day) % 7 >= 5:
+            hours[a.employee] += a.length_slots // 4
+    assert hours and max(hours.values()) - min(hours.get(e.id, 0) for e in req.employees) <= 16
+
+
+def test_a_public_holiday_counts_as_unsocial_time_for_fairness():
+    import coverage
+    req = wfm_pb2.ScheduleRequest(days=7, first_dow=0)
+    o = wfm_pb2.ShiftOption(day=2, start_slot=20, length_slots=32, paid_slots=30)
+    assert coverage.unsocial_hours(req, o) == 0
+    o.unsocial = True
+    assert coverage.unsocial_hours(req, o) == 8              # 30 slots, rounded to whole hours
+
+
+# ---- single skill, memory refusal, windowed plans, usual times across weeks
+
+def test_one_skill_requirement_is_not_met_by_people_who_lack_the_skill():
+    req = wfm_pb2.ScheduleRequest(days=1, first_dow=0, time_limit_sec=5, w_under=100, w_over=1, workers=2)
+    need = [2 if 36 <= g < 68 else 0 for g in range(SPD)]
+    req.required.extend(need)
+    req.skill_requirements.add(id=7, required=need)
+    for e in range(4):
+        req.employees.add(id=e, max_week_slots=400, max_consecutive=5, rest_slots=0, max_days_week=5, skill_ids=[7] if e >= 2 else [])
+        req.options.add(employee=e, day=0, template=0, start_slot=36, length_slots=32)
+    res = scheduling.solve(req)
+    skilled = {a.employee for a in res.assignments}
+    assert skilled == {2, 3}, f"only people with the skill were worth scheduling: {skilled}"
+    assert res.under_slots == 0
+    # the same demand with nobody skilled is a full shortage, however many people are on shift
+    only_unskilled = wfm_pb2.ScheduleRequest()
+    only_unskilled.CopyFrom(req)
+    for e in only_unskilled.employees:
+        del e.skill_ids[:]
+    res2 = scheduling.solve(only_unskilled)
+    assert res2.under_slots == sum(need)
+
+
+def test_the_solver_is_not_started_when_memory_is_known_to_be_short(monkeypatch):
+    import backends
+    monkeypatch.setattr(scheduling, "free_memory_mb", lambda *a, **k: 10)
+    with pytest.raises(backends.MemoryPressure, match="ENGINE_BUSY"):
+        scheduling.wait_for_memory(5000, give_up_sec=0.2)
+    monkeypatch.setattr(scheduling, "free_memory_mb", lambda *a, **k: 9000)
+    scheduling.wait_for_memory(5000, give_up_sec=0.2)          # room: returns at once
+
+
+def test_a_plan_solved_week_by_week_is_not_called_optimal():
+    one = build(n_emp=6, days=7)
+    one.time_limit_sec = 5
+    r1 = scheduling.solve_period(one)
+    assert not r1.windowed
+    two = build(n_emp=6, days=14)
+    two.time_limit_sec = 8
+    r2 = scheduling.solve_period(two)
+    assert r2.windowed and r2.status == "FEASIBLE"
+    assert any("one after another" in a for a in r2.attempts)
+
+
+def _two_part_plan(mode):
+    """Six people, three weeks. Week 1 needs the early shift, weeks 2 and 3 the late one. `mode`: 1 = prefer the usual times, 2 = require them."""
+    req = wfm_pb2.ScheduleRequest(days=21, first_dow=0, time_limit_sec=18, w_under=100, w_over=10, w_hours=0, w_consist=200, workers=4, consistency_mode=mode, start_tol_slots=2, end_tol_slots=2)
+    for d in range(21):
+        for g in range(SPD):
+            early = 20 <= g < 52 and d < 7
+            late = 60 <= g < 92 and d >= 7
+            req.required.append(3 if early or late else 0)
+    for e in range(6):
+        req.employees.add(id=e, max_week_slots=400, max_consecutive=7, rest_slots=0, max_days_week=7)
+        for d in range(21):
+            for st in (20, 60):
+                req.options.add(employee=e, day=d, template=0 if st == 20 else 1, start_slot=st, length_slots=32)
+    return req
+
+
+def test_people_who_must_keep_their_usual_times_do_and_people_who_prefer_them_may_move():
+    must = scheduling.solve_period(_two_part_plan(2))
+    late_must = [a for a in must.assignments if a.day >= 7 and a.start_slot == 60]
+    early_first = {a.employee for a in must.assignments if a.day < 7 and a.start_slot == 20}
+    assert early_first, "week one used the early shift"
+    # whoever worked the early shift in week one is held to it afterwards: they never work the late one
+    assert not [a for a in late_must if a.employee in early_first]
+    prefer = scheduling.solve_period(_two_part_plan(1))
+    moved = [a for a in prefer.assignments if a.day >= 7 and a.start_slot == 60 and a.employee in {b.employee for b in prefer.assignments if b.day < 7}]
+    assert moved, "people who only prefer their usual times move when the cover needs it"
+    assert prefer.under_slots < must.under_slots or len(moved) > len(late_must)

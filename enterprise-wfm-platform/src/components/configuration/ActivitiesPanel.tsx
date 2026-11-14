@@ -4,6 +4,7 @@
  * shrinkage / paid treatment for itself, the way the market WFM products let a business unit tailor a shared list.
  * No activities are pre-loaded; "Add a standard set" is an opt-in shortcut.
  */
+import { LoadFailed, Waiting } from '../common/loading';
 import React, { useMemo, useState } from 'react';
 import { ColDef, ICellRendererParams } from 'ag-grid-community';
 import { Plus } from 'lucide-react';
@@ -114,7 +115,7 @@ export const ActivitiesPanel: React.FC = () => {
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((s) => s && { ...s, [k]: v });
   const yn = (k: 'countsAsWork' | 'paid' | 'shrinkage' | 'ignoreAdherence') => (e: React.ChangeEvent<HTMLSelectElement>) => set(k, e.target.value === 'yes');
-  const empty = (list.data?.length ?? 0) === 0;
+  const empty = list.data !== null && list.data.length === 0;
 
   return (
     <Card title="Activity definitions" sub="One company list says what each kind of time means. Pick a WFM group to switch an activity off for it, or change how shrinkage and pay treat it in that group."
@@ -161,7 +162,9 @@ export const ActivitiesPanel: React.FC = () => {
         </div>
       )}
       {(list.error || perGroup.error) && <Banner kind="err">{list.error || perGroup.error}</Banner>}
-      {empty && !f
+      {list.data === null && !f
+        ? (list.error ? <LoadFailed what="the activities" error={list.error} reload={list.reload} /> : <Waiting what="the activities" shape="table" reload={list.reload} />)
+        : empty && !f
         ? <Empty title="No activities yet">{w ? 'Add the kinds of time you schedule (breaks, meals, training, coaching), or start from a standard set. Then choose a group above to tailor the list for it.' : 'Ask an administrator to define them.'}</Empty>
         : scope
           ? <Grid<GroupActivity> rowData={perGroup.data ?? []} columnDefs={groupCols} defaultColDef={{ sortable: true, resizable: true, filter: true }} loading={perGroup.loading} rowHeight={48} height={Math.min(460, 90 + (perGroup.data?.length ?? 1) * 48)} />

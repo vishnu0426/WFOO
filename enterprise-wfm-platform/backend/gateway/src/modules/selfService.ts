@@ -285,7 +285,7 @@ async function usedIn(tx: Tx, employeeId: string, year: string) {
   return new Map(rows.map((r) => [r.type as string, r.days as number]));
 }
 /** Balance per leave type for a year: the entitlement (all at once, or building up monthly up to `asOfMonth`), days carried over from last year, and what is used. */
-async function balances(tx: Tx, employeeId: string, pol: Policy, year: string, asOfMonth = 12) {
+export async function balances(tx: Tx, employeeId: string, pol: Policy, year: string, asOfMonth = 12) {
   const used = await usedIn(tx, employeeId, year), prev = pol.carryOverDays && Object.keys(pol.carryOverDays).length ? await usedIn(tx, employeeId, String(Number(year) - 1)) : new Map<string, number>();
   return Object.entries(pol.entitlements).map(([type, entitled]) => balanceOf({ type, entitled, mode: pol.accrualMode ?? 'UPFRONT', asOfMonth, usedThisYear: used.get(type) ?? 0, lastYearEntitled: entitled, lastYearUsed: prev.get(type) ?? 0, carryOverCap: pol.carryOverDays?.[type] ?? 0 }));
 }

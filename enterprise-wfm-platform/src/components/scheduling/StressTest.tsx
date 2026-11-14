@@ -10,7 +10,7 @@ import { Banner, Btn, Busy, Card, Field, Kpi, KpiRow, Pill, Select } from '../fo
 
 type Sim = {
   from: string; to: string; target: number; answerSec: number; replications: number; wallSec: number; notes: string[];
-  overall: { serviceLevel: number; abandon: number; occupancy: number; offered: number; chanceOfMeetingTarget: number };
+  overall: { serviceLevel: number; serviceLevelCi?: [number, number]; replicationsRequested?: number; abandon: number; occupancy: number; offered: number; chanceOfMeetingTarget: number };
   days: { day: string; serviceLevel: number; badDayServiceLevel: number; abandon: number; occupancy: number; offered: number; coverageOfRequirement: number; meetsTarget: boolean }[];
   intervals: { day: string; slot: number; serviceLevel: number; badServiceLevel: number; asaSec: number; abandon: number; occupancy: number; offered: number; agents: number; belowTarget: boolean }[];
 };
@@ -107,7 +107,7 @@ export const StressTest: React.FC<{ version: ScheduleVersion }> = ({ version }) 
       {sim && !busy && (
         <>
           <KpiRow>
-            <Kpi label="Calls answered in time" value={pct(sim.overall.serviceLevel)} tone={sim.overall.serviceLevel >= sim.target ? 'good' : sim.overall.serviceLevel >= sim.target - 0.1 ? 'warn' : 'bad'} sub={`target ${pct(sim.target)} within ${sim.answerSec}s`} />
+            <Kpi label="Calls answered in time" value={pct(sim.overall.serviceLevel)} tone={sim.overall.serviceLevel >= sim.target ? 'good' : sim.overall.serviceLevel >= sim.target - 0.1 ? 'warn' : 'bad'} sub={`target ${pct(sim.target)} within ${sim.answerSec}s${sim.overall.serviceLevelCi ? ` · 95% sure it is between ${pct(sim.overall.serviceLevelCi[0])} and ${pct(sim.overall.serviceLevelCi[1])}` : ''}`} />
             <Kpi label="Chance of meeting the target" value={pct(sim.overall.chanceOfMeetingTarget)} tone={sim.overall.chanceOfMeetingTarget >= 0.8 ? 'good' : sim.overall.chanceOfMeetingTarget >= 0.5 ? 'warn' : 'bad'} sub={`over ${sim.replications} random runs`} />
             <Kpi label="Callers who hang up" value={pct(sim.overall.abandon, 1)} tone={sim.overall.abandon <= 0.05 ? 'good' : sim.overall.abandon <= 0.1 ? 'warn' : 'bad'} />
             <Kpi label="Busy on calls" value={pct(sim.overall.occupancy)} tone={sim.overall.occupancy > 0.9 ? 'bad' : sim.overall.occupancy > 0.85 ? 'warn' : undefined} sub="of the time people are on the phones" />

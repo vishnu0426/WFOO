@@ -61,6 +61,7 @@ export const NAV_ITEMS = [
     subItems: [
       { id: 'employees', label: 'Employees' },
       { id: 'teams', label: 'Teams' },
+      { id: 'cross-site-cover', label: 'Cross-Site Cover' },
       { id: 'org-chart', label: 'Org chart' },
       { id: 'skills', label: 'Skills' },
       { id: 'availability', label: 'Availability' },
@@ -80,8 +81,7 @@ export const NAV_ITEMS = [
       { id: 'adjustments', label: 'Adjustments' },
       { id: 'scenarios', label: 'Scenarios' },
       { id: 'capacity-plan', label: 'Staffing' },
-      { id: 'accuracy-heatmap', label: 'Accuracy' },
-      { id: 'model-leaderboard', label: 'Models' },
+      { id: 'accuracy-heatmap', label: 'Forecast quality' },
     ],
   },
   {
@@ -95,8 +95,7 @@ export const NAV_ITEMS = [
       { id: 'schedule-quality', label: 'Schedule Quality' },
       { id: 'shift-templates', label: 'Shift Templates' },
       { id: 'all-schedules', label: 'All Schedules' },
-      { id: 'multi-site', label: 'Multi-Site View' },
-      { id: 'follow-the-sun', label: 'Follow the Sun' },
+      { id: 'multi-site', label: 'Multi-Site Coverage' },
       { id: 'rotations', label: 'Rotation Patterns' },
       { id: 'shift-swaps', label: 'Shift Swaps' },
       { id: 'vto-overtime', label: 'VTO & Overtime' },
@@ -122,10 +121,11 @@ export const NAV_ITEMS = [
     label: 'Configuration',
     icon: Settings2,
     subItems: [
+      { id: 'organisation', label: 'Organisation' },
       { id: 'wfm-groups', label: 'WFM Groups' },
       { id: 'activities', label: 'Activity Definitions' },
       { id: 'scheduling-rules', label: 'Scheduling Rules' },
-      { id: 'sites-skills', label: 'Sites & Skills' },
+      { id: 'work-calendar', label: 'Work Calendar' },
       { id: 'integration-station', label: 'Integration Station' },
       { id: 'compliance-packs', label: 'Compliance Packs' },
       { id: 'self-service-rules', label: 'Self-Service Rules' },
@@ -153,7 +153,7 @@ export const NAV_ITEMS = [
     label: 'Security & Access',
     icon: Layers,
     subItems: [
-      { id: 'workspaces', label: 'Workspaces & Orgs' },
+      { id: 'workspaces', label: 'Workspaces & Organisation' },
       { id: 'users', label: 'Users Directory' },
       { id: 'roles', label: 'RBAC Matrix' },
       { id: 'api-access', label: 'API & Single Sign-On' },
@@ -182,7 +182,7 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
   // opening a screen by its address (or with back / forward) expands the section it belongs to
   useEffect(() => { setExpandedSections((prev) => (prev[activeModule] ? prev : { ...prev, [activeModule]: true })); }, [activeModule]);
 
-  const { versions } = useForecast();
+  const { versions, groups } = useForecast();
   const [engineUp, setEngineUp] = useState<boolean | null>(null);
   useEffect(() => {
     let live = true;
@@ -215,6 +215,8 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
 
   const isSubItemVisible = (parentId: string, subId: string) => {
     if (parentId === 'workforce' && subId === 'time-off') return isModuleLicensed('TIME_OFF');
+    if (parentId === 'workforce' && subId === 'cross-site-cover') return groups.length >= 2;   // cover needs a second group to cover for
+    if (parentId === 'scheduling' && subId === 'multi-site') return groups.length >= 2;   // it compares groups, so one group has nothing to compare
     if (parentId === 'scheduling' && (subId === 'shift-bidding' || subId === 'shift-swaps')) return isModuleLicensed('SHIFT_BIDDING');
     if (parentId === 'intraday' && subId === 'adherence') return isModuleLicensed('ADHERENCE');
     return true;
@@ -291,7 +293,7 @@ export const NavigationSidebar: React.FC<NavigationSidebarProps> = ({
               {hasSubItems && isExpanded && (
                 <div className="pl-7 pr-1 py-0.5 space-y-0.5 border-l-2 border-[#E5E5E0] ml-3.5 mt-0.5">
                   {item.subItems!.map((sub) => {
-                    const isSubActive = isActive && activeSubSection === sub.id;
+                    const isSubActive = isActive && (activeSubSection === sub.id || (sub.id === 'multi-site' && activeSubSection === 'follow-the-sun') || (sub.id === 'accuracy-heatmap' && activeSubSection === 'model-leaderboard'));
                     return (
                       <button
                         type="button"

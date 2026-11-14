@@ -23,9 +23,11 @@ import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { addDays } from './forecast/service.ts';
 import { dowOf, placeActivities, requirementFor, requirementForManual, type PlacedShift } from './scheduleRoutes.ts';
 import { loadPolicy } from './policyRoutes.ts';
-import { payWeekFor } from './payWeek.ts';
+import { payWeekFor, weekendDaysFor } from './payWeek.ts';
 import { paidSlots } from './templateRules.ts';
 import { analysePattern, compileWeekly, type TemplateLite, type WeeklyStep } from './rotationPlan.ts';
+import { loadRuleSets } from './compliance/routes.ts';
+import { CATALOG, checkPerson, touchesNight, type Finding } from './compliance/rules.ts';
 
 export const rotations = Router();
 const uuid = z.string().uuid();
@@ -40,6 +42,7 @@ const PatternBody = z.object({
   wfmGroupId: uuid, name: z.string().trim().min(1).max(100), cycleDays: z.number().int().min(2).max(84),
   sequence: z.array(uuid.nullable()), crews: z.array(Crew).min(1).max(12), anchorDate: z.string().regex(isoDay),
   status: z.enum(['ACTIVE', 'INACTIVE']).optional(), observesHolidays: z.boolean().optional(),
+  templateRef: z.string().max(80).nullable().optional(),   // the ready-made preset or library entry this pattern was made from
   kind: z.enum(['DAY_CYCLE', 'WEEKLY']).optional(),       // WEEKLY: `steps` are the pattern; sequence and cycleDays are worked out from them
   steps: z.array(Step).min(1).max(12).nullable().optional(),
 });
@@ -80,13 +83,14 @@ const patternDto = (p: any, memberCount = 0) => ({
   id: p.id, wfmGroupId: p.wfmGroupId, name: p.name, cycleDays: p.cycleDays, sequence: p.sequence, crews: p.crews,
   anchorDate: p.anchorDate, status: p.status, observesHolidays: p.observesHolidays, versionId: p.versionId, materializedThrough: p.materializedThrough,
   kind: (p.kind ?? 'DAY_CYCLE') as 'DAY_CYCLE' | 'WEEKLY', steps: (p.steps ?? null) as WeeklyStep[] | null,
+  templateRef: (p.templateRef ?? null) as string | null, effectiveFrom: (p.effectiveFrom ?? null) as string | null,
   memberCount, version: p.version, createdBy: p.createdBy, createdAt: p.createdAt,
 });
 
 rotations.get('/', requires('schedule:read'), async (req, res) => {
   const p = me(req), groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
   const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
-    `SELECT rp.*, rp.anchor_date::text AS anchor_date, rp.materialized_through::text AS materialized_through, count(rm.id)::int AS member_count
+    `SELECT rp.*, rp.anchor_date::text AS anchor_date, rp.materialized_through::text AS materialized_through, rp.effective_from::text AS effective_from, count(rm.id)::int AS member_count
      FROM rotation_patterns rp LEFT JOIN rotation_members rm ON rm.tenant_id = rp.tenant_id AND rm.pattern_id = rp.id
      WHERE rp.tenant_id = :t AND ($1::uuid IS NULL OR rp.wfm_group_id = $1) GROUP BY rp.id ORDER BY rp.name`, [groupId]));
   res.json(rows.map((r) => patternDto(r, r.memberCount)));
@@ -97,9 +101,9 @@ rotations.post('/', requires('workforce:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     await checkBody(tx, b);
     const r = await tx.one<any>(
-      `INSERT INTO rotation_patterns (tenant_id, wfm_group_id, name, cycle_days, sequence, crews, anchor_date, status, observes_holidays, created_by, kind, steps)
-       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *, anchor_date::text AS anchor_date`,
-      [b.wfmGroupId, b.name, b.cycleDays, JSON.stringify(b.sequence), JSON.stringify(b.crews), b.anchorDate, b.status ?? 'ACTIVE', b.observesHolidays ?? true, p.name, b.kind, b.steps ? JSON.stringify(b.steps) : null]);
+      `INSERT INTO rotation_patterns (tenant_id, wfm_group_id, name, cycle_days, sequence, crews, anchor_date, status, observes_holidays, created_by, kind, steps, template_ref)
+       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *, anchor_date::text AS anchor_date`,
+      [b.wfmGroupId, b.name, b.cycleDays, JSON.stringify(b.sequence), JSON.stringify(b.crews), b.anchorDate, b.status ?? 'ACTIVE', b.observesHolidays ?? true, p.name, b.kind, b.steps ? JSON.stringify(b.steps) : null, b.templateRef ?? null]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'ROTATION_PATTERN', entityId: r!.id, entityName: b.name, after: b });
     return patternDto(r);
   });
@@ -129,14 +133,79 @@ rotations.post('/analyse', requires('schedule:read'), async (req, res) => {
     const pol = await loadPolicy(tx);
     const pay = await payWeekFor(tx, b.wfmGroupId);
     const a = analysePattern({
-      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), templates,
+      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), weekend: await weekendDaysFor(tx), templates,
       limits: { minRestHours: pol.minRestHours, maxWeeklyHours: pol.maxWeeklyHours, maxConsecutiveDays: pol.maxConsecutiveDays, maxDaysPerWeek: pol.maxDaysPerWeek },
       contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null,
     });
-    return { ...a, payWeekStart: pay.start, contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null };
+    const extra = await legalAndFairness(tx, b, rows, pay.start, await weekendDaysFor(tx));
+    return { ...a, payWeekStart: pay.start, contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null, ...extra };
   });
   res.json(out);
 });
+
+const RULE_LABEL = new Map(CATALOG.map((c) => [c.type, c.label]));
+const NIGHT_DEFAULT = { from: '22:00', to: '06:00' };
+
+/**
+ * Two things a planner wants to know before putting people on a pattern.
+ *  legal:    the pattern played out for each crew over two cycles and checked against the labour-law pack that applies to the group (or the organisation).
+ *            Rules a pattern cannot be judged on alone (notice of changes, overtime pay, meal times) are skipped. Without a pack, nothing is checked and it says so.
+ *  fairness: what each crew works over 52 weeks: shifts, nights, weekend days, Sundays and, when the pattern does not skip them, public holidays.
+ */
+async function legalAndFairness(tx: Tx, b: any, templateRows: any[], payWeekStart: number, weekend: number[]) {
+  const tpl = new Map<string, any>(templateRows.map((t) => [t.id, t]));
+  const seq: (string | null)[] = b.sequence, n = seq.length;
+  const crews: { name: string; offsetDays: number }[] = b.crews;
+  const shiftFor = (offset: number, i: number) => { const id = seq[mod(i + offset, n)]; const t = id ? tpl.get(id) : null; return t ? { day: addDays(b.anchorDate, i), startSlot: t.earliestStart, lengthSlots: t.lengthSlots, mealSlots: t.mealSlots ?? 0 } : null; };
+
+  // ---- legal
+  const sets = await loadRuleSets(tx, b.wfmGroupId);
+  const rules = sets.group.filter((r) => r.type !== 'MIN_NOTICE_DAYS' && r.type !== 'OVERTIME_PREMIUM' && r.type !== 'MEAL_BREAK');
+  let legal: { applied: boolean; packName: string | null; findings: { severity: 'BLOCK' | 'WARN'; rule: string; label: string; count: number; example: string }[] };
+  if (!sets.group.length) legal = { applied: false, packName: null, findings: [] };
+  else {
+    const grouped = new Map<string, { severity: 'BLOCK' | 'WARN'; rule: string; label: string; count: number; example: string }>();
+    for (const c of crews) {
+      const list = Array.from({ length: n * 2 + 14 }, (_, i) => shiftFor(c.offsetDays, i)).filter((x): x is NonNullable<ReturnType<typeof shiftFor>> => !!x);
+      const found: Finding[] = checkPerson(rules, { id: c.name, name: c.name, nightConsent: false }, list, payWeekStart);
+      for (const f of found) {
+        // night work depends on each person's recorded consent, so on a pattern it is a reminder, not a breach
+        const night = f.rule === 'NIGHT_WORK';
+        const severity: 'BLOCK' | 'WARN' = night ? 'WARN' : f.severity;
+        const key = `${f.rule}|${severity}`;
+        const cur = grouped.get(key);
+        if (cur) cur.count++; else grouped.set(key, { severity, rule: f.rule, label: night ? "Night work needs each person's recorded consent" : RULE_LABEL.get(f.rule) ?? f.rule, count: 1, example: night ? `${c.name} works during night hours` : f.message });
+      }
+    }
+    legal = { applied: true, packName: sets.packName(null), findings: [...grouped.values()].sort((a, c) => (a.severity === c.severity ? 0 : a.severity === 'BLOCK' ? -1 : 1)) };
+  }
+
+  // ---- fairness: 52 weeks of each crew
+  const nightRule = sets.group.find((r) => r.type === 'NIGHT_WORK')?.params as { from: string; to: string } | undefined;
+  const night = nightRule ? { from: nightRule.from, to: nightRule.to } : NIGHT_DEFAULT;
+  const wk = new Set(weekend);
+  const holidays: Set<string> = b.observesHolidays === false ? await loadHolidays(tx, b.wfmGroupId, b.anchorDate, addDays(b.anchorDate, 363)) : new Set();
+  const anchorDow = dowOf(b.anchorDate);
+  const perCrew = crews.map((c) => {
+    let shifts = 0, nights = 0, weekendDays = 0, sundays = 0, holidaysWorked = 0;
+    for (let i = 0; i < 364; i++) {
+      const sh = shiftFor(c.offsetDays, i);
+      if (!sh) continue;
+      shifts++;
+      if (touchesNight(sh, night.from, night.to)) nights++;
+      const dow = mod(anchorDow + i, 7);
+      if (wk.has(dow)) weekendDays++;
+      if (dow === 6) sundays++;
+      if (holidays.has(sh.day)) holidaysWorked++;
+    }
+    return { crew: c.name, shiftsPerYear: shifts, nightsPerYear: nights, weekendDaysPerYear: weekendDays, sundaysPerYear: sundays, holidaysWorkedPerYear: b.observesHolidays === false ? holidaysWorked : null };
+  });
+  const spread = (k: 'nightsPerYear' | 'weekendDaysPerYear') => (perCrew.length ? Math.max(...perCrew.map((c) => c[k])) - Math.min(...perCrew.map((c) => c[k])) : 0);
+  const notes: string[] = [];
+  if (perCrew.length > 1 && spread('nightsPerYear') > 12) notes.push(`Night shifts are shared unevenly: ${perCrew.map((c) => `${c.crew} ${c.nightsPerYear}`).join(', ')} a year.`);
+  if (perCrew.length > 1 && spread('weekendDaysPerYear') > 12) notes.push(`Weekend days are shared unevenly: ${perCrew.map((c) => `${c.crew} ${c.weekendDaysPerYear}`).join(', ')} a year.`);
+  return { legal, fairness: { perCrew, notes, nightHours: night } };
+}
 
 /** How the saved pattern, with the people in it now, covers the staffing target over the next stretch of days: before generating anything. */
 rotations.get('/:id/preview', requires('schedule:read'), async (req, res) => {
@@ -302,12 +371,166 @@ rotations.delete('/:id', requires('workforce:write'), async (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ---------------------------------------------------------------- the organisation's library of pattern shapes
+
+const LetterT = z.string().regex(/^[A-Z]$/);
+const TemplateBody = z.object({
+  name: z.string().trim().min(1).max(100), category: z.string().trim().max(40).default('CUSTOM'), summary: z.string().trim().max(400).default(''),
+  kind: z.enum(['DAY_CYCLE', 'WEEKLY']),
+  shape: z.array(LetterT.nullable()).max(84).default([]),
+  steps: z.array(z.object({ name: z.string().trim().min(1).max(60), weeks: z.number().int().min(1).max(12), letter: LetterT.optional(), days: z.array(LetterT.nullable()).length(7).optional() })).max(12).nullable().optional(),
+  letters: z.array(z.object({ letter: LetterT, label: z.string().trim().min(1).max(40) })).min(1).max(8),
+  crews: z.array(z.object({ name: z.string().trim().min(1).max(40), offsetDays: z.number().int().min(0).optional(), offsetWeeks: z.number().int().min(0).optional() })).min(1).max(12),
+}).superRefine((b, ctx) => {
+  const known = new Set(b.letters.map((l) => l.letter));
+  if (known.size !== b.letters.length) ctx.addIssue({ code: 'custom', message: 'Each letter once' });
+  if (b.kind === 'DAY_CYCLE') {
+    if (b.shape.length < 2) ctx.addIssue({ code: 'custom', message: 'A daily cycle needs at least two days', path: ['shape'] });
+    if (b.shape.some((l) => l && !known.has(l))) ctx.addIssue({ code: 'custom', message: 'Every letter used in the cycle must be listed under letters', path: ['shape'] });
+    if (b.crews.some((c) => (c.offsetDays ?? 0) >= Math.max(1, b.shape.length))) ctx.addIssue({ code: 'custom', message: 'A crew cannot start later than the cycle is long', path: ['crews'] });
+  } else {
+    if (!b.steps?.length) ctx.addIssue({ code: 'custom', message: 'A weekly rotation needs at least one step', path: ['steps'] });
+    for (const st of b.steps ?? []) {
+      if (!st.letter && !st.days) ctx.addIssue({ code: 'custom', message: `Step "${st.name}" needs a letter or its seven days`, path: ['steps'] });
+      if ((st.letter && !known.has(st.letter)) || (st.days ?? []).some((l) => l && !known.has(l))) ctx.addIssue({ code: 'custom', message: `Step "${st.name}" uses a letter that is not listed`, path: ['steps'] });
+    }
+  }
+});
+
+const templateDto = (t: any, usedBy = 0) => ({ id: t.id, name: t.name, category: t.category, summary: t.summary, kind: t.kind, shape: t.shape, steps: t.steps ?? null, letters: t.letters, crews: t.crews, createdBy: t.createdBy, updatedAt: t.updatedAt, usedBy });
+
+rotations.get('/templates', requires('schedule:read'), async (req, res) => {
+  const out = await withTenant(me(req).tenantId, async (tx) => {
+    const rows = await tx.q<any>('SELECT * FROM rotation_templates WHERE tenant_id = :t ORDER BY lower(name)');
+    const use = new Map((await tx.q<any>(`SELECT template_ref, count(*)::int AS n FROM rotation_patterns WHERE tenant_id = :t AND template_ref IS NOT NULL GROUP BY template_ref`)).map((r) => [r.templateRef, r.n]));
+    return rows.map((r) => templateDto(r, use.get(r.id) ?? 0));
+  });
+  res.json(out);
+});
+
+rotations.post('/templates', requires('workforce:write'), async (req, res) => {
+  const p = me(req), b = parse(TemplateBody, req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    if (await tx.one(`SELECT 1 FROM rotation_templates WHERE tenant_id = :t AND lower(name) = lower($1)`, [b.name])) throw conflict(`There is already a library pattern called "${b.name}".`);
+    const r = await tx.one<any>(
+      `INSERT INTO rotation_templates (tenant_id, name, category, summary, kind, shape, steps, letters, crews, created_by) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [b.name, b.category || 'CUSTOM', b.summary, b.kind, JSON.stringify(b.shape), b.steps ? JSON.stringify(b.steps) : null, JSON.stringify(b.letters), JSON.stringify(b.crews), p.name]);
+    await audit(tx, p, req, { action: 'CREATE', entityType: 'ROTATION_TEMPLATE', entityId: r!.id, entityName: b.name, after: b });
+    return templateDto(r);
+  });
+  res.status(201).json(out);
+});
+
+rotations.put('/templates/:id', requires('workforce:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id), b = parse(TemplateBody, req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const before = await tx.one<any>('SELECT * FROM rotation_templates WHERE tenant_id = :t AND id = $1', [id]);
+    if (!before) throw notFound('Library pattern');
+    if (await tx.one(`SELECT 1 FROM rotation_templates WHERE tenant_id = :t AND lower(name) = lower($1) AND id <> $2`, [b.name, id])) throw conflict(`There is already a library pattern called "${b.name}".`);
+    const r = await tx.one<any>(
+      `UPDATE rotation_templates SET name = $2, category = $3, summary = $4, kind = $5, shape = $6, steps = $7, letters = $8, crews = $9, updated_at = now() WHERE tenant_id = :t AND id = $1 RETURNING *`,
+      [id, b.name, b.category || 'CUSTOM', b.summary, b.kind, JSON.stringify(b.shape), b.steps ? JSON.stringify(b.steps) : null, JSON.stringify(b.letters), JSON.stringify(b.crews)]);
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'ROTATION_TEMPLATE', entityId: id, entityName: b.name, before, after: b });
+    return templateDto(r);
+  });
+  res.json(out);
+});
+
+rotations.delete('/templates/:id', requires('workforce:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  await withTenant(p.tenantId, async (tx) => {
+    const r = await tx.one<any>('SELECT name FROM rotation_templates WHERE tenant_id = :t AND id = $1', [id]);
+    if (!r) throw notFound('Library pattern');
+    await tx.exec('DELETE FROM rotation_templates WHERE tenant_id = :t AND id = $1', [id]);   // patterns made from it keep working: they hold their own copy
+    await audit(tx, p, req, { action: 'DELETE', entityType: 'ROTATION_TEMPLATE', entityId: id, entityName: r.name });
+  });
+  res.json({ ok: true });
+});
+
+/** A saved pattern as a library entry, ready to download: shift templates become letters (A, B, ...) named after them, so it can be applied anywhere with different templates. */
+rotations.get('/:id/export', requires('schedule:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const pat = await tx.one<any>('SELECT * FROM rotation_patterns WHERE tenant_id = :t AND id = $1', [id]);
+    if (!pat) throw notFound('Rotation pattern');
+    const tpls = new Map((await tx.q<any>('SELECT id, name FROM shift_templates WHERE tenant_id = :t')).map((t) => [t.id, t.name as string]));
+    const letterOf = new Map<string, string>();
+    const letter = (tid: string | null) => { if (!tid) return null; if (!letterOf.has(tid)) letterOf.set(tid, 'ABCDEFGH'[letterOf.size] ?? 'H'); return letterOf.get(tid)!; };
+    const weekly = pat.kind === 'WEEKLY' && pat.steps;
+    const shape = weekly ? [] : (pat.sequence as (string | null)[]).map(letter);
+    const steps = weekly ? (pat.steps as any[]).map((s) => ({ name: s.name, weeks: s.weeks, days: s.days.map((d: string | null) => letter(d)) })) : null;
+    const crews = (pat.crews as { name: string; offsetDays: number }[]).map((c) => (weekly ? { name: c.name, offsetWeeks: Math.round(c.offsetDays / 7) } : { name: c.name, offsetDays: c.offsetDays }));
+    return {
+      format: 'wfm-rotation-template', version: 1, name: pat.name, category: 'CUSTOM', summary: '', kind: weekly ? 'WEEKLY' : 'DAY_CYCLE', shape, steps, crews,
+      letters: [...letterOf].map(([tid, l]) => ({ letter: l, label: (tpls.get(tid) ?? 'Shift').slice(0, 40) })),
+    };
+  });
+  res.setHeader('Content-Disposition', `attachment; filename="rotation-${String(out.name).replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 40)}.json"`);
+  res.json(out);
+});
+
+// ---------------------------------------------------------------- a change that takes effect on a date
+
+/** Every earlier definition of a pattern, newest first, with the dates it applied. */
+rotations.get('/:id/revisions', requires('schedule:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  res.json(await withTenant(p.tenantId, (tx) => tx.q<any>(
+    `SELECT id, version, effective_from::text AS effective_from, effective_to::text AS effective_to, name, kind, cycle_days, crews, changed_by, changed_at, note
+     FROM rotation_pattern_revisions WHERE tenant_id = :t AND pattern_id = $1 ORDER BY effective_to DESC, changed_at DESC`, [id])));
+});
+
+/**
+ * Change a pattern from a date, leaving everything before it exactly as it was. The previous definition is kept as a revision; if a roster was already generated, the shifts
+ * from the date onward (up to where it was generated) are rewritten under the new definition and earlier days are not touched. The new cycle starts on the effective date
+ * unless a different anchor date is given.
+ */
+rotations.post('/:id/revise', requires('workforce:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const b = parse(PatternBody.partial().extend({ effectiveFrom: z.string().regex(isoDay), note: z.string().trim().max(300).optional() }), req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    await tx.exec('SELECT pg_advisory_xact_lock(hashtext($1))', [`rot:${id}`]);
+    const before = await tx.one<any>('SELECT *, anchor_date::text AS anchor_date, materialized_through::text AS materialized_through FROM rotation_patterns WHERE tenant_id = :t AND id = $1', [id]);
+    if (!before) throw notFound('Rotation pattern');
+    if (b.effectiveFrom <= todayUtc()) throw bad('A change takes effect from tomorrow at the earliest. Days already worked are not rewritten.');
+    if (b.effectiveFrom < before.anchorDate) throw bad(`The pattern starts on ${before.anchorDate}. Choose a date on or after it.`);
+    const merged = resolveKind({ ...before, ...b, anchorDate: b.anchorDate ?? b.effectiveFrom } as any) as any;
+    await checkBody(tx, { wfmGroupId: before.wfmGroupId, name: merged.name, cycleDays: merged.cycleDays, sequence: merged.sequence, crews: merged.crews, anchorDate: merged.anchorDate, status: merged.status, observesHolidays: merged.observesHolidays, kind: merged.kind, steps: merged.steps } as any);
+
+    await tx.exec(
+      `INSERT INTO rotation_pattern_revisions (tenant_id, pattern_id, version, effective_from, effective_to, name, kind, cycle_days, sequence, steps, crews, anchor_date, observes_holidays, changed_by, note)
+       VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [id, before.version, before.effectiveFrom ?? null, addDays(b.effectiveFrom, -1), before.name, before.kind ?? 'DAY_CYCLE', before.cycleDays, JSON.stringify(before.sequence), before.steps ? JSON.stringify(before.steps) : null, JSON.stringify(before.crews), before.anchorDate, before.observesHolidays ?? true, p.name, b.note ?? '']);
+    const after = await tx.one<any>(
+      `UPDATE rotation_patterns SET name = $2, cycle_days = $3, sequence = $4, crews = $5, anchor_date = $6, status = $7, observes_holidays = $8, kind = $9, steps = $10, effective_from = $11, version = version + 1
+       WHERE tenant_id = :t AND id = $1 RETURNING *, anchor_date::text AS anchor_date, materialized_through::text AS materialized_through`,
+      [id, merged.name, merged.cycleDays, JSON.stringify(merged.sequence), JSON.stringify(merged.crews), merged.anchorDate, merged.status, merged.observesHolidays ?? true, merged.kind, merged.steps ? JSON.stringify(merged.steps) : null, b.effectiveFrom]);
+
+    // a roster already generated past the date is rewritten from the date on; earlier days stay
+    let rewritten: { added: number; removed: number } | null = null;
+    if (after.versionId && after.materializedThrough && after.materializedThrough >= b.effectiveFrom) {
+      const memberRows = await tx.q<any>('SELECT employee_id, crew_name, start_cycle_day, effective_from::text AS effective_from, effective_to::text AS effective_to FROM rotation_members WHERE tenant_id = :t AND pattern_id = $1', [id]);
+      const members: Member[] = memberRows.map((m) => ({ employeeId: m.employeeId, crewName: m.crewName, effectiveFrom: m.effectiveFrom, effectiveTo: m.effectiveTo, startCycleDay: m.startCycleDay ?? null }));
+      const templates = await tx.q<any>('SELECT * FROM shift_templates WHERE tenant_id = :t');
+      const days = rangeDays(b.effectiveFrom, after.materializedThrough);
+      const holidays = after.observesHolidays ? await loadHolidays(tx, after.wfmGroupId, b.effectiveFrom, after.materializedThrough) : new Set<string>();
+      const leave = await loadLeave(tx, members.map((m) => m.employeeId), b.effectiveFrom, after.materializedThrough);
+      const { placed, byKey } = expectedShifts(after, members, templates, holidays, days, leave);
+      rewritten = await writeShifts(tx, after.versionId, placed, byKey, b.effectiveFrom, after.materializedThrough);
+      await tx.exec(`UPDATE schedule_versions SET rev = rev + 1 WHERE tenant_id = :t AND id = $1`, [after.versionId]);
+    }
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'ROTATION_PATTERN', entityId: id, entityName: merged.name, before, after: { ...b, rewritten } });
+    return { pattern: patternDto(after), rewritten };
+  });
+  res.json(out);
+});
+
 // ---------------------------------------------------------------- holidays and the expected shift for a day
 
 async function loadHolidays(tx: Tx, groupId: string, from: string, to: string): Promise<Set<string>> {
   const rows = await tx.q<{ startDay: string; endDay: string }>(
     `SELECT start_day::text AS start_day, end_day::text AS end_day FROM special_events
-     WHERE tenant_id = :t AND kind = 'holiday' AND (wfm_group_id IS NULL OR wfm_group_id = $1) AND start_day <= $3 AND end_day >= $2`,
+     WHERE tenant_id = :t AND kind = 'holiday' AND ((wfm_group_id IS NULL AND site_id IS NULL) OR wfm_group_id = $1 OR site_id = (SELECT site_id FROM wfm_groups WHERE id = $1)) AND start_day <= $3 AND end_day >= $2`,
     [groupId, from, to]);
   const out = new Set<string>();
   for (const r of rows) for (const d of rangeDays(r.startDay < from ? from : r.startDay, r.endDay > to ? to : r.endDay)) out.add(d);

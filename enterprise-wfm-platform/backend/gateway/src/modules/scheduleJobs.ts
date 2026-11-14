@@ -13,6 +13,8 @@ import os from 'node:os';
 import { Router } from 'express';
 import { z } from 'zod';
 import { raw, withTenant, type Tx } from '../db.ts';
+import { newTrace, runWithTrace } from '../observe.ts';
+import { noteBuild } from '../metrics.ts';
 import { me, requires, type Principal } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { HttpError, bad, conflict, isoDay, notFound, parse } from '../http.ts';
@@ -24,6 +26,10 @@ import {
 } from './scheduleRoutes.ts';
 import { paidSlots } from './templateRules.ts';
 import { matchWeeks } from './weekMatch.ts';
+import { addShiftCoverage } from './shiftCoverage.ts';
+import { holidayDays } from './holidayDays.ts';
+import { requireValid } from './scheduleValidation.ts';
+import { loadPolicy } from './policyRoutes.ts';
 export { matchWeeks } from './weekMatch.ts';
 
 const uuid = z.string().uuid();
@@ -82,10 +88,24 @@ const cancelled = (e: any) => e?.code === 'CANCELLED' || e?.name === 'AbortError
 
 interface Win { from: string; to: string; kind: 'SOLVED' | 'PATTERN'; coverage: number | null; backend: string | null; status: string; shifts: number; note?: string }
 
-/** Weekend shifts each person has worked so far in a schedule, so fairness carries from one window to the next. */
+/**
+ * Unsocial hours (paid time on weekend days and public holidays) each person has worked so far in a schedule, so fairness carries from one window to the next. Hours, not
+ * shifts: a person given the long holiday night has carried more than one given a short Saturday morning, and the next window should weigh them that way.
+ */
 async function weekendCounts(tx: Tx, versionId: string, before: string) {
-  const rows = await tx.q<{ employeeId: string; n: number }>(`SELECT employee_id, count(*)::int AS n FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND day < $2::date AND extract(isodow FROM day) >= 6 GROUP BY employee_id`, [versionId, before]);
-  return new Map(rows.map((r) => [r.employeeId, r.n]));
+  const v = await tx.one<{ groupId: string; first: string | null }>(`SELECT v.wfm_group_id AS group_id, (SELECT min(day)::text FROM schedule_shifts WHERE version_id = v.id) AS first FROM schedule_versions v WHERE v.tenant_id = :t AND v.id = $1`, [versionId]);
+  if (!v?.first) return new Map<string, number>();
+  const weekend = new Set((await loadPolicy(tx)).scheduling.weekendDays ?? [5, 6]);
+  const holidays = await holidayDays(tx, v.groupId, v.first, before);
+  const tpl = new Map((await tx.q<any>('SELECT * FROM shift_templates WHERE tenant_id = :t')).map((t: any) => [t.id, t]));
+  const rows = await tx.q<{ employeeId: string; day: string; templateId: string | null; lengthSlots: number }>(`SELECT employee_id, day::text AS day, template_id, length_slots FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND day < $2::date`, [versionId, before]);
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    const dow = (new Date(`${r.day}T00:00:00Z`).getUTCDay() + 6) % 7;
+    if (!weekend.has(dow) && !holidays.has(r.day)) continue;
+    out.set(r.employeeId, (out.get(r.employeeId) ?? 0) + Math.max(1, Math.round(paidSlots(tpl.get(r.templateId ?? ''), r.lengthSlots) / 4)));
+  }
+  return out;
 }
 
 /**
@@ -275,10 +295,10 @@ async function runResolve(job: Job, ctl: AbortController) {
   for (let k = 0; k < wins.length; k++) {
     if (ctl.signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'CANCELLED' });
     const w = wins[k], n = Math.ceil(dayRange(w.from, w.to).length / 7);
-    const pinned = await withTenant(p.tenantId, (tx) => tx.q<any>(`SELECT employee_id, day::text AS day, start_slot, length_slots FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND day >= $2::date AND day <= $3::date AND source = 'MANUAL'`, [v.id, w.from, w.to]));
+    const pinned = await withTenant(p.tenantId, (tx) => tx.q<any>(`SELECT employee_id, day::text AS day, start_slot, length_slots, activities FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND day >= $2::date AND day <= $3::date AND source = 'MANUAL'`, [v.id, w.from, w.to]));
     const prior = await withTenant(p.tenantId, (tx) => weekendCounts(tx, v.id, w.from));
     const g = await runGenerate(p, { ...base, from: w.from, weeks: n }, {
-      historyVersionId: v.id, priorWeekend: prior, signal: ctl.signal, pinned: pinned.map((x) => ({ employeeId: x.employeeId, day: x.day, startSlot: x.startSlot, lengthSlots: x.lengthSlots })),
+      historyVersionId: v.id, priorWeekend: prior, signal: ctl.signal, pinned: pinned.map((x) => ({ employeeId: x.employeeId, day: x.day, startSlot: x.startSlot, lengthSlots: x.lengthSlots, activities: x.activities })),
       onProgress: (d, t, note) => { void step(k + (t ? d / t : 0), `Window ${k + 1} of ${wins.length}: ${note}`); },
     });
     await withTenant(p.tenantId, async (tx) => {                     // swap this window's planned shifts for the new ones in one step
@@ -316,21 +336,30 @@ async function runResolve(job: Job, ctl: AbortController) {
 // ---------------------------------------------------------------- the worker
 
 async function execute(job: Job) {
+  // the whole build, and everything it asks of the engine, belongs to one trace and is logged under the job's id
+  const trace = newTrace(`job-${job.id}`);
+  const started = Date.now();
+  await runWithTrace(trace, () => executeIn(job, started));
+}
+
+async function executeIn(job: Job, started: number) {
   const ctl = new AbortController();
   running.set(job.id, ctl);
   const beat = setInterval(() => { setProgress(job.id, {}).then((c) => { if (c) ctl.abort(); }).catch(() => {}); }, 2000);
   try {
     if (job.versionId) await raw(`DELETE FROM schedule_versions WHERE id = $1 AND settings->'plan'->>'status' = 'BUILDING'`, [job.versionId]);   // a half-built plan from an interrupted run
     if (job.kind === 'PLAN') await runPlan(job, ctl); else await runResolve(job, ctl);
+    noteBuild('done', (Date.now() - started) / 1000);
   } catch (e: any) {
+    const took = (Date.now() - started) / 1000;
     if (lost.has(job.id)) console.warn('[schedule-job]', job.id, 'was taken over by another worker; this run stops without recording a result');
-    else if (cancelled(e) || ctl.signal.aborted) await raw(`UPDATE schedule_jobs SET status = 'CANCELLED', finished_at = now(), version_id = NULL, progress = progress || '{"note":"Cancelled"}'::jsonb WHERE id = $1 AND worker = $2 AND status = 'RUNNING'`, [job.id, WORKER]);
+    else if (cancelled(e) || ctl.signal.aborted) { noteBuild('cancelled', took); await raw(`UPDATE schedule_jobs SET status = 'CANCELLED', finished_at = now(), version_id = NULL, progress = progress || '{"note":"Cancelled"}'::jsonb WHERE id = $1 AND worker = $2 AND status = 'RUNNING'`, [job.id, WORKER]); }
     else if ((e?.code === 'ENGINE_CRASHED' || e?.code === 'ENGINE_UNAVAILABLE' || e?.code === 'ENGINE_BUSY') && job.attempts < 3) {
       // the engine died or was restarting: put the job back (it starts again from the beginning) instead of failing the person's request
-      console.warn('[schedule-job]', job.id, `${e.code}; trying again (attempt ${job.attempts} of 3)`);
+      noteBuild('requeued', took); console.warn('[schedule-job]', job.id, `${e.code}; trying again (attempt ${job.attempts} of 3)`);
       await raw(`UPDATE schedule_jobs SET status = 'QUEUED', worker = NULL, progress = progress || $2::jsonb WHERE id = $1 AND worker = $3 AND status = 'RUNNING'`, [job.id, JSON.stringify({ note: 'The engine restarted; starting this build again' }), WORKER]);
     }
-    else { console.error('[schedule-job]', job.id, e?.message); await raw(`UPDATE schedule_jobs SET status = 'FAILED', error = $2, finished_at = now() WHERE id = $1 AND worker = $3 AND status = 'RUNNING'`, [job.id, String(e?.message ?? e).slice(0, 600), WORKER]); }
+    else { noteBuild('failed', took); console.error('[schedule-job]', job.id, e?.message); await raw(`UPDATE schedule_jobs SET status = 'FAILED', error = $2, finished_at = now() WHERE id = $1 AND worker = $3 AND status = 'RUNNING'`, [job.id, String(e?.message ?? e).slice(0, 600), WORKER]); }
   } finally { clearInterval(beat); running.delete(job.id); lost.delete(job.id); invalidateLive(); }
 }
 
@@ -407,7 +436,7 @@ planRoutes.post('/versions/:id/regenerate', requires('schedule:generate'), async
     ...(s.weights ? { weights: s.weights } : {}), ...(s.consistentTimes ? { consistentTimes: s.consistentTimes } : {}), optimizeBreaks: s.breaks != null,
     ...(s.breakSlackMin != null ? { breakSlackMin: s.breakSlackMin } : {}), timeLimitSec: s.timeLimitSec ?? 30, assumeRepeat: weeks === 1 && !!s.assumeRepeat,
     ...(s.weekStart != null ? { weekStart: s.weekStart } : {}), confidence: s.confidence ?? 50, solver: s.request?.solver ?? 'AUTO',
-    ...(s.request?.employeeIds ? { employeeIds: s.request.employeeIds } : {}), ...(s.request?.excludeEmployeeIds ? { excludeEmployeeIds: s.request.excludeEmployeeIds } : {}), ...(s.request?.teamIds ? { teamIds: s.request.teamIds } : {}),
+    ...(s.request?.guests ? { guests: s.request.guests } : {}), ...(s.request?.employeeIds ? { employeeIds: s.request.employeeIds } : {}), ...(s.request?.excludeEmployeeIds ? { excludeEmployeeIds: s.request.excludeEmployeeIds } : {}), ...(s.request?.teamIds ? { teamIds: s.request.teamIds } : {}),
   });
   const note = from !== v.periodStart ? `The first ${Math.round((Date.parse(from) - Date.parse(v.periodStart)) / 86_400_000)} days have already passed, so the new schedule starts on ${from}.` : null;
   if (b.weeks > 4) return void res.status(202).json({ kind: 'JOB', job: jobDto(await enqueue(p, 'PLAN', b.groupId, b)), note });
@@ -457,6 +486,7 @@ planRoutes.post('/versions/:id/publish-window', requires('schedule:publish'), as
   const from = already ? addDays(already, 1) : v0.periodStart;
   const blocking = live.violations.filter((x: any) => x.severity !== 'WARN' && (!x.day || (x.day >= from && x.day <= b.through)));
   if (blocking.length) throw new HttpError(409, 'RULE_VIOLATIONS', `${blocking.length} rule violations in ${from} to ${b.through} must be fixed before publishing. First: ${blocking[0].message}`, blocking.slice(0, 20));
+  await requireValid(p.tenantId, live, { from, to: b.through });
   const checks = await publishChecks(p, v0, live, b.acknowledgeReason);
   const whole = b.through >= v0.periodEnd;
   const out = await withTenant(p.tenantId, async (tx) => {
@@ -490,7 +520,7 @@ export async function planView(tenantId: string, id: string) {
   const people = new Map<string, Set<string>>();
   for (const s of live.shifts as any[]) {
     const i = di.get(s.day); if (i === undefined) continue;
-    for (let g = i * SPD + s.startSlot; g < Math.min(sched.length, i * SPD + s.startSlot + s.lengthSlots); g++) sched[g]++;
+    addShiftCoverage(sched, i, s);
     const wk = mondayOf(s.day, weekStart), m = bySource.get(wk) ?? {};
     m[s.source] = (m[s.source] ?? 0) + 1; bySource.set(wk, m);
     const set = people.get(wk) ?? new Set<string>(); set.add(s.employeeId); people.set(wk, set);
@@ -516,12 +546,12 @@ export async function planView(tenantId: string, id: string) {
     const forecast = hasNone === n ? 'NONE' : hasLong === n ? 'LONG' : hasLong ? 'MIXED' : 'SHORT';
     const ahead = Math.max(0, Math.floor((new Date(ws).getTime() - new Date(today).getTime()) / 604_800_000));
     weeks.push({
-      weekStart: ws, weekEnd: wsEnd, coveragePercent: need ? Math.round((1 - under / need) * 1000) / 10 : null, needSlots: need, underSlots: under, overSlots: over, shifts: total, people: people.get(ws)?.size ?? 0,
+      weekStart: ws, weekEnd: wsEnd, days: n, coveragePercent: need ? Math.round((1 - under / need) * 1000) / 10 : null, needSlots: need, underSlots: under, overSlots: over, shifts: total, people: people.get(ws)?.size ?? 0,
       shiftSource: kind, forecast, confidence: confidenceOf(ahead, forecast), weeksAhead: ahead,
       state: through && wsEnd <= through ? 'LOCKED' : through && ws <= through ? 'PARTLY_LOCKED' : wsEnd < today ? 'PAST' : 'PLANNED',
     });
   }
-  const value = { versionId: id, name: v.name, status: v.status, periodStart: v.periodStart, periodEnd: v.periodEnd, publishThrough: v.publishThrough ?? null, today, plan: v.settings?.plan ?? null, weeks,
+  const value = { versionId: id, name: v.name, status: v.status, periodStart: v.periodStart, periodEnd: v.periodEnd, weekStartDay: weekStart, publishThrough: v.publishThrough ?? null, today, plan: v.settings?.plan ?? null, weeks,
     summary: { coverage: live.stats.coverage.percent, shifts: live.stats.shifts, people: live.stats.people, violations: live.stats.violations } };
   planCache.set(key, { at: Date.now(), value });
   if (planCache.size > 50) planCache.delete(planCache.keys().next().value!);
@@ -650,9 +680,9 @@ planRoutes.post('/versions/:id/simulate', requires('schedule:read'), async (req,
   });
   res.json({
     versionId: id, from, to: last, target, answerSec: group.answerSec, patienceSec: group.patienceSec || 120, replications: sim.replications, volumeCv: b.volumeCv, absencePercent: b.absencePercent,
-    overall: { serviceLevel: r3(sim.sl_mean), abandon: r3(sim.abandon), occupancy: r3(sim.occupancy), offered: Math.round(sim.offered), chanceOfMeetingTarget: r3((sim.sl_by_rep as number[]).filter((x) => x >= target).length / Math.max(1, sim.sl_by_rep.length)) },
+    overall: { serviceLevel: r3(sim.sl_mean), serviceLevelCi: [r3(sim.sl_ci_low), r3(sim.sl_ci_high)], replicationsRequested: sim.replications_requested, abandon: r3(sim.abandon), occupancy: r3(sim.occupancy), offered: Math.round(sim.offered), chanceOfMeetingTarget: r3((sim.sl_by_rep as number[]).filter((x) => x >= target).length / Math.max(1, sim.sl_by_rep.length)) },
     days: want.map((day, k) => ({ day, serviceLevel: r3(sim.days[k].sl_mean), badDayServiceLevel: r3(sim.days[k].sl_low), abandon: r3(sim.days[k].abandon), occupancy: r3(sim.days[k].occupancy), offered: Math.round(sim.days[k].offered), coverageOfRequirement: r3(planned[k]), meetsTarget: sim.days[k].sl_mean >= target })),
-    intervals: sim.intervals.map((x: any, k: number) => ({ day: want[Math.floor(k / SPD)], slot: k % SPD, serviceLevel: r3(x.sl_mean), badServiceLevel: r3(x.sl_low), asaSec: Math.round(x.asa_sec * 10) / 10, abandon: r3(x.abandon), occupancy: r3(x.occupancy), offered: Math.round(x.offered * 10) / 10, agents: Math.round(intervals[k].agents * 10) / 10, belowTarget: x.sl_mean < target && x.offered > 0 })),
+    intervals: sim.intervals.map((x: any, k: number) => ({ day: want[Math.floor(k / SPD)], slot: k % SPD, serviceLevel: r3(x.sl_mean), serviceLevelCi: [r3(x.sl_ci_low), r3(x.sl_ci_high)], badServiceLevel: r3(x.sl_low), asaSec: Math.round(x.asa_sec * 10) / 10, abandon: r3(x.abandon), occupancy: r3(x.occupancy), offered: Math.round(x.offered * 10) / 10, agents: Math.round(intervals[k].agents * 10) / 10, belowTarget: x.sl_mean < target && x.offered > 0 })),
     wallSec: sim.wall_sec,
     notes: [
       'Calls arrive at random around the forecast, and the whole stretch is scaled by a random forecast error. Handling times and patience vary.',

@@ -12,6 +12,7 @@ import type { Ctx } from './scheduleRoutes.ts';
 import { serviceLevel } from './erlang.ts';
 import { shiftBlocked } from './compliance/rules.ts';
 import { offeredLengths, paidSlots, rulesFor, startsFor, whyNotOffered } from './templateRules.ts';
+import { addShiftCoverage } from './shiftCoverage.ts';
 
 const SPD = 96;
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -35,7 +36,7 @@ export function headcount(days: string[], shifts: QShift[]): number[] {
   const out = new Array(days.length * SPD).fill(0), di = new Map(days.map((d, i) => [d, i]));
   for (const s of shifts) {
     const i = di.get(s.day); if (i === undefined) continue;
-    for (let g = i * SPD + s.startSlot; g < Math.min(out.length, i * SPD + s.startSlot + s.lengthSlots); g++) out[g]++;
+    addShiftCoverage(out, i, s);
   }
   return out;
 }
@@ -167,7 +168,7 @@ export function buildWhyNot(ctx: Ctx, shifts: QShift[], helpers: Helpers) {
     const mine = byPerson.get(e.id) ?? [];
     const sameDay = mine.find((s) => s.day === day);
     if (sameDay && sameDay.startSlot <= slot && slot < sameDay.startSlot + sameDay.lengthSlots) return 'COULD_WORK'; // counted already
-    if (ctx.timeOff.some((o) => o.employeeId === e.id && o.startDay <= day && o.endDay >= day)) return 'TIME_OFF';
+    if (ctx.timeOff.some((o) => o.employeeId === e.id && o.startDay <= day && o.endDay >= day)) return ctx.timeOff.some((o) => o.employeeId === e.id && !o.loan && o.startDay <= day && o.endDay >= day) ? 'TIME_OFF' : 'ON_SHIFT_ELSEWHERE';
     // every way a template could cover this slot
     const starts: { t: any; s: number; len: number }[] = [];
     // skills are not part of the shortage picture, so a template that needs one is treated as open to this person
@@ -180,7 +181,7 @@ export function buildWhyNot(ctx: Ctx, shifts: QShift[], helpers: Helpers) {
     const reasons: CauseKey[] = [];
     for (const { t, s, len } of starts) {
       const why = helpers.blockedReason(ctx, e, day, s, len);
-      if (why) { reasons.push(why.includes('weekend') || why.includes('overnight') ? 'NOT_ALLOWED' : why.includes('time off') ? 'TIME_OFF' : why.includes('already scheduled') ? 'ON_SHIFT_ELSEWHERE' : 'AVAILABILITY'); continue; }
+      if (why) { reasons.push(why.includes('weekend') || why.includes('overnight') ? 'NOT_ALLOWED' : why.includes('time off') ? 'TIME_OFF' : why.includes('already scheduled') || why.includes('on loan') ? 'ON_SHIFT_ELSEWHERE' : 'AVAILABILITY'); continue; }
       if (shiftBlocked(ctx.rules.forTeam(e.teamId, e.id), { nightConsent: !!e.nightShiftConsent }, { startSlot: s, lengthSlots: len, mealSlots: rulesFor(t, len).mealSlots })) { reasons.push('COMPLIANCE'); continue; }
       if (sameDay) { reasons.push('ON_SHIFT_ELSEWHERE'); continue; }
       const wk = helpers.mondayOf(day, ctx.weekStart), inWeek = mine.filter((x) => helpers.mondayOf(x.day, ctx.weekStart) === wk);
@@ -324,6 +325,7 @@ export function optimizeBreaks(a: { days: string[]; shifts: QShift[]; required: 
       for (let k = 0; k < acts.length; k++) {
         const act = acts[k];
         if (act.type !== 'MEAL' && act.type !== 'BREAK') continue;
+        if ((act as { split?: boolean }).split) continue;                                     // the gap of a split shift is part of its design: it is not moved
         const abs = i * SPD + act.startSlot;
         for (let g = abs; g < abs + act.slots; g++) off[g]--;       // take it out, then find its best place
         const prevEnd = k > 0 ? i * SPD + acts[k - 1].startSlot + acts[k - 1].slots : lo + 1;
@@ -356,7 +358,7 @@ export interface ReportException { level: 'WARNING' | 'INFO'; code: string; subj
 export function buildReport(a: {
   pool: any[]; requested: { employeeIds?: string[]; teamIds?: string[] } | null; poolSize: number; shifts: QShift[]; optionsByPerson: Map<string, number>;
   blockedByPerson: Map<string, Map<string, number>>; uncoveredDays: string[]; projectedDays: string[]; coveragePercent: number; targetCoverage: number;
-  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; representativeNote?: string | null; skillNote?: string | null; historyNote?: string | null; repeatNote?: string | null; partNote?: string | null; thinNote?: string | null; rosterOnlyNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null; hoursNote?: { level: 'WARNING' | 'INFO'; message: string } | null;
+  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; weightsNote?: string | null; representativeNote?: string | null; skillNote?: string | null; historyNote?: string | null; sharedNote?: string | null; guestNote?: { level: 'WARNING' | 'INFO'; message: string } | null; draftNotes?: { name: string; groupName: string; message: string }[]; repeatNote?: string | null; partNote?: string | null; thinNote?: string | null; rosterOnlyNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null; hoursNote?: { level: 'WARNING' | 'INFO'; message: string } | null;
 }) {
   const scheduled = new Map<string, number>();
   for (const s of a.shifts) scheduled.set(s.employeeId, (scheduled.get(s.employeeId) ?? 0) + 1);
@@ -385,6 +387,9 @@ export function buildReport(a: {
   if (a.solverStatus === 'FEASIBLE') exceptions.push({ level: 'INFO', code: 'NOT_PROVEN_BEST', subject: 'A good schedule, not proven best', message: 'The solver stopped at a good answer without proving it is the very best: it was proven within a small share of the best possible, or it ran out of time. More solver time may improve it.' });
   if (a.consistencyNote) exceptions.push({ level: 'INFO', code: 'CONSISTENCY', subject: 'Same start and end times', message: a.consistencyNote });
   if (a.historyNote) exceptions.push({ level: 'INFO', code: 'HISTORY', subject: 'Carried over from the previous schedule', message: a.historyNote });
+  if (a.guestNote) exceptions.push({ level: a.guestNote.level, code: 'GUESTS', subject: 'Some people are guests from their home group', message: a.guestNote.message });
+  if (a.sharedNote) exceptions.push({ level: 'INFO', code: 'SHARED_PEOPLE', subject: 'Some people also work for other groups', message: a.sharedNote });
+  for (const d of a.draftNotes ?? []) exceptions.push({ level: 'WARNING', code: 'OVERLAPPING_DRAFT', subject: `Another draft plans the same people: ${d.name} (${d.groupName})`, message: d.message });
   if (a.rosterOnlyNote) exceptions.push({ level: 'WARNING', code: 'STARTING_ROSTER', subject: 'Part of this schedule is the starting roster only', message: a.rosterOnlyNote });
   if (a.representativeNote) exceptions.push({ level: 'INFO', code: 'REPRESENTATIVES', subject: 'A sample was solved and its rosters repeated', message: a.representativeNote });
   if (a.partNote) exceptions.push({ level: 'INFO', code: 'SPLIT', subject: 'The group was solved in parts', message: a.partNote });

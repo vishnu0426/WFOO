@@ -1,5 +1,7 @@
-/** One group: its settings at a glance, and tabs for queues, people, shrinkage, manual coverage and history. */
+/** One group: its settings at a glance, and tabs for queues, people, skills, shrinkage, manual coverage and history. */
 import React, { useState } from 'react';
+import { useApi } from '../../forecasting/hooks';
+import { SkillsTab } from './SkillsTab';
 import { ArrowLeft, Copy, Pencil, Power, Trash2 } from 'lucide-react';
 import { api, GroupDto, MODEL_LABEL, Queue, Team } from '../../../services/api';
 import { Btn, Card, Field, Input, Pill } from '../../forecasting/ui';
@@ -9,7 +11,7 @@ import { QueuesTab } from './QueuesTab';
 import { CoverageTab, HistoryTab, ShrinkageTab } from './SmallTabs';
 import { Confirm, DAYS_LONG, dayRange, GroupSummary, Site } from './shared';
 
-const TABS = [['overview', 'Overview'], ['queues', 'Queues'], ['people', 'People'], ['shrinkage', 'Shrinkage'], ['coverage', 'Manual coverage'], ['history', 'History']] as const;
+const TABS = [['overview', 'Overview'], ['queues', 'Queues'], ['people', 'People'], ['skills', 'Skills'], ['shrinkage', 'Shrinkage'], ['coverage', 'Manual coverage'], ['history', 'History']] as const;
 type TabId = (typeof TABS)[number][0];
 
 const Row: React.FC<{ k: string; v: React.ReactNode }> = ({ k, v }) => (
@@ -21,6 +23,10 @@ export const GroupDetail: React.FC<{
   onBack: () => void; onChanged: () => Promise<void>; onDeleted: () => Promise<void>; notify: (kind: 'ok' | 'err', text: string) => void; onOpen: (id: string) => void;
 }> = ({ group, summary, sites, teams, queues, canWrite, onBack, onChanged, onDeleted, notify, onOpen }) => {
   const [tab, setTab] = useState<TabId>('overview');
+  // the Skills tab appears once the organisation has skills, or when this group already requires some, so a simple setup never sees it
+  const skillCatalogue = useApi<{ id: string }[]>('/workforce/skills');
+  const required = useApi<{ skillId: string }[]>(`/config/groups/${group.id}/skills`, [group.id]);
+  const showSkills = (skillCatalogue.data?.length ?? 0) > 0 || (required.data?.length ?? 0) > 0;
   const [editing, setEditing] = useState(false);
   const [dialog, setDialog] = useState<null | 'clone' | 'off' | 'delete'>(null);
   const [warn, setWarn] = useState('');          // the gateway's warning that a published schedule is still running
@@ -81,7 +87,7 @@ export const GroupDetail: React.FC<{
       </div>
 
       <div className="flex gap-1 border-b border-[#E5E5E0] overflow-x-auto" role="tablist">
-        {TABS.map(([id, label]) => {
+        {TABS.filter(([id]) => id !== 'skills' || showSkills).map(([id, label]) => {
           const n = id === 'queues' ? queues.length : id === 'people' ? summary?.people : undefined;
           return (
             <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
@@ -99,6 +105,7 @@ export const GroupDetail: React.FC<{
             <Card title="Service targets"><div>
               <Row k="Service goal" v={`${group.serviceLevelGoal}% in ${group.serviceLevelThresholdSec}s`} />
               <Row k="Occupancy cap" v={`${group.targetOccupancy}%`} />
+              {group.channels.includes('CHAT') && <Row k="Chat efficiency" v={String(group.chatEfficiency ?? 0.85)} />}
               <Row k="Shrinkage" v={`${group.shrinkagePercent}%`} />
             </div></Card>
             <Card title="Staffing and forecast"><div>
@@ -124,6 +131,7 @@ export const GroupDetail: React.FC<{
         ))}
       {tab === 'queues' && <QueuesTab group={group} queues={queues} canWrite={canWrite} onChange={changed} />}
       {tab === 'people' && <PeopleTab group={group} teams={teams} canWrite={canWrite} onChange={() => { setHistoryTick((t) => t + 1); void onChanged(); }} />}
+      {tab === 'skills' && showSkills && <SkillsTab group={group} canWrite={canWrite} onChanged={() => { setHistoryTick((t) => t + 1); void onChanged(); }} />}
       {tab === 'shrinkage' && <ShrinkageTab group={group} canWrite={canWrite} />}
       {tab === 'coverage' && <CoverageTab group={group} canWrite={canWrite} />}
       {tab === 'history' && <HistoryTab group={group} sites={sites} tick={historyTick} />}

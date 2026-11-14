@@ -1,8 +1,13 @@
 /** Organisation profile, workspaces and workspace membership. */
 import { Router } from 'express';
+import { assertCapacity } from './licensing/service.ts';
 import { z } from 'zod';
-import { withTenant, type Tx } from '../db.ts';
-import { me, requires } from '../auth.ts';
+import { withTenant, withWorkspace, raw, pool, type Tx } from '../db.ts';
+import { me, requires, requireUnscoped } from '../auth.ts';
+import { addHolidays, hasCountry, publicHolidays } from './holidays.ts';
+import { ensureBuiltIns } from './compliance/routes.ts';
+import { BUILT_INS } from './compliance/rules.ts';
+import { cleanWeekend } from './payWeek.ts';
 import { audit } from '../audit.ts';
 import { bad, conflict, notFound, parse } from '../http.ts';
 
@@ -19,6 +24,44 @@ const WorkspaceBody = z.object({
   currency: z.string().min(3).max(3).optional(),
 });
 const WorkspacePatch = WorkspaceBody.partial();
+
+/**
+ * Creating a workspace asks for little: a name, and optionally a country (its time zone, currency, holidays, week and labour-law pack are filled in), or a workspace to start from
+ * (its shift templates, scheduling rules, holidays, labour-law packs and skills are copied: never people, schedules, forecasts or history), and who manages it.
+ * The code and the web address are made from the name unless given.
+ */
+const CopyWhat = z.object({ shiftTemplates: z.boolean().default(true), schedulingRules: z.boolean().default(true), holidays: z.boolean().default(true), labourLawPacks: z.boolean().default(true), skills: z.boolean().default(true) });
+const CreateWorkspaceBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  code: z.string().max(40).regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, numbers, dot, dash and underscore').optional(),
+  slug: z.string().max(60).regex(/^[a-z0-9-]+$/, 'may only contain lowercase letters, numbers and dash').optional(),
+  description: z.string().max(500).optional(),
+  timezone: z.string().min(1).max(80).optional(), currency: z.string().length(3).optional(),
+  country: z.string().length(2).optional(),
+  addHolidays: z.boolean().default(true), applyPack: z.boolean().default(true),
+  copyFromWorkspaceId: uuid.nullable().default(null), copy: CopyWhat.default({ shiftTemplates: true, schedulingRules: true, holidays: true, labourLawPacks: true, skills: true }),
+  adminUserIds: z.array(uuid).max(50).default([]),
+});
+
+/** A code or address that is not taken yet: the base, then base_2, base_3... */
+async function freeValue(tx: Tx, column: 'code' | 'slug', base: string, sep: string): Promise<string> {
+  for (let n = 1; n < 200; n++) {
+    const v = n === 1 ? base : `${base}${sep}${n}`;
+    if (!(await tx.one(`SELECT 1 FROM workspaces WHERE tenant_id = :t AND ${column} = $1`, [v]))) return v;
+  }
+  throw bad('Could not find a free code for this workspace. Give it one.');
+}
+
+/** Copy one table's rows from a workspace to another, as the database owner (a request may only touch its own workspace). `nulls` are columns left empty because they point at things not copied. */
+async function copyTable(client: import('pg').PoolClient, table: string, tenantId: string, from: string, to: string, opts: { where?: string; nulls?: string[] } = {}): Promise<number> {
+  const cols = (await client.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'wfm' AND table_name = $1 AND is_generated <> 'ALWAYS' AND coalesce(identity_generation, '') <> 'ALWAYS' ORDER BY ordinal_position`, [table])).rows.map((r) => r.column_name as string);
+  const skip = new Set(['id', 'tenant_id', 'workspace_id', 'created_at', 'updated_at']);
+  const data = cols.filter((c) => !skip.has(c));
+  const list = ['tenant_id', 'workspace_id', ...data];
+  const sel = ['tenant_id', '$3::uuid', ...data.map((c) => (opts.nulls?.includes(c) ? 'NULL' : `"${c}"`))];
+  const r = await client.query(`INSERT INTO wfm."${table}" (${list.map((c) => `"${c}"`).join(', ')}) SELECT ${sel.join(', ')} FROM wfm."${table}" WHERE tenant_id = $1 AND workspace_id = $2 ${opts.where ? `AND ${opts.where}` : ''}`, [tenantId, from, to]);
+  return r.rowCount ?? 0;
+}
 const OrgPatch = z.object({
   name: z.string().min(1).max(160).optional(),
   legalName: z.string().max(200).optional(),
@@ -110,21 +153,89 @@ workspaces.get('/', requires('workspace:read'), async (req, res) => {
 });
 
 workspaces.post('/', requires('workspace:create'), async (req, res) => {
-  const p = me(req), b = parse(WorkspaceBody, req.body);
-  const out = await withTenant(p.tenantId, async (tx) => {
+  requireUnscoped(req);
+  const p = me(req), b = parse(CreateWorkspaceBody, req.body);
+  const cc = b.country?.toUpperCase();
+  if (cc && !hasCountry(cc)) throw bad('Choose a country from the list.');
+  const [tpl] = cc ? await raw<any>('SELECT * FROM wfm.country_templates WHERE upper(code) = $1', [cc]) : [];
+
+  // 1) the workspace itself, with the people who manage it
+  const made = await withTenant(p.tenantId, async (tx) => {
+    await assertCapacity(tx, p.tenantId, 'WORKSPACES', 1);
+    if (b.copyFromWorkspaceId && !(await tx.one('SELECT 1 FROM workspaces WHERE tenant_id = :t AND id = $1', [b.copyFromWorkspaceId]))) throw notFound('Workspace to copy');
+    const base = (b.code ?? b.name).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 16).toUpperCase() || 'WORKSPACE';
+    const code = b.code ? b.code : await freeValue(tx, 'code', base, '_');
+    const slug = b.slug ? b.slug : await freeValue(tx, 'slug', slugify(b.name), '-');
     const w = await tx.one<any>(
       `INSERT INTO workspaces (tenant_id, name, code, slug, description, timezone, currency, created_by)
-       SELECT :t, $1, $2, $3, $4, coalesce($5, t.timezone), coalesce($6, t.currency), $7
+       SELECT :t, $1, $2, $3, $4, coalesce($5, $8, t.timezone), coalesce($6, $9, t.currency), $7
        FROM tenants t WHERE t.id = :t RETURNING *`,
-      [b.name, b.code, b.slug || slugify(b.code), b.description ?? '', b.timezone ?? null, b.currency ?? null, p.userId]);
-    await tx.exec(
-      `INSERT INTO workspace_members (tenant_id, workspace_id, user_id, role, is_default)
-       VALUES (:t, $1, $2, $3, false) ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE', updated_at = now()`,
-      [w!.id, p.userId, p.role]);
-    await audit(tx, p, req, { action: 'CREATE', entityType: 'WORKSPACE', entityId: w!.id, entityName: b.name, after: b });
-    return workspaceDto({ ...w, memberCount: 1 });
+      [b.name, code, slug, b.description ?? '', b.timezone ?? null, b.currency ?? null, p.userId, tpl?.timezone ?? null, tpl?.currency ?? null]).catch((e) => { throw e.code === '23505' ? conflict('A workspace with that code or web address already exists.') : e; });
+    const members = new Map<string, string>([[p.userId, p.role]]);
+    if (b.adminUserIds.length) for (const u of await tx.q<any>('SELECT id, role FROM users WHERE tenant_id = :t AND status = \'ACTIVE\' AND id = ANY($1::uuid[])', [b.adminUserIds])) if (!members.has(u.id)) members.set(u.id, u.role);
+    for (const [userId, role] of members) {
+      await tx.exec(`INSERT INTO workspace_members (tenant_id, workspace_id, user_id, role, is_default) VALUES (:t, $1, $2, $3, false) ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = 'ACTIVE', updated_at = now()`, [w!.id, userId, role]);
+    }
+    await audit(tx, p, req, { action: 'CREATE', entityType: 'WORKSPACE', entityId: w!.id, entityName: b.name, after: { name: b.name, country: cc ?? null, copiedFrom: b.copyFromWorkspaceId, admins: members.size } });
+    return { w: w!, members: members.size };
   });
-  res.status(201).json(out);
+
+  // 2) what it starts with: a copy of another workspace's setup, or the country's defaults
+  const setup = { copied: [] as string[], holidaysAdded: 0, packName: null as string | null, failed: null as string | null };
+  try {
+    if (b.copyFromWorkspaceId) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const [from, to, t] = [b.copyFromWorkspaceId, made.w.id, p.tenantId];
+        const c = b.copy;
+        if (c.skills) { const n = await copyTable(client, 'skills', t, from, to); if (n) setup.copied.push(`${n} skill${n === 1 ? '' : 's'}`); }
+        if (c.shiftTemplates) { const n = await copyTable(client, 'shift_templates', t, from, to, { nulls: ['group_ids', 'skill_ids'] }); if (n) setup.copied.push(`${n} shift template${n === 1 ? '' : 's'}`); }
+        if (c.schedulingRules) { const n = await copyTable(client, 'scheduling_policy', t, from, to); if (n) setup.copied.push('scheduling rules'); }
+        if (c.holidays) { const n = await copyTable(client, 'special_events', t, from, to, { where: `kind = 'holiday' AND wfm_group_id IS NULL AND site_id IS NULL AND queue_id IS NULL` }); if (n) setup.copied.push(`${n} holiday${n === 1 ? '' : 's'}`); }
+        if (c.labourLawPacks) {
+          const n = await copyTable(client, 'compliance_packs', t, from, to);
+          if (n) setup.copied.push(`${n} labour-law pack${n === 1 ? '' : 's'}`);
+          // the organisation-wide choice of pack, pointed at the copies
+          await client.query(
+            `INSERT INTO wfm.compliance_assignments (tenant_id, workspace_id, scope_type, scope_id, scope_key, pack_id)
+             SELECT a.tenant_id, $3::uuid, 'TENANT', NULL, 'tenant', np.id FROM wfm.compliance_assignments a JOIN wfm.compliance_packs op ON op.id = a.pack_id
+             JOIN wfm.compliance_packs np ON np.tenant_id = a.tenant_id AND np.workspace_id = $3::uuid AND np.code = op.code WHERE a.tenant_id = $1 AND a.workspace_id = $2 AND a.scope_type = 'TENANT'`, [t, from, to]);
+        }
+        await client.query('COMMIT');
+      } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+    } else if (cc) {
+      await withWorkspace(p.tenantId, made.w.id, async (tx) => {
+        if (tpl && (tpl.payWeekStart != null || tpl.weekendDays)) {
+          await tx.exec(`INSERT INTO scheduling_policy (tenant_id, workspace_id, defaults, updated_by) VALUES (:t, :w, $1::jsonb, $2) ON CONFLICT (tenant_id, workspace_id) DO NOTHING`,
+            [JSON.stringify({ payWeekStart: tpl.payWeekStart ?? 0, weekendDays: cleanWeekend(tpl.weekendDays) }), p.name]);
+          setup.copied.push('the country\'s working week');
+        }
+        if (b.addHolidays) { const y = new Date().getUTCFullYear(); setup.holidaysAdded = await addHolidays(tx, [...publicHolidays(cc, y), ...publicHolidays(cc, y + 1)]); }
+        const pack = b.applyPack && tpl?.compliancePack ? BUILT_INS.find((x) => x.code === tpl.compliancePack) : undefined;
+        if (pack) {
+          await ensureBuiltIns(tx);
+          const row = await tx.one<any>('SELECT id, name FROM compliance_packs WHERE tenant_id = :t AND code = $1', [pack.code]);
+          if (row) { await tx.exec(`INSERT INTO compliance_assignments (tenant_id, workspace_id, scope_type, scope_id, scope_key, pack_id) VALUES (:t, :w, 'TENANT', NULL, 'tenant', $1) ON CONFLICT DO NOTHING`, [row.id]); setup.packName = row.name; }
+        }
+      });
+    }
+  } catch (e: any) { setup.failed = e?.message ?? 'Part of the setup could not be completed.'; }
+  res.status(201).json({ ...workspaceDto({ ...made.w, memberCount: made.members }), setup });
+});
+
+workspaces.post('/:id/restore', requires('workspace:write'), async (req, res) => {
+  requireUnscoped(req);
+  const p = me(req), id = parse(uuid, req.params.id);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const before = await workspace(tx, p.tenantId, id);
+    if (before.status !== 'ARCHIVED') throw bad('That workspace is not archived.');
+    await assertCapacity(tx, p.tenantId, 'WORKSPACES', 1);
+    const w = await tx.one<any>(`UPDATE workspaces SET status = 'ACTIVE', updated_at = now() WHERE tenant_id = :t AND id = $1 RETURNING *`, [id]);
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'WORKSPACE', entityId: id, entityName: before.name, diffSummary: 'Restored' });
+    return workspaceDto({ ...w, memberCount: 0 });
+  });
+  res.json(out);
 });
 
 workspaces.patch('/:id', requires('workspace:write'), async (req, res) => {

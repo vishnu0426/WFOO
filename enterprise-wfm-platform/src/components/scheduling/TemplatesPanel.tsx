@@ -2,6 +2,7 @@
  * Scheduling › Shift Templates. A template is a pattern of shift, not one shift: a start window (for example 06:00 to 10:00
  * every 30 minutes), a length, a meal and breaks. The generator chooses the best start for each person.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api, DOW, EmploymentType, ShiftTemplate, TYPE_LABEL } from '../../services/api';
@@ -11,8 +12,8 @@ import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Table } from '../
 
 type Rule = { fromHours: number; mealMinutes: number; breakCount: number; breakMinutes: number };
 type Win = { earliest: string; latest: string };
-type Form = { minDurationHours: number | null; lengthStepMinutes: number; mealPaid: boolean; lengthRules: Rule[]; dayWindows: Record<string, Win>; groupIds: string[]; employmentTypes: string[]; skillIds: string[]; effectiveFrom: string; effectiveTo: string; id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
-const blank = (): Form => ({ minDurationHours: null, lengthStepMinutes: 60, mealPaid: false, lengthRules: [], dayWindows: {}, groupIds: [], employmentTypes: [], skillIds: [], effectiveFrom: '', effectiveTo: '', id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
+type Form = { minDurationHours: number | null; lengthStepMinutes: number; mealPaid: boolean; splitShift: boolean; lengthRules: Rule[]; dayWindows: Record<string, Win>; groupIds: string[]; employmentTypes: string[]; skillIds: string[]; effectiveFrom: string; effectiveTo: string; id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
+const blank = (): Form => ({ minDurationHours: null, lengthStepMinutes: 60, mealPaid: false, splitShift: false, lengthRules: [], dayWindows: {}, groupIds: [], employmentTypes: [], skillIds: [], effectiveFrom: '', effectiveTo: '', id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
 const resizeBreaks = (arr: (number | null)[], n: number): (number | null)[] => (arr.length === n ? arr : arr.length < n ? [...arr, ...new Array(n - arr.length).fill(null)] : arr.slice(0, n));
 
 const timeToMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
@@ -69,7 +70,7 @@ export const TemplatesPanel: React.FC = () => {
                 <Field label="Length incl. meal (hours)"><Input type="number" min={1} max={14} step={0.25} value={f.durationHours} onChange={num('durationHours')} /></Field>
               </>
             )}
-            <Field label="Unpaid meal (minutes)"><Input type="number" min={0} max={120} step={15} value={f.mealMinutes} onChange={(e) => setF({ ...f, mealMinutes: Number(e.target.value), mealAnchorMinutes: null })} /></Field>
+            <Field label={f.splitShift ? 'Unpaid gap between the two parts (minutes)' : 'Unpaid meal (minutes)'}><Input type="number" min={0} max={f.splitShift ? 360 : 120} step={15} value={f.mealMinutes} onChange={(e) => setF({ ...f, mealMinutes: Number(e.target.value), mealAnchorMinutes: null })} /></Field>
             <Field label="Paid breaks"><Input type="number" min={0} max={4} value={f.breakCount} onChange={(e) => { const n = Number(e.target.value); setF({ ...f, breakCount: n, breakAnchorMinutes: resizeBreaks(f.breakAnchorMinutes, n) }); }} /></Field>
             <Field label="Break length (minutes)"><Input type="number" min={15} max={60} step={15} value={f.breakMinutes} onChange={(e) => setF({ ...f, breakMinutes: Number(e.target.value), breakAnchorMinutes: f.breakAnchorMinutes.map(() => null) })} /></Field>
             <Field label="Break/meal placement window (min)" hint="How far the generator can still nudge a meal or break from where you drop it below, to smooth coverage"><Input type="number" min={0} max={120} step={15} value={f.flexMinutes} onChange={num('flexMinutes')} /></Field>
@@ -88,12 +89,12 @@ export const TemplatesPanel: React.FC = () => {
           <div className="flex gap-2"><Btn variant="primary" disabled={!f.name.trim() || f.workDays.length === 0} onClick={save}>Save template</Btn><Btn onClick={() => setF(null)}>Cancel</Btn></div>
         </div>
       )}
-      {list.data?.length === 0 && !f ? <Empty title="No shift templates yet">Add a few (for example Early, Day, Late) so the generator has shapes to work with.</Empty> : (
+      {list.data === null ? (list.error ? <LoadFailed what="shift templates" error={list.error} reload={list.reload} /> : <Waiting what="shift templates" shape="table" reload={list.reload} />) : list.data.length === 0 && !f ? <Empty title="No shift templates yet">Add a few (for example Early, Day, Late) so the generator has shapes to work with.</Empty> : (
         <Table head={['Template', 'Start window', 'Length', 'Paid', 'Meal / breaks', 'Days', 'Status', '']}>
           {list.data?.map((t) => (
             <tr key={t.id}>
               <td className="p-3 font-semibold">{t.name}</td>
-              <td className="p-3 font-mono text-[12px]">{t.earliestStart}–{t.latestStart} <span className="text-[#6B6B6B]">every {t.startStepMinutes}m</span></td>
+              <td className="p-3 font-mono text-[12px]"><span className="text-[#6B6B6B]">starts </span>{t.earliestStart === t.latestStart ? t.earliestStart : `${t.earliestStart}–${t.latestStart}`} <span className="text-[#6B6B6B]">{t.earliestStart === t.latestStart ? '' : `every ${t.startStepMinutes}m`}</span></td>
               <td className="p-3">{t.minDurationHours ? `${t.minDurationHours}–${t.durationHours}h` : `${t.durationHours}h`}</td><td className="p-3">{t.minDurationHours && t.paidHoursMin != null ? `${t.paidHoursMin}–${t.paidHours}h` : `${t.paidHours}h`}</td>
               <td className="p-3 text-[12px]">{t.lengthRules?.length ? `${t.lengthRules.length} rules by length` : `${t.mealMinutes ? `${t.mealMinutes}m meal` : 'no meal'} · ${t.breakCount}×${t.breakMinutes}m`}{t.mealPaid ? ' · paid meal' : ''}</td>
               <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}{t.dayWindows && Object.keys(t.dayWindows).length ? <span className="text-[#6B6B6B]"> · own times on {Object.keys(t.dayWindows).length}</span> : null}{t.groupIds || t.employmentTypes || t.skillIds ? <span className="text-[#6B6B6B]"> · limited</span> : null}{t.effectiveFrom || t.effectiveTo ? <span className="text-[#6B6B6B]"> · {t.effectiveFrom ?? '…'} to {t.effectiveTo ?? '…'}</span> : null}</td>
@@ -175,7 +176,7 @@ const ActivityTimeline: React.FC<{
 
 /** The new template fields, from a template the API returned. */
 const formExtras = (t: ShiftTemplate) => ({
-  minDurationHours: t.minDurationHours ?? null, lengthStepMinutes: t.lengthStepMinutes ?? 60, mealPaid: !!t.mealPaid, lengthRules: t.lengthRules ?? [], dayWindows: t.dayWindows ?? {},
+  minDurationHours: t.minDurationHours ?? null, lengthStepMinutes: t.lengthStepMinutes ?? 60, mealPaid: !!t.mealPaid, splitShift: !!t.splitShift, lengthRules: t.lengthRules ?? [], dayWindows: t.dayWindows ?? {},
   groupIds: t.groupIds ?? [], employmentTypes: t.employmentTypes ?? [], skillIds: t.skillIds ?? [], effectiveFrom: t.effectiveFrom ?? '', effectiveTo: t.effectiveTo ?? '',
 });
 const formOf = (t: ShiftTemplate): Form => ({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) });
@@ -185,7 +186,7 @@ const toggle = (list: string[], v: string) => (list.includes(v) ? list.filter((x
 /** Variable length, meal and breaks by length, a different start window on some days, who it is for and when. Left alone, a template is the fixed shape it always was. */
 const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Form>>; groups: { id: string; name: string }[]; skills: { id: string; name: string }[] }> = ({ f, setF, groups, skills }) => {
   const [open, setOpen] = useState(false);
-  const used = f.minDurationHours != null || f.lengthRules.length > 0 || Object.keys(f.dayWindows).length > 0 || f.groupIds.length > 0 || f.employmentTypes.length > 0 || f.skillIds.length > 0 || !!f.effectiveFrom || !!f.effectiveTo || f.mealPaid;
+  const used = f.minDurationHours != null || f.lengthRules.length > 0 || Object.keys(f.dayWindows).length > 0 || f.groupIds.length > 0 || f.employmentTypes.length > 0 || f.skillIds.length > 0 || !!f.effectiveFrom || !!f.effectiveTo || f.mealPaid || f.splitShift;
   const setRule = (i: number, patch: Partial<Rule>) => setF((s) => ({ ...s, lengthRules: s.lengthRules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   const setWin = (d: number, patch: Partial<Win> | null) => setF((s) => {
     const next = { ...s.dayWindows };
@@ -205,7 +206,8 @@ const Flexible: React.FC<{ f: Form; setF: React.Dispatch<React.SetStateAction<Fo
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Field label="Shortest shift (hours)" hint="Empty = fixed length"><Input type="number" min={1} max={14} step={0.25} value={f.minDurationHours ?? ''} onChange={(e) => setF({ ...f, minDurationHours: e.target.value === '' ? null : Number(e.target.value) })} /></Field>
               <Field label="Lengths in steps of"><Select value={f.lengthStepMinutes} onChange={(e) => setF({ ...f, lengthStepMinutes: Number(e.target.value) })}>{[30, 60, 120].map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select></Field>
-              <Field label="Meal"><label className="flex items-center gap-2 text-[13px] h-9"><input type="checkbox" checked={f.mealPaid} onChange={(e) => setF({ ...f, mealPaid: e.target.checked })} />The meal is paid</label></Field>
+              <Field label="Meal"><label className="flex items-center gap-2 text-[13px] h-9"><input type="checkbox" checked={f.mealPaid} disabled={f.splitShift} onChange={(e) => setF({ ...f, mealPaid: e.target.checked })} />The meal is paid</label></Field>
+              <Field label="Split shift" hint="Two parts of the day with an unpaid gap of 1 to 6 hours between them, set in “Unpaid meal” above (it becomes the gap). The person is on shift but covers nothing in the gap, and the gap stays where you put it. Each part is at least 2 hours, and the length is fixed."><label className="flex items-center gap-2 text-[13px] h-9"><input type="checkbox" checked={f.splitShift} onChange={(e) => setF({ ...f, splitShift: e.target.checked, mealPaid: e.target.checked ? false : f.mealPaid, minDurationHours: e.target.checked ? null : f.minDurationHours, lengthRules: e.target.checked ? [] : f.lengthRules })} />This is a split shift</label></Field>
             </div>
           </div>
 

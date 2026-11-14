@@ -1,7 +1,7 @@
 # WFM platform, single server, host networking: every container shares the host network stack, so all
 # services reach each other on 127.0.0.1 and the ports below are the real host ports.
 #
-#   admin web app :3000     super admin portal :3001     employee portal :3002     gateway API :4000
+#   admin web app :3000     super admin portal :3002     employee portal :3001     gateway API :4000
 #   engine gRPC :50051 (loopback)   redis :6379 (loopback)   nats :4222 (loopback)
 #
 # Needs Linux with Docker Engine. Host networking does not work on Docker Desktop for Windows/Mac by default.
@@ -11,6 +11,8 @@
 # 2. docker compose up -d --build
 #    No PostgreSQL yet? Set POSTGRES_PASSWORD and run: docker compose --profile db up -d --build
 #    Do not enable the "db" profile if PostgreSQL already runs on this host (both would use port 5432).
+# 3. Optional, a further backup solver: set TIMEFOLD_TOKEN (any long random string) and TIMEFOLD_URL=http://127.0.0.1:8090 in the environment, then
+#    docker compose --profile timefold up -d --build   (see docs/SOLVER_BACKENDS.md). Without it the engine uses CP-SAT, HiGHS, SCIP and the starting roster, which is a complete set.
 
 x-common: &common
   network_mode: host
@@ -51,6 +53,20 @@ services:
     image: wfm-engine:latest
     environment:
       ENGINE_ADDR: 127.0.0.1:50051        # loopback: the engine has no authentication
+      TIMEFOLD_URL: ${TIMEFOLD_URL:-}     # empty = Timefold is not used
+      TIMEFOLD_TOKEN: ${TIMEFOLD_TOKEN:-}
+
+  timefold:
+    <<: *common
+    profiles: ["timefold"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.timefold
+    image: wfm-timefold:latest
+    environment:
+      PORT: "8090"
+      BIND: 127.0.0.1                     # loopback, like the engine
+      TIMEFOLD_TOKEN: ${TIMEFOLD_TOKEN:?set TIMEFOLD_TOKEN to use the timefold profile}
 
   gateway:
     <<: *common

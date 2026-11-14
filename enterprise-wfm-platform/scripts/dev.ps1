@@ -132,8 +132,8 @@ Write-Host 'Stopping anything already running...' -ForegroundColor Cyan
 Stop-Port 50051 'engine'
 Stop-Port 4000 'gateway'
 Stop-Port 3000 'admin app'
-Stop-Port 3001 'super admin portal'
-Stop-Port 3002 'employee portal'
+Stop-Port 3002 'super admin portal'
+Stop-Port 3001 'employee portal'
 if ($Mobile) { Stop-Port 8081 'Expo dev server' }
 Start-Process powershell -WorkingDirectory $engine -ArgumentList '-NoExit', '-Command', "& '$py' server.py"
 Start-Process powershell -WorkingDirectory $gateway -ArgumentList '-NoExit', '-Command', 'npm run dev'
@@ -143,8 +143,8 @@ Start-Process powershell -WorkingDirectory $portal -ArgumentList '-NoExit', '-Co
 Write-Host ''
 Write-Host 'Engine, gateway, admin front-end, super admin portal and employee portal are starting.' -ForegroundColor Green
 Write-Host '  Tenant Admin app:   http://localhost:3000' -ForegroundColor Green
-Write-Host '  Super Admin portal: http://localhost:3001' -ForegroundColor Green
-Write-Host '  Employee portal:    http://localhost:3002' -ForegroundColor Green
+Write-Host '  Super Admin portal: http://localhost:3002' -ForegroundColor Green
+Write-Host '  Employee portal:    http://localhost:3001' -ForegroundColor Green
 Write-Host 'First start prints the administrator password once in the gateway window (unless BOOTSTRAP_ADMIN_PASSWORD is set).'
 
 if ($Mobile) {

@@ -3,7 +3,9 @@
 export const WEEK_FROM = '2026-11-02';            // Monday after the test day (Sat 31 Oct 2026)
 const OFFICE = [0, 1, 2, 3, 4], ALL = [0, 1, 2, 3, 4, 5, 6];
 
-export const SCENARIOS = [
+// QA_SCALE_FACTOR=0.03 runs the same situations with a few percent of the people (a stack with the 500-employee trial licence, or a quick check after a change)
+const FACTOR = Number(process.env.QA_SCALE_FACTOR || 1);
+const BASE_SCENARIOS = [
   { key: 'S01', name: 'Voice office hours', size: 6000, tz: 'Asia/Kolkata', model: 'auto', demand: 0.5, shape: 'office', channel: 'VOICE',
     templates: [['Early', OFFICE, '07:00', '09:00'], ['Mid', OFFICE, '09:30', '11:00']], what: 'Mon–Fri 08:00–20:00 demand, full-time 40 h, weekday-only templates' },
   { key: 'S02', name: 'Voice 24x7 with nights', size: 6000, tz: 'Asia/Kolkata', model: 'sarima', demand: 0.45, shape: 'flat24', channel: 'VOICE', nights: true,
@@ -31,4 +33,5 @@ export const SCENARIOS = [
   { key: 'S13', name: 'Candidate-limit boundary', size: 3000, tz: 'Asia/Kolkata', model: 'auto', demand: 0.5, shape: 'standard', channel: 'VOICE', boundary: true,
     templates: [['Day', ALL, '06:00', '08:00'], ['Late', ALL, '11:00', '13:00']], what: 'First a template with every 15-minute start and length (millions of options) to check the refusal, then normal templates' },
 ];
+export const SCENARIOS = BASE_SCENARIOS.map((x) => (FACTOR === 1 ? x : { ...x, size: Math.max(40, Math.round(x.size * FACTOR)) }));
 export const TOTAL = SCENARIOS.reduce((n, s) => n + s.size, 0);

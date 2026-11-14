@@ -2,8 +2,8 @@ import { Router, type Request } from 'express';
 import crypto from 'node:crypto';
 import { checkPassword, hashPassword } from '../passwordHash.ts';
 import { z } from 'zod';
-import { withTenant, withWorkspace, raw } from '../db.ts';
-import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, dropUserState, me, permissionsFor, requires, revokeToken, signToken, getTenantEnabledModules, PERMISSION_TO_MODULE, type Principal, type Role } from '../auth.ts';
+import { withTenant, withWorkspace, raw, type Tx } from '../db.ts';
+import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, ROLES, dropUserState, dropUserScope, requireUnscoped, me, permissionsFor, requires, revokeToken, signToken, getTenantEnabledModules, PERMISSION_TO_MODULE, type Principal, type Role } from '../auth.ts';
 import { checkNewPassword } from '../passwordPolicy.ts';
 import { config } from '../config.ts';
 import { audit } from '../audit.ts';
@@ -61,6 +61,21 @@ function chooseWorkspace(list: WorkspaceMemberRow[], selector?: string): Workspa
   return list.find((w) => w.isDefault) ?? list.find((w) => w.status === 'ACTIVE') ?? list[0];
 }
 
+/** The regions and sites a person is limited to, by name; `restricted` is false for someone who sees the whole organisation. */
+export async function accessOf(tenantId: string, workspaceId: string, userId: string, inTx?: Tx) {
+  const read = async (tx: Tx) => {
+    const rows = await tx.q<{ scopeType: string; scopeId: string; name: string | null }>(
+      `SELECT u.scope_type, u.scope_id, coalesce(s.name, r.name) AS name FROM user_scopes u LEFT JOIN sites s ON u.scope_type = 'SITE' AND s.id = u.scope_id LEFT JOIN regions r ON u.scope_type = 'REGION' AND r.id = u.scope_id
+       WHERE u.tenant_id = :t AND u.user_id = $1 ORDER BY name`, [userId]);
+    return {
+      restricted: rows.length > 0,
+      regions: rows.filter((x) => x.scopeType === 'REGION').map((x) => ({ id: x.scopeId, name: x.name ?? 'Deleted region' })),
+      sites: rows.filter((x) => x.scopeType === 'SITE').map((x) => ({ id: x.scopeId, name: x.name ?? 'Deleted site' })),
+    };
+  };
+  return inTx ? read(inTx) : withWorkspace(tenantId, workspaceId, read);
+}
+
 async function sessionFor(tenantId: string, userId: string, workspaceId?: string) {
   const [tenant] = await raw<{ id: string; name: string; code: string; timezone: string; currency: string; fourEyes: boolean }>('SELECT * FROM tenants WHERE id = $1', [tenantId]);
   const user = await withTenant(tenantId, (tx) => tx.one<any>('SELECT id, username, display_name, email, role, employee_id, must_change_password, default_workspace_id FROM users WHERE tenant_id = :t AND id = $1', [userId]));
@@ -87,6 +102,8 @@ async function sessionFor(tenantId: string, userId: string, workspaceId?: string
     /** signed in with a temporary password: the app must ask for a new one before anything else */
     mustChangePassword: !!user.mustChangePassword,
     enabledModules,
+    /** what they are limited to, when they are not allowed to see the whole organisation */
+    access: await accessOf(tenantId, active.id, userId),
   };
 }
 
@@ -207,6 +224,19 @@ const CompleteEmergencyReset = z.object({
   newPassword: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
+// Lets the set-password page greet the person and refuse a dead link before they type anything.
+publicAuth.post('/auth/emergency-reset/check', async (req, res) => {
+  const b = parse(z.object({ token: z.string().min(10) }), req.body);
+  const [row] = await raw<any>(
+    `SELECT u.username, u.display_name, t.name AS tenant_name, t.code AS tenant_code, r.expires_at
+     FROM wfm.emergency_password_resets r JOIN wfm.users u ON u.id = r.user_id JOIN wfm.tenants t ON t.id = r.tenant_id
+     WHERE r.token_hash = $1 AND r.used_at IS NULL AND r.expires_at > now()`,
+    [crypto.createHash('sha256').update(b.token).digest('hex')]
+  );
+  if (!row) return res.json({ valid: false });
+  res.json({ valid: true, username: row.username, name: row.displayName ?? row.display_name, organisation: row.tenantName ?? row.tenant_name, code: row.tenantCode ?? row.tenant_code, expiresAt: row.expiresAt ?? row.expires_at });
+});
+
 publicAuth.post('/auth/emergency-reset/complete', async (req, res) => {
   const b = parse(CompleteEmergencyReset, req.body);
   const tokenHash = crypto.createHash('sha256').update(b.token).digest('hex');
@@ -219,9 +249,12 @@ publicAuth.post('/auth/emergency-reset/complete', async (req, res) => {
     throw bad('Invalid or expired emergency reset link');
   }
 
-  const hash = await hashPassword(b.newPassword, 12);
   const targetUserId = resetRow.userId ?? resetRow.user_id;
   const targetTenantId = resetRow.tenantId ?? resetRow.tenant_id;
+  const [target] = await raw<any>('SELECT username FROM wfm.users WHERE id = $1 AND tenant_id = $2', [targetUserId, targetTenantId]);
+  const problem = checkNewPassword(b.newPassword, { username: target?.username });
+  if (problem) throw bad(problem);
+  const hash = await hashPassword(b.newPassword, 12);
   await raw(
     `UPDATE wfm.users SET password_hash = $1, status = 'ACTIVE', must_change_password = false WHERE id = $2 AND tenant_id = $3`,
     [hash, targetUserId, targetTenantId]
@@ -277,10 +310,45 @@ const UserPatch = z.object({
 
 authed.get('/users', requires('users:read'), async (req, res) => {
   const p = me(req);
-  res.json(await withTenant(p.tenantId, (tx) => tx.q('SELECT id, username, display_name AS user_name, email, role, status, employee_id, created_at, last_login_at FROM users WHERE tenant_id = :t ORDER BY username')));
+  res.json(await withTenant(p.tenantId, (tx) => tx.q(
+    `SELECT u.id, u.username, u.display_name AS user_name, u.email, u.role, u.status, u.employee_id, u.created_at, u.last_login_at,
+            coalesce((SELECT string_agg(coalesce(s.name, r.name, '?'), ', ' ORDER BY coalesce(s.name, r.name)) FROM user_scopes x LEFT JOIN sites s ON x.scope_type = 'SITE' AND s.id = x.scope_id
+                      LEFT JOIN regions r ON x.scope_type = 'REGION' AND r.id = x.scope_id WHERE x.tenant_id = u.tenant_id AND x.user_id = u.id), '') AS access
+     FROM users u WHERE u.tenant_id = :t ORDER BY u.username`)));
+});
+
+/** Who can see what: the regions and sites a user is limited to. None listed means the whole organisation. */
+authed.get('/users/:id/access', requires('users:read'), async (req, res) => {
+  const p = me(req), id = parse(z.string().uuid(), req.params.id);
+  res.json(await accessOf(p.tenantId, p.workspaceId, id));
+});
+authed.put('/users/:id/access', requires('users:write'), async (req, res) => {
+  requireUnscoped(req);
+  const p = me(req), id = parse(z.string().uuid(), req.params.id);
+  const b = parse(z.object({ regionIds: z.array(z.string().uuid()).max(100).default([]), siteIds: z.array(z.string().uuid()).max(500).default([]) }), req.body);
+  if (id === p.userId) throw bad('You cannot change your own access. Ask another administrator.');
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const u = await tx.one<any>('SELECT username FROM users WHERE tenant_id = :t AND id = $1', [id]);
+    if (!u) throw notFound('User');
+    const regions = b.regionIds.length ? await tx.q<any>('SELECT id FROM regions WHERE tenant_id = :t AND id = ANY($1::uuid[])', [b.regionIds]) : [];
+    const sites = b.siteIds.length ? await tx.q<any>('SELECT id FROM sites WHERE tenant_id = :t AND id = ANY($1::uuid[])', [b.siteIds]) : [];
+    if (regions.length !== new Set(b.regionIds).size || sites.length !== new Set(b.siteIds).size) throw bad('One of those regions or sites does not exist.');
+    const before = await tx.q<any>('SELECT scope_type, scope_id FROM user_scopes WHERE tenant_id = :t AND user_id = $1', [id]);
+    await tx.exec('DELETE FROM user_scopes WHERE tenant_id = :t AND user_id = $1', [id]);
+    for (const r of new Set(b.regionIds)) await tx.exec(`INSERT INTO user_scopes (tenant_id, user_id, scope_type, scope_id, created_by) VALUES (:t, $1, 'REGION', $2, $3)`, [id, r, p.name]);
+    for (const s of new Set(b.siteIds)) await tx.exec(`INSERT INTO user_scopes (tenant_id, user_id, scope_type, scope_id, created_by) VALUES (:t, $1, 'SITE', $2, $3)`, [id, s, p.name]);
+    const after = await accessOf(p.tenantId, p.workspaceId, id, tx);
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'USER', entityId: id, entityName: u.username, before: { scopes: before.length }, after: { regions: after.regions.map((x) => x.name), sites: after.sites.map((x) => x.name) },
+      diffSummary: after.restricted ? 'access limited to some sites or regions' : 'access widened to the whole organisation' });
+    return after;
+  });
+  await dropUserScope(p.tenantId, id);
+  await dropUserState(p.tenantId, id);
+  res.json(out);
 });
 
 authed.post('/users', requires('users:write'), async (req, res) => {
+  requireUnscoped(req);
   const p = me(req), b = parse(NewUser, req.body);
   const created = await withTenant(p.tenantId, async (tx) => {
     await assertCapacity(tx, p.tenantId, 'USERS', 1);
@@ -302,6 +370,7 @@ authed.post('/users', requires('users:write'), async (req, res) => {
 });
 
 authed.patch('/users/:id', requires('users:write'), async (req, res) => {
+  requireUnscoped(req);
   const p = me(req), b = parse(UserPatch, req.body), id = String(req.params.id);
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await tx.one<any>('SELECT id, username, display_name, email, role, status FROM users WHERE tenant_id = :t AND id = $1', [id]);

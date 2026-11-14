@@ -18,6 +18,7 @@ import { payWeekFor } from './payWeek.ts';
 import { nextRun, RANGES, resolveRange, type Range } from './reportTime.ts';
 import { queueMessage } from './channels.ts';
 import { toPdf } from './reportPdf.ts';
+import { addShiftCoverage } from './shiftCoverage.ts';
 
 export const reports = Router();
 const uuid = z.string().uuid();
@@ -45,7 +46,7 @@ export const REPORTS: Def[] = [
       if (!v) throw bad('There is no published schedule for that group over these dates.');
       const live = await liveStats(tenantId, await loadVersion(tx, v.id));
       const idx = new Map((live.days as string[]).map((d, i) => [d, i])), sched = new Array(live.days.length * SPD).fill(0);
-      for (const s of live.shifts as any[]) { const i = idx.get(s.day); if (i === undefined) continue; for (let g = i * SPD + s.startSlot; g < Math.min(sched.length, i * SPD + s.startSlot + s.lengthSlots); g++) sched[g]++; }
+      for (const s of live.shifts as any[]) { const i = idx.get(s.day); if (i === undefined) continue; addShiftCoverage(sched, i, s); }
       const rows = dayRange(from, to, 400).filter((d) => idx.has(d)).map((d) => {
         const i = idx.get(d)!; let need = 0, have = 0, short = 0;
         for (let g = i * SPD; g < (i + 1) * SPD; g++) { need += live.required[g]; have += sched[g]; if (sched[g] < live.required[g]) short++; }

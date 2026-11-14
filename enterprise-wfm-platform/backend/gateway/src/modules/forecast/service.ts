@@ -12,7 +12,7 @@ import { borrowSlots, MIN_OWN_DAYS, shareByslot, shouldBorrow } from './borrowSh
 import { tzFmt } from '../../tzFormat.ts';
 
 export const SLOT_H = 0.25;
-export const MODELS = ['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima'] as const;
+export const MODELS = ['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima', 'lstm'] as const;
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const r2 = (v: number) => Math.round(v * 100) / 100;
 export const num = (v: unknown, d: number) => (v === null || v === undefined || v === '' || Number.isNaN(+(v as number)) ? d : +(v as number));
@@ -34,7 +34,7 @@ export const dowOf = (s: string) => (utc(s).getUTCDay() + 6) % 7;
 
 export interface GQueue { id: string; idx: number; name: string; channel: 'voice' | 'chat' | 'email' | 'backoffice'; ahtDefault: number; concurrency: number; openSlot: number; closeSlot: number; turnaroundHours: number | null }
 export interface Group {
-  id: string; name: string; timezone: string; serviceLevel: number; answerSec: number; shrinkage: number; occupancyCap: number;
+  id: string; name: string; timezone: string; serviceLevel: number; answerSec: number; shrinkage: number; occupancyCap: number; chatEfficiency: number;
   method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; queues: GQueue[];
 }
 const engCh = (c: string): 'voice' | 'chat' | 'email' | 'backoffice' => (c === 'VOICE' ? 'voice' : c === 'CHAT' ? 'chat' : c === 'BACKOFFICE' ? 'backoffice' : 'email');
@@ -48,7 +48,7 @@ export async function loadGroup(tx: Tx, id: string): Promise<Group> {
   const cats = await tx.q<{ pct: number }>('SELECT pct::float8 AS pct FROM shrinkage_categories WHERE tenant_id = :t AND wfm_group_id = $1', [id]);
   const shrinkage = cats.length ? Math.min(0.9, cats.reduce((s, c) => s + c.pct, 0) / 100) : g.shrinkage;
   return {
-    id: g.id, name: g.name, timezone: g.timezone, serviceLevel: g.serviceLevel, answerSec: g.answerSec, shrinkage, occupancyCap: g.occupancyCap,
+    id: g.id, name: g.name, timezone: g.timezone, serviceLevel: g.serviceLevel, answerSec: g.answerSec, shrinkage, occupancyCap: g.occupancyCap, chatEfficiency: Number(g.chatEfficiency ?? 0.85),
     method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek,
     queues: qs.map((q, i) => ({ id: q.id, idx: i + 1, name: q.name, channel: engCh(q.channel), ahtDefault: q.ahtDefault, concurrency: q.concurrency, openSlot: q.openSlot, closeSlot: q.closeSlot, turnaroundHours: q.turnaroundHours ?? null })),
   };
@@ -59,15 +59,15 @@ export interface Overrides { volumePct?: number; ahtPct?: number; serviceLevel?:
 function channelParams(group: Group, over: Overrides = {}) {
   return [...new Set(group.queues.map((q) => q.channel))].map((channel) => {
     const qs = group.queues.filter((q) => q.channel === channel);
-    // several back-office queues can share one pool with different turnaround targets; the tightest one governs it,
+    // several email or back-office queues can share one pool with different turnaround targets; the tightest one governs it,
     // since staffing to a looser average would risk breaching the queue that promised the fastest turnaround.
     const turnarounds = qs.map((q) => q.turnaroundHours).filter((h): h is number => h !== null && h > 0);
     return {
       channel, service_level: num(over.serviceLevel, group.serviceLevel), answer_sec: num(over.answerSec, group.answerSec), occupancy_cap: num(over.occupancyCap, group.occupancyCap),
       method: over.method || group.method, patience_sec: group.patienceSec,
-      concurrency: channel === 'chat' ? sum(qs.map((q) => q.concurrency)) / qs.length : 1,
+      concurrency: channel === 'chat' ? sum(qs.map((q) => q.concurrency)) / qs.length : 1, chat_efficiency: group.chatEfficiency,
       open_slot: Math.min(...qs.map((q) => q.openSlot)), close_slot: Math.max(...qs.map((q) => q.closeSlot)),
-      turnaround_hours: channel === 'backoffice' && turnarounds.length ? Math.min(...turnarounds) : 0,
+      turnaround_hours: (channel === 'backoffice' || channel === 'email') && turnarounds.length ? Math.min(...turnarounds) : 0,
     };
   });
 }
@@ -75,7 +75,16 @@ function channelParams(group: Group, over: Overrides = {}) {
 // ---------------------------------------------------------------- staffing via the engine
 
 export interface QRow { queueId: string; day: string; slot: number; vol: number; aht: number }
-export interface StaffOut { channel: string; day: string; slot: number; base: number; required: number; occupancy: number; service_level: number; asa_sec: number; abandon: number; warn: boolean }
+export interface StaffOut {
+  channel: string; day: string; slot: number; base: number; required: number; occupancy: number; service_level: number; asa_sec: number; abandon: number; warn: boolean;
+  /** the work arriving, in Erlangs; the service level asked for; whether the staffing found reaches it; OK | NO_DEMAND | TARGET_NOT_MET | METHOD_FALLBACK; the occupancy ceiling applied; how far the Erlang assumptions can be trusted here */
+  offered_load_erlangs: number; target_service_level: number; target_met: boolean; status: string; occupancy_limit: number; confidence: string;
+}
+
+/** How many intervals could not reach their service level target (the agent search stopped at its limit), and how many used Erlang C because Erlang A was not reliable there. */
+export function staffingHealth(out: StaffOut[]) {
+  return { intervals: out.length, targetNotMet: out.filter((o) => !o.target_met).length, methodFallback: out.filter((o) => o.status === 'METHOD_FALLBACK').length, lowConfidence: out.filter((o) => o.confidence === 'LOW').length };
+}
 
 export async function runStaffing(group: Group, rows: QRow[], over: Overrides = {}): Promise<StaffOut[]> {
   const chan = new Map(group.queues.map((q) => [q.id, q.channel]));
@@ -194,13 +203,12 @@ export interface Rec { day: string; slot: number; volume: number; aht: number; p
 export interface Daily { day: string; volume: number; aht: number; p10: number; p90: number; edited: boolean; peakRequired?: number; agentHours?: number; minSl?: number; warnIntervals?: number }
 
 export async function versionRecords(tenantId: string, v: any, queueId: string | null = null): Promise<{ records: Rec[]; daily: Daily[] }> {
-  const loaded = await withTenant(tenantId, async (tx) => ({
-    group: await loadGroup(tx, v.wfmGroupId), rows: await versionRows(tx, v.id, { queueId }), drows: await versionRows(tx, v.id, { queueId, slots: false }),
-  }));
-  const { group, rows, drows } = loaded;
+  // only the group is read before asking the cache: the forecast's rows (tens of thousands for a long short-term forecast) are read only when the answer has to be worked out
+  const group = await withTenant(tenantId, (tx) => loadGroup(tx, v.wfmGroupId));
   // targets feed the staffing numbers, so they are part of the cache key
-  const ck = key(tenantId, 'fv', v.id, v.rev, [group.serviceLevel, group.answerSec, group.shrinkage, group.occupancyCap, group.method, group.patienceSec, group.blended, group.queues.map((q) => `${q.id}${q.concurrency}${q.openSlot}${q.closeSlot}`).join('')].join('-'));
+  const ck = key(tenantId, 'fv', v.id, v.rev, [group.serviceLevel, group.answerSec, group.shrinkage, group.occupancyCap, group.chatEfficiency, group.method, group.patienceSec, group.blended, group.queues.map((q) => `${q.id}${q.concurrency}${q.openSlot}${q.closeSlot}`).join(''), queueId ?? 'all'].join('-'));
   const compute = async () => {
+    const { rows, drows } = await withTenant(tenantId, async (tx) => ({ rows: await versionRows(tx, v.id, { queueId }), drows: await versionRows(tx, v.id, { queueId, slots: false }) }));
     const out: { records: Rec[]; daily: Daily[] } = { records: [], daily: [] };
     if (v.kind === 'SHORT') {
       const staff = aggregateStaff(await runStaffing(group, rows));
@@ -246,7 +254,7 @@ export async function versionRecords(tenantId: string, v: any, queueId: string |
     }
     return out;
   };
-  return queueId ? compute() : cached(ck, 3600, compute);
+  return cached(ck, 3600, compute);                       // the group's total and each queue are worked out once per revision, not on every request
 }
 
 /**
@@ -261,10 +269,10 @@ export async function riskRequired(tenantId: string, v: any, level: number): Pro
   const f = confidenceShare(level);
   const out = new Map<string, number>();
   if (f <= 0 || v.kind !== 'SHORT') return out;
-  const loaded = await withTenant(tenantId, async (tx) => ({ group: await loadGroup(tx, v.wfmGroupId), rows: await versionRows(tx, v.id, {}) }));
-  const { group, rows } = loaded;
-  const ck = key(tenantId, 'fvrisk', v.id, v.rev, [level, group.serviceLevel, group.answerSec, group.shrinkage, group.occupancyCap, group.method, group.patienceSec, group.blended, group.queues.map((q) => `${q.id}${q.concurrency}${q.openSlot}${q.closeSlot}`).join('')].join('-'));
+  const group = await withTenant(tenantId, (tx) => loadGroup(tx, v.wfmGroupId));
+  const ck = key(tenantId, 'fvrisk', v.id, v.rev, [level, group.serviceLevel, group.answerSec, group.shrinkage, group.occupancyCap, group.chatEfficiency, group.method, group.patienceSec, group.blended, group.queues.map((q) => `${q.id}${q.concurrency}${q.openSlot}${q.closeSlot}`).join('')].join('-'));
   const entries = await cached(ck, 3600, async () => {
+    const rows = await withTenant(tenantId, (tx) => versionRows(tx, v.id, {}));
     const lifted = rows.map((r) => {
       const k80 = r.volume > 0 ? r.vol / r.volume : 1;                  // an adjustment scales the band with it
       return { ...r, vol: r.vol + f * Math.max(0, r.p90 - r.volume) * k80 };
@@ -334,7 +342,7 @@ async function historyFor(tx: Tx, group: Group, cutoff: string) {   // demand, n
 }
 
 async function eventsFor(tx: Tx, group: Group) {
-  const rows = await tx.q<any>('SELECT * FROM special_events WHERE tenant_id = :t AND (wfm_group_id IS NULL OR wfm_group_id = $1)', [group.id]);
+  const rows = await tx.q<any>('SELECT * FROM special_events WHERE tenant_id = :t AND ((wfm_group_id IS NULL AND site_id IS NULL) OR wfm_group_id = $1 OR site_id = (SELECT site_id FROM wfm_groups WHERE id = $1))', [group.id]);
   return rows.map((e) => ({ name: e.name, kind: e.kind, start_day: e.startDay, end_day: e.endDay, uplift_pct: +e.upliftPct, lead_days: e.leadDays, lag_days: e.lagDays, queue_id: e.queueId ? (group.queues.find((q) => q.id === e.queueId)?.idx ?? -1) : 0 }))
     .filter((e) => e.queue_id !== -1);
 }
@@ -355,6 +363,8 @@ const WEEKDAY = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'S
 
 export interface CreateInput { groupId: string; kind: 'SHORT' | 'LONG'; weeks?: number; days?: number; model?: string; name?: string; fromDay?: string; parentVersionId?: string | null }
 
+const ENGINE_LABEL = 'wfm-engine 2';
+
 export async function createVersion(p: Principal, req: any, b: CreateInput) {
   // 1) read what the engine needs (short transaction)
   const prep = await withTenant(p.tenantId, async (tx) => {
@@ -363,7 +373,9 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
     const today = todayIn(group.timezone);
     const queues = await historyFor(tx, group, today);
     if (queues.every((q) => q.daily.length < 7)) throw bad('Not enough history: import at least 7 days of interval data first (Data Management).');
-    return { group, today, queues, events: await eventsFor(tx, group), factors: await loadFactors(tx, group.id) };
+    const sourceEvents = await tx.q<any>(`SELECT id, name, kind, start_day::text AS start_day, end_day::text AS end_day, uplift_pct::float8 AS uplift_pct, lead_days, lag_days FROM special_events WHERE tenant_id = :t AND ((wfm_group_id IS NULL AND site_id IS NULL) OR wfm_group_id = $1 OR site_id = (SELECT site_id FROM wfm_groups WHERE id = $1))`, [group.id]);
+    const siteId = (await tx.one<{ siteId: string | null }>('SELECT site_id FROM wfm_groups WHERE tenant_id = :t AND id = $1', [group.id]))?.siteId ?? null;
+    return { group, today, queues, events: await eventsFor(tx, group), factors: await loadFactors(tx, group.id), sourceEvents, siteId };
   });
   const { group, today } = prep;
   const from = b.fromDay ?? today;
@@ -389,7 +401,7 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
     createdFor: { historyTo: prep.queues[0].daily.at(-1)?.day, model },
     series: resp.series.map((s: any) => {
       const q = group.queues.find((x) => x.idx === s.queue_id);
-      return { queueId: q?.id ?? null, name: q?.name ?? 'Group total', model: s.model, scores: s.scores, backtest: s.backtest, notes: s.notes, cleanedDays: s.cleaned_days, sigmaRel: s.sigma_rel };
+      return { queueId: q?.id ?? null, name: q?.name ?? 'Group total', model: s.model, scores: s.scores, backtest: s.backtest, notes: s.notes, cleanedDays: s.cleaned_days, sigmaRel: s.sigma_rel, bands: { method: s.band_method || null, p10Coverage: s.p10_coverage, p90Coverage: s.p90_coverage, points: s.band_points } };
     }),
   };
 
@@ -409,6 +421,19 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
       const qid = group.queues.find((x) => x.idx === s.queue_id)!.id;
       for (const pt of s.daily) rows.push([qid, pt.day, -1, pt.volume, pt.aht_sec, pt.p10, pt.p90]);
       for (const pt of s.slots) rows.push([qid, pt.day, pt.slot, pt.volume, pt.aht_sec, pt.p10, pt.p90]);
+    }
+    // the model registry: one record per model run, so this forecast can be explained and audited later
+    for (const s of resp.series) {
+      const q = group.queues.find((x) => x.idx === s.queue_id);
+      const total = (k: 'volume' | 'p10' | 'p90') => s.daily.reduce((n: number, pt: any) => n + pt[k], 0);
+      await tx.exec(
+        `INSERT INTO forecast_model_runs (tenant_id, forecast_version_id, wfm_group_id, site_id, queue_id, channel, model_name, requested_model, model_version, engine_version, library_versions, training_start, training_end,
+           training_rows, data_hash, model_config, backtest, bands, forecast_from, forecast_to, volume_p10, volume_p50, volume_p90, source_events, events_hash, generated_by)
+         VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, nullif($11, '')::date, nullif($12, '')::date, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22, $23::jsonb, $24, $25)`,
+        [v!.id, group.id, prep.siteId, q?.id ?? null, q?.channel ?? null, s.model, model, s.model_version, ENGINE_LABEL, s.library_versions || '{}', s.training_start, s.training_end, s.training_rows, s.data_hash, s.model_config || '{}',
+          JSON.stringify(s.scores.map((x: any) => ({ model: x.model, wape: x.wape, mase: x.mase, bias: x.bias, mae: x.mae, selected: x.selected, rawWape: x.raw_scored ? x.raw_wape : null, rawMase: x.raw_scored ? x.raw_mase : null, rawBias: x.raw_scored ? x.raw_bias : null }))),
+          JSON.stringify({ method: s.band_method, p10Coverage: s.p10_coverage, p90Coverage: s.p90_coverage, points: s.band_points, sigmaRel: s.sigma_rel }), dates[0], dates.at(-1), total('p10'), total('volume'), total('p90'),
+          JSON.stringify(prep.sourceEvents.map((e: any) => ({ id: e.id, name: e.name, kind: e.kind, startDay: e.startDay, endDay: e.endDay, upliftPct: e.upliftPct, leadDays: e.leadDays, lagDays: e.lagDays }))), s.events_hash, p.name]);
     }
     for (let i = 0; i < rows.length; i += 8000) {
       const c = rows.slice(i, i + 8000);

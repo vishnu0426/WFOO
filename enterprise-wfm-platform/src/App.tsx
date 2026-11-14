@@ -4,13 +4,16 @@
  * Forecasting, Workforce, Scheduling, Configuration › WFM Groups and Data Management are live; Overview, Intraday, Audit and Users are still the reference prototype.
  */
 
+import { installModalDismiss } from './services/modalDismiss';
 import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { PageSkeleton } from './components/common/loading';
 import { ShieldAlert } from 'lucide-react';
 import { AppHeader } from './components/layout/AppHeader';
 import { NavigationSidebar, NavigationModule } from './components/layout/NavigationSidebar';
 import { CommandPalette } from './components/common/CommandPalette';
 import { LoginView } from './components/auth/LoginView';
 import { ChangePasswordView } from './components/auth/ChangePasswordView';
+import { SetPasswordView } from './components/auth/SetPasswordView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ForecastProvider, useForecast } from './services/forecastStore';
 import { api, getStoredSession, Session, storeSession } from './services/api';
@@ -35,6 +38,7 @@ const StaffingTraceabilityModal = lazy(() => import('./components/staffing/Staff
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(() => getStoredSession());
+  useEffect(() => installModalDismiss(), []);          // Escape closes whatever pop-up is open
   const [pathname, setPathname] = useState(() => location.pathname);
   // the address bar is the source of truth: /<module>/<section>, for example /workforce/employees
   const [route, setRoute] = useState(() => fromPath(location.pathname));
@@ -72,7 +76,7 @@ export default function App() {
 
   // a bare "/" or an unknown address becomes the real address of the screen shown
   useEffect(() => {
-    if (location.pathname.startsWith('/platform')) return;
+    if (location.pathname.startsWith('/platform') || location.pathname.startsWith('/reset-password')) return;
     const want = toPath(route.module, route.sub);
     // the query stays (a sign-in link names its organisation as ?org=CODE: dropping it made a refresh forget which organisation the link was for)
     if (location.pathname !== want) history.replaceState(null, '', want + location.search);
@@ -93,9 +97,12 @@ export default function App() {
     setSession(newSession);
   };
 
+  // the one-time link from an invitation or password reset: no session needed
+  if (location.pathname.startsWith('/reset-password')) return <SetPasswordView />;
+
   if (pathname.startsWith('/platform') || location.pathname.startsWith('/platform')) {
     if (typeof window !== 'undefined') {
-      window.location.href = 'http://localhost:3001';
+      window.location.href = 'http://localhost:3002';
     }
     return (
       <div className="min-h-screen bg-[#FAFAF8] flex items-center justify-center p-4">
@@ -105,13 +112,13 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-[16px] font-semibold text-[#171717]">Redirecting to Super Admin Portal</h1>
-            <p className="text-[12px] text-[#737373] mt-1">Platform Super Admin is now hosted separately on port 3001.</p>
+            <p className="text-[12px] text-[#737373] mt-1">Platform Super Admin is now hosted separately on port 3002.</p>
           </div>
           <a
-            href="http://localhost:3001"
+            href="http://localhost:3002"
             className="w-full px-4 py-2 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold inline-flex items-center justify-center gap-2"
           >
-            Go to http://localhost:3001 →
+            Go to http://localhost:3002 →
           </a>
         </div>
       </div>
@@ -157,7 +164,7 @@ const Shell: React.FC<{
   return (
     <div className="min-h-screen bg-[#FAFAF8] text-[#171717] flex flex-col font-sans antialiased">
       <AppHeader
-        session={session} activeGroupName={group?.name} events={live.events} unread={live.unread} onMarkRead={live.markRead}
+        session={session} events={live.events} unread={live.unread} onMarkRead={live.markRead}
         onOpenCommandPalette={() => setPaletteOpen(true)} onNavigate={navigate} onSignOut={onSignOut}
         onSwitchWorkspace={onSwitchWorkspace}
       />
@@ -165,7 +172,7 @@ const Shell: React.FC<{
         <NavigationSidebar session={session} activeModule={module} activeSubSection={sub} onNavigate={navigate} />
         <main className="flex-1 flex flex-col overflow-hidden bg-[#FFFFFF]">
           <ErrorBoundary resetKey={`${session.workspace?.id}/${module}/${sub}`}>
-          <Suspense fallback={<div className="p-6 text-[13px] text-[#6B6B6B]" role="status">Loading…</div>}>
+          <Suspense fallback={<PageSkeleton />}>
           {module === 'overview' && <OverviewDashboard onNavigate={navigate} />}
           {module === 'scheduling' && (
             isModuleActive('SCHEDULING') ? (

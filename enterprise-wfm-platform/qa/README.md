@@ -34,3 +34,8 @@ the whole project folder and crashes (EBUSY) when Playwright locks a trace file 
 | `performance` | API latency, modest concurrency, page load |
 
 Generated test-only passwords for the `demo.agent*` and `qa.*` logins are in `test-data.json`.
+
+## Quick checks after a scheduling or screen change
+
+- `QA_API=http://localhost:4012 QA_ADMIN_URL=http://localhost:3010 QA_ADMIN_PASSWORD=... node ui-check.mjs`: seeds a group and drives the approval, impact, policy and split-shift screens in Chrome (14 checks, screenshots to the temp folder).
+- `QA_SCALE_FACTOR=0.03 node scale/scale-test.mjs all S05,S02,S10` then `node scale/validate.mjs S05,S02,S10`: the same scale situations with 3% of the people, for a stack on the 500-employee trial licence.

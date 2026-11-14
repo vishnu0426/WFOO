@@ -6,15 +6,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PersonPicker } from '../common/PersonPicker';
 import { LoginHandover, type Cred } from './LoginHandover';
 import { ColDef, GridApi, ICellRendererParams, IDatasource, IGetRowsParams } from 'ag-grid-community';
-import { Download, Plus, Upload } from 'lucide-react';
+import { Columns3, Download, Plus, Upload } from 'lucide-react';
 import { downloadXlsx, xlsxToCsv } from '../../services/excel';
 import { api, apiPage, Employee, EMP_STATUS_LABEL, EmploymentType, EmployeeStatus, LicenseUsageReport, RotationPattern, ShiftConsistency, ShiftTemplate, Skill, slotHHMM, Team, TYPE_LABEL } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
+import { GroupsPicker, SkillsPicker } from './EmployeePickers';
 import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
 import { MultiSelect } from '../common/MultiSelect';
 import { BulkEdit } from './BulkEdit';
+import { AvailabilityTab, OverviewTab, SkillsTab } from './EmployeeTabs';
 
 type Form = {
   employeeNumber: string; firstName: string; lastName: string; email: string; extension: string; teamId: string; primaryGroupId: string; eligibleGroupIds: string[]; status: EmployeeStatus; employmentType: EmploymentType;
@@ -92,15 +94,28 @@ const MAP_TARGETS: { k: string; label: string; required?: boolean }[] = [
   { k: 'status', label: 'Status' }, { k: 'hireDate', label: 'Hire date' }, { k: 'skills', label: 'Skills' },
 ];
 
+/** Columns that can be switched on and off (the Employee column is always shown), and the ones shown until someone chooses otherwise: they fit a 1280 px screen. */
+const OPTIONAL_COLS: { id: string; label: string }[] = [
+  { id: 'team', label: 'Team' }, { id: 'group', label: 'WFM group' }, { id: 'type', label: 'Employment type' }, { id: 'contract', label: 'Contract hours' }, { id: 'skills', label: 'Skills' },
+  { id: 'shift', label: 'Shift times' }, { id: 'status', label: 'Status' }, { id: 'email', label: 'Email' }, { id: 'extension', label: 'Agent extension' },
+];
+const DEFAULT_COLS = ['team', 'group', 'contract', 'skills', 'status'];
+/** A spreadsheet runs a cell that starts with = + - or @ as a formula: keep what is exported as plain text. */
+const csvCell = (v: unknown) => { let s = String(v ?? ''); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+
 export const EmployeesPanel: React.FC = () => {
   const { groups, can, setNotice } = useForecast();
   const [tick, setTick] = useState(0);
+  const sites = useApi<{ id: string; name: string; status: string; regionName: string | null; packName: string | null }[]>('/config/sites');
+  const [siteSel, setSiteSel] = useState<string | null>(null);
   const [q, setQ] = useState('');
   // each filter takes several values; nothing ticked means everyone
   const [groupIds, setGroupIds] = useState<string[]>([]);
   const [teamIds, setTeamIds] = useState<string[]>([]);
-  const [statuses, setStatuses] = useState<string[]>([]);
-  const [skillIds, setSkillIds] = useState<string[]>([]);
+  // opened from a link (for example the people count on the Skills screen): ?skill=<id>[,<id>]&status=ACTIVE starts with those filters on
+  const fromLink = useMemo(() => new URLSearchParams(window.location.search), []);
+  const [statuses, setStatuses] = useState<string[]>(() => (fromLink.get('status') ?? '').split(',').filter(Boolean));
+  const [skillIds, setSkillIds] = useState<string[]>(() => (fromLink.get('skill') ?? '').split(',').filter(Boolean));
   const filterKey = [q, groupIds, teamIds, statuses, skillIds].map(String).join('|');
   const anyFilter = !!(q || groupIds.length || teamIds.length || statuses.length || skillIds.length);
   // The grid asks the gateway for one block of people at a time as it scrolls (sorting and the count are done there), so a company of 50,000 never loads at once.
@@ -122,6 +137,10 @@ export const EmployeesPanel: React.FC = () => {
   const skills = useApi<Skill[]>('/workforce/skills');
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
   const [edit, setEdit] = useState<{ id: string | null; form: Form; orig?: Form } | null>(null);
+  // the site picked in the form narrows the groups offered; until one is picked it follows the person's group
+  const groupSiteId = ((groups.find((g) => g.id === edit?.form.primaryGroupId) as any)?.siteId as string | undefined) ?? null;
+  const effectiveSite = siteSel ?? groupSiteId ?? '';
+  useEffect(() => { setSiteSel(null); }, [edit?.id, !!edit]);
   const [selected, setSelected] = useState<Employee | null>(null);
   // several people ticked in the grid, to edit together
   const [picked, setPicked] = useState<Employee[]>([]);
@@ -129,9 +148,32 @@ export const EmployeesPanel: React.FC = () => {
   const [allPicked, setAllPicked] = useState<{ id: string; name: string }[] | null>(null);
   const people = allPicked ?? picked;
   const [bulk, setBulk] = useState(false);
+  const [bulkPreset, setBulkPreset] = useState<'team' | 'primaryGroup' | 'addSkills' | 'contract' | undefined>(undefined);
+  const [panelTab, setPanelTab] = useState<'overview' | 'contract' | 'skills' | 'availability' | 'login'>('overview');
+  useEffect(() => { setPanelTab('overview'); }, [selected?.id]);
+  // which optional columns are shown (kept for next time): the table fits a 1280 px screen by default and the rest are one click away
+  const [shown, setShown] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('wfm.employees.columns') ?? 'null') ?? DEFAULT_COLS; } catch { return DEFAULT_COLS; } });
+  useEffect(() => { try { localStorage.setItem('wfm.employees.columns', JSON.stringify(shown)); } catch { /* storage full or blocked: the choice just is not kept */ } }, [shown]);
+  const [chooser, setChooser] = useState(false);
   const gridApi = useRef<GridApi<Employee> | null>(null);
   useEffect(() => { gridApi.current?.deselectAll(); setPicked([]); setAllPicked(null); setBulk(false); }, [filterKey]);   // never bulk-edit people a filter has hidden
   const clearPicked = () => { gridApi.current?.deselectAll(); setPicked([]); setAllPicked(null); setBulk(false); };
+  /** The people ticked (or everyone the filters match) as a spreadsheet file. */
+  const exportSelected = async () => {
+    setError('');
+    try {
+      let rows: Employee[] = picked;
+      if (allPicked) {
+        const f = { ...(q ? { q } : {}), ...(groupIds.length ? { groupIds: groupIds.join(',') } : {}), ...(teamIds.length ? { teamIds: teamIds.join(',') } : {}), ...(statuses.length ? { statuses: statuses.join(',') } : {}), ...(skillIds.length ? { skillIds: skillIds.join(',') } : {}) };
+        rows = [];
+        for (let off = 0; off < allPicked.length; off += 500) rows.push(...(await apiPage<Employee>(`/workforce/employees?${new URLSearchParams({ limit: '500', offset: String(off), ...f })}`)).rows);
+      }
+      const head = ['Employee number', 'Name', 'Email', 'Agent extension', 'Team', 'WFM group', 'Employment type', 'Contract hours', 'Max weekly hours', 'Status', 'Skills'];
+      const lines = [head, ...rows.map((e) => [e.employeeNumber, e.name, e.email ?? '', e.extension ?? '', e.teamName ?? '', e.primaryGroupName ?? '', TYPE_LABEL[e.employmentType], e.weeklyContractHours, e.maxWeeklyHours, EMP_STATUS_LABEL[e.status], e.skills.map((s) => `${s.name} ${s.proficiency}`).join('; ')])];
+      const url = URL.createObjectURL(new Blob(['\ufeff' + lines.map((l) => l.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a'); a.href = url; a.download = `employees-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    } catch (e: any) { setError(e.message); }
+  };
   const selectAllMatching = async () => {
     setError('');
     try {
@@ -187,7 +229,7 @@ export const EmployeesPanel: React.FC = () => {
 
   const cols = useMemo<ColDef<Employee>[]>(() => [
     {
-      headerName: 'Employee', field: 'name', minWidth: 220, pinned: 'left',
+      headerName: 'Employee', field: 'name', width: 230, minWidth: 200, pinned: 'left',
       cellRenderer: (p: ICellRendererParams<Employee>) => p.data && (
         <div className="flex items-center gap-2.5 h-full">
           <div className="w-7 h-7 rounded-full bg-[#EFEFEA] text-[#525252] text-[11px] font-semibold flex items-center justify-center shrink-0">{initialsOf(p.data.name)}</div>
@@ -198,14 +240,16 @@ export const EmployeesPanel: React.FC = () => {
         </div>
       ),
     },
-    { headerName: 'Team', field: 'teamName', minWidth: 130, cellRenderer: (p: ICellRendererParams<Employee>) => (p.value ? p.value : <Pill tone="warn">Unassigned</Pill>) },
-    { headerName: 'WFM group', field: 'primaryGroupName', minWidth: 150, cellRenderer: (p: ICellRendererParams<Employee>) => (p.value ? p.value : <Pill tone="warn">Unassigned</Pill>) },
-    { headerName: 'Type', field: 'employmentType', valueFormatter: (p) => TYPE_LABEL[p.value as EmploymentType], width: 110 },
-    { headerName: 'Contract', field: 'weeklyContractHours', type: 'rightAligned', width: 100, valueFormatter: (p) => `${p.value}h` },
-    { headerName: 'Skills', sortable: false, valueGetter: (p) => p.data?.skills.map((s) => `${s.name} ${s.proficiency}`).join(', ') ?? '', minWidth: 160, flex: 1 },
-    { headerName: 'Shift times', sortable: false, width: 150, valueGetter: (p) => { const e = p.data; if (!e) return ''; return [e.fixedStartSlot != null ? `starts ${slotHHMM(e.fixedStartSlot)}` : '', e.shiftConsistency === 'REQUIRE' ? 'steady' : e.shiftConsistency === 'PREFER' ? 'steady if possible' : e.shiftConsistency === 'OFF' ? 'varies' : ''].filter(Boolean).join(', ') || 'company setting'; }, cellStyle: { color: '#525252' } },
-    { headerName: 'Status', field: 'status', valueFormatter: (p) => EMP_STATUS_LABEL[p.value as EmployeeStatus], width: 120, cellStyle: (p) => (p.value === 'ACTIVE' ? { color: '#2A7553', fontWeight: 600 } : { color: '#737373' }) },
-  ], []);
+    { colId: 'team', headerName: 'Team', field: 'teamName', width: 130, minWidth: 110, cellRenderer: (p: ICellRendererParams<Employee>) => (p.value ? p.value : <Pill tone="warn">Unassigned</Pill>) },
+    { colId: 'group', headerName: 'WFM group', field: 'primaryGroupName', width: 150, minWidth: 120, cellRenderer: (p: ICellRendererParams<Employee>) => (p.value ? p.value : <Pill tone="warn">Unassigned</Pill>) },
+    { colId: 'type', headerName: 'Type', field: 'employmentType', valueFormatter: (p) => TYPE_LABEL[p.value as EmploymentType], width: 110 },
+    { colId: 'contract', headerName: 'Contract', field: 'weeklyContractHours', type: 'rightAligned', width: 100, valueFormatter: (p) => `${p.value}h` },
+    { colId: 'skills', headerName: 'Skills', sortable: false, valueGetter: (p) => p.data?.skills.map((s) => `${s.name} ${s.proficiency}`).join(', ') ?? '', minWidth: 140, flex: 1, cellRenderer: (p: ICellRendererParams<Employee>) => <span className="block truncate" title={p.data?.skills.map((s) => `${s.name} (level ${s.proficiency})`).join(', ') ?? ''}>{p.value}</span> },
+    { colId: 'shift', headerName: 'Shift times', sortable: false, width: 150, valueGetter: (p) => { const e = p.data; if (!e) return ''; return [e.fixedStartSlot != null ? `starts ${slotHHMM(e.fixedStartSlot)}` : '', e.shiftConsistency === 'REQUIRE' ? 'steady' : e.shiftConsistency === 'PREFER' ? 'steady if possible' : e.shiftConsistency === 'OFF' ? 'varies' : ''].filter(Boolean).join(', ') || 'company setting'; }, cellStyle: { color: '#525252' } },
+    { colId: 'status', headerName: 'Status', field: 'status', valueFormatter: (p) => EMP_STATUS_LABEL[p.value as EmployeeStatus], width: 120, cellStyle: (p) => (p.value === 'ACTIVE' ? { color: '#2A7553', fontWeight: 600 } : { color: '#737373' }) },
+    { colId: 'email', headerName: 'Email', field: 'email', width: 250, minWidth: 180, cellRenderer: (p: ICellRendererParams<Employee>) => <span className="block truncate" title={p.value ?? ''}>{p.value ?? '–'}</span> },
+    { colId: 'extension', headerName: 'Agent extension', field: 'extension', width: 140, valueFormatter: (p) => p.value ?? '–' },
+  ].filter((c) => (c as ColDef<Employee>).colId === undefined || shown.includes((c as ColDef<Employee>).colId as string)) as ColDef<Employee>[], [shown]);
 
   const save = async () => {
     if (!edit) return;
@@ -387,11 +431,50 @@ export const EmployeesPanel: React.FC = () => {
               );
             })()}
             {edit.id && <AssignmentsSection employeeId={edit.id} groupId={edit.form.primaryGroupId || null} />}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="space-y-5">
+              <section className="space-y-2" aria-label="Who they are">
+                <h4 className="text-[13px] font-semibold text-[#171717]">Who they are</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <Field label="Employee number"><Input value={edit.form.employeeNumber} onChange={(e) => set('employeeNumber', e.target.value)} /></Field>
               <Field label="First name"><Input value={edit.form.firstName} onChange={(e) => set('firstName', e.target.value)} /></Field>
               <Field label="Last name"><Input value={edit.form.lastName} onChange={(e) => set('lastName', e.target.value)} /></Field>
               <Field label="Email"><Input type="email" value={edit.form.email} onChange={(e) => set('email', e.target.value)} /></Field>
+                </div>
+              </section>
+              <section className="space-y-2" aria-label="Where they work">
+                <h4 className="text-[13px] font-semibold text-[#171717]">Where they work</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <Field label="Site" hint="Narrows the list of groups">
+                <Select value={siteSel ?? groupSiteId ?? ''} onChange={(e) => { const v = e.target.value; setSiteSel(v); const g = groups.find((x) => x.id === edit.form.primaryGroupId); if (v && g && (g as any).siteId !== v) set('primaryGroupId', ''); }}>
+                  <option value="">Any site</option>{(sites.data ?? []).filter((x) => x.status === 'ACTIVE' || x.id === groupSiteId).map((x) => <option key={x.id} value={x.id}>{x.name}{x.regionName ? ` (${x.regionName})` : ''}</option>)}
+                </Select>
+              </Field>
+              <Field label="Main WFM group" hint="They are always eligible for it">
+                <Select value={edit.form.primaryGroupId} onChange={(e) => set('primaryGroupId', e.target.value)}>
+                  <option value="">None</option>{groups.filter((g) => !effectiveSite || (g as any).siteId === effectiveSite).map((g) => <option key={g.id} value={g.id}>{g.name}{!effectiveSite && (g as any).siteId ? ` · ${sites.data?.find((x) => x.id === (g as any).siteId)?.name ?? ''}` : ''}</option>)}
+                </Select>
+              </Field>
+              <Field label="Team"><Select value={edit.form.teamId} onChange={(e) => set('teamId', e.target.value)}><option value="">No team</option>{teams.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
+              <Field label="Reports to" hint="Their manager or supervisor, for the org chart"><PersonPicker ariaLabel="Reports to" value={edit.form.reportsTo} statuses="ONBOARDING,ACTIVE,LEAVE" placeholder="Choose who they report to" onChange={(id) => set('reportsTo', id)} /></Field>
+                </div>
+                {edit.form.primaryGroupId && (() => {
+                  const g = groups.find((x) => x.id === edit.form.primaryGroupId) as any;
+                  const st = sites.data?.find((x) => x.id === g?.siteId);
+                  return <p className="text-[12px] text-[#6B6B6B]">{st ? `They follow ${st.name}'s holidays${st.packName ? ` and the ${st.packName} labour-law pack` : ''}.` : 'This group is not at a site, so only the organisation-wide holidays and rules apply to them.'}</p>;
+                })()}
+              </section>
+              <section className="space-y-2" aria-label="Contract">
+                <h4 className="text-[13px] font-semibold text-[#171717]">Contract</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <Field label="Employment type"><Select value={edit.form.employmentType} onChange={(e) => set('employmentType', e.target.value as EmploymentType)}>{Object.entries(TYPE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
+              <Field label="Contract hours / week" hint="The schedule aims for at least this"><Input type="number" min={0} max={80} value={edit.form.weeklyContractHours} onChange={num('weeklyContractHours')} /></Field>
+              <Field label="Status"><Select value={edit.form.status} onChange={(e) => set('status', e.target.value as EmployeeStatus)}>{Object.entries(EMP_STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
+                </div>
+              </section>
+              <details className="border border-[#E5E5E0] rounded-lg" open={!!edit.id}>
+                <summary className="cursor-pointer px-3 py-2 text-[13px] font-semibold text-[#171717]">More details <span className="font-normal text-[#6B6B6B]">limits, preferences, skills and other groups</span></summary>
+                <div className="p-3 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <Field label="Agent extension" hint="Phone/softphone extension on the ACD"><Input value={edit.form.extension} onChange={(e) => set('extension', e.target.value)} /></Field>
               <div className="md:col-span-2 xl:col-span-4 rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] p-3 space-y-1.5">
                 <div className="flex flex-wrap gap-x-6 gap-y-1.5">
@@ -413,45 +496,31 @@ export const EmployeesPanel: React.FC = () => {
                 })()}
                 {edit.id && (edit.form.isSupervisor || edit.form.isManager) && !(logins.data ?? []).some((l) => l.employeeId === edit.id) && <p className="text-[12px] text-[#B7791F]">They have no app login yet, so they cannot sign in to act as a {edit.form.isManager ? 'manager' : 'supervisor'}. Create one below, and give it the role they need on the Users and Roles screen.</p>}
               </div>
-              <Field label="Reports to" hint="Their manager or supervisor, for the org chart"><PersonPicker ariaLabel="Reports to" value={edit.form.reportsTo} statuses="ONBOARDING,ACTIVE,LEAVE" placeholder="Choose who they report to" onChange={(id) => set('reportsTo', id)} /></Field>
-              <Field label="Team"><Select value={edit.form.teamId} onChange={(e) => set('teamId', e.target.value)}><option value="">No team</option>{teams.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
-              <Field label="Main WFM group" hint="They are always eligible for it"><Select value={edit.form.primaryGroupId} onChange={(e) => set('primaryGroupId', e.target.value)}><option value="">None</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select></Field>
-              <Field label="Status"><Select value={edit.form.status} onChange={(e) => set('status', e.target.value as EmployeeStatus)}>{Object.entries(EMP_STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
-              <Field label="Employment type"><Select value={edit.form.employmentType} onChange={(e) => set('employmentType', e.target.value as EmploymentType)}>{Object.entries(TYPE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</Select></Field>
-              <Field label="Contract hours / week" hint="The schedule aims for at least this"><Input type="number" min={0} max={80} value={edit.form.weeklyContractHours} onChange={num('weeklyContractHours')} /></Field>
+                  </div>
+            <div className="space-y-2 border-t border-[#E5E5E0] pt-3"><h5 className="text-[12px] font-semibold text-[#171717]">Limits <span className="font-normal text-[#6B6B6B]">a generated schedule never goes past these</span></h5><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <Field label="Maximum hours / week" hint="Never exceeded"><Input type="number" min={1} max={84} value={edit.form.maxWeeklyHours} onChange={num('maxWeeklyHours')} /></Field>
               <Field label="Days per week (max)"><Input type="number" min={1} max={7} value={edit.form.workDaysPerWeek} onChange={num('workDaysPerWeek')} /></Field>
               <Field label="Rest between shifts (h)"><Input type="number" min={0} max={24} step={0.5} value={edit.form.minRestHours} onChange={num('minRestHours')} /></Field>
               <Field label="Days in a row (max)"><Input type="number" min={1} max={14} value={edit.form.maxConsecutiveDays} onChange={num('maxConsecutiveDays')} /></Field>
+            </div></div>
+            <div className="space-y-2 border-t border-[#E5E5E0] pt-3"><h5 className="text-[12px] font-semibold text-[#171717]">Shifts</h5><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <Field label="Weekends"><Select value={edit.form.allowWeekend ? 'y' : 'n'} onChange={(e) => set('allowWeekend', e.target.value === 'y')}><option value="y">Can work weekends</option><option value="n">Weekdays only</option></Select></Field>
               <Field label="Overnight shifts"><Select value={edit.form.allowOvernight ? 'y' : 'n'} onChange={(e) => set('allowOvernight', e.target.value === 'y')}><option value="n">No</option><option value="y">Allowed</option></Select></Field>
               <Field label="Night work consent" hint="Some labour laws allow night hours only with the person's consent"><Select value={edit.form.nightShiftConsent ? 'y' : 'n'} onChange={(e) => set('nightShiftConsent', e.target.value === 'y')}><option value="n">Not given</option><option value="y">Consented</option></Select></Field>
               <Field label="Preferred shift template" hint="Pre-fills the template when adding this person's shift by hand. Does not constrain the generator."><Select value={edit.form.preferredTemplateId} onChange={(e) => set('preferredTemplateId', e.target.value)}><option value="">None</option>{tpls.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
               <Field label="Same start and end time" hint="Logs in at one usual time for the whole schedule. Overrides the company setting for this person."><Select value={edit.form.shiftConsistency} onChange={(e) => set('shiftConsistency', e.target.value as ShiftConsistency)}>{(Object.keys(CONSISTENCY_LABEL) as ShiftConsistency[]).map((k) => <option key={k} value={k}>{CONSISTENCY_LABEL[k]}</option>)}</Select></Field>
               <Field label="Assigned start time" hint="Optional. Always starts at this time (within the company tolerance); leave empty to let the scheduler choose."><Input type="time" step={900} value={edit.form.fixedStart} onChange={(e) => set('fixedStart', e.target.value)} /></Field>
+            </div></div>
+            <div className="space-y-2 border-t border-[#E5E5E0] pt-3">
+              <h5 className="text-[12px] font-semibold text-[#171717]">Can also be scheduled for</h5>
+              <GroupsPicker groups={groups as any} sites={(sites.data ?? []) as any} chosen={edit.form.eligibleGroupIds} exclude={edit.form.primaryGroupId} onChange={(ids) => set('eligibleGroupIds', ids)} />
             </div>
-            <div>
-              <div className="text-[12px] font-semibold mb-1.5">Can also be scheduled for</div>
-              <div className="flex flex-wrap gap-3 text-[13px]">
-                {groups.filter((g) => g.id !== edit.form.primaryGroupId).map((g) => (
-                  <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={edit.form.eligibleGroupIds.includes(g.id)} onChange={(e) => set('eligibleGroupIds', e.target.checked ? [...edit.form.eligibleGroupIds, g.id] : edit.form.eligibleGroupIds.filter((x) => x !== g.id))} />{g.name}</label>
-                ))}
-                {groups.length <= 1 && <span className="text-[12px] text-[#6B6B6B]">No other groups.</span>}
-              </div>
+            <div className="space-y-2 border-t border-[#E5E5E0] pt-3">
+              <h5 className="text-[12px] font-semibold text-[#171717]">Skills</h5>
+              <SkillsPicker skills={(skills.data ?? []) as any} value={edit.form.skills} onChange={(v) => set('skills', v)} />
             </div>
-            <div>
-              <div className="text-[12px] font-semibold mb-1.5">Skills and level (1 beginner, 5 expert)</div>
-              {skills.data?.length === 0 ? <span className="text-[12px] text-[#6B6B6B]">No skills defined yet. Add some under Skills.</span> : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                  {skills.data?.filter((s) => s.status === 'ACTIVE').map((s) => (
-                    <div key={s.id} className="flex items-center gap-2 text-[13px]">
-                      <input type="checkbox" checked={s.id in edit.form.skills} onChange={(e) => { const next = { ...edit.form.skills }; if (e.target.checked) next[s.id] = 3; else delete next[s.id]; set('skills', next); }} />
-                      <span className="flex-1">{s.name}</span>
-                      <select disabled={!(s.id in edit.form.skills)} value={edit.form.skills[s.id] ?? 3} onChange={(e) => set('skills', { ...edit.form.skills, [s.id]: Number(e.target.value) })} className="border border-[#E5E5E0] rounded p-1 text-[12px] disabled:opacity-40">{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select>
-                    </div>
-                  ))}
                 </div>
-              )}
+              </details>
             </div>
             {edit.id && (leavingState(edit).marking || leavingState(edit).planned) && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"><LeavingBlock id={edit.id} form={edit.form} wasLeaving={leavingState(edit).planned} set={set} /></div>
@@ -462,7 +531,7 @@ export const EmployeesPanel: React.FC = () => {
                 <div className="max-w-xl"><Field label="Why are you changing this?" hint="Kept in the history with your name. Needed for anything except contact details."><Input value={edit.form.reason} maxLength={300} onChange={(e) => set('reason', e.target.value)} placeholder="For example: moved to part time at their request" /></Field></div>
               ) : null;
             })()}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 sticky bottom-0 bg-white/95 backdrop-blur border-t border-[#E5E5E0] -mx-4 px-4 py-3 z-10">
               <Btn variant="primary" disabled={busy || !edit.form.employeeNumber.trim() || !edit.form.firstName.trim() || !edit.form.lastName.trim()
                 || (!!edit.id && (changedFields(edit.orig, edit.form).length > 0) && edit.form.reason.trim().length < 3)
                 || (!!edit.id && leavingState(edit).marking && (!edit.form.lastDay || edit.form.leaveReason.trim().length < 3))} onClick={save}>Save employee</Btn>
@@ -480,17 +549,26 @@ export const EmployeesPanel: React.FC = () => {
           <span title="People who have every skill you tick"><MultiSelect ariaLabel="Skills (has all)" allLabel="Any skills" noun={['skill', 'skills']} value={skillIds} onChange={setSkillIds} options={(skills.data ?? []).filter((k) => k.status === 'ACTIVE').map((k) => ({ value: k.id, label: k.name }))} /></span>
           {anyFilter && <button className="text-[12px] underline text-[#525252] self-center" onClick={() => { setQ(''); setGroupIds([]); setTeamIds([]); setStatuses([]); setSkillIds([]); }}>Clear filters</button>}
           <Pill>{(total ?? 0).toLocaleString('en-US')} {total === 1 ? 'person' : 'people'}</Pill>
-          {people.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 ml-auto text-[13px]">
-              <span className="font-semibold">{allPicked ? `All ${allPicked.length.toLocaleString('en-US')} matching selected` : `${picked.length} selected`}</span>
-              {!allPicked && (total ?? 0) > picked.length && <button className="underline text-[#525252]" onClick={selectAllMatching}>Select all {(total ?? 0).toLocaleString('en-US')} matching</button>}
-              {canWrite && <Btn variant="primary" onClick={() => { setError(''); setSelected(null); setBulk(true); }}>Edit selected</Btn>}
-              <Btn onClick={clearPicked}>Clear selection</Btn>
-            </div>
-          )}
+          <div className="relative ml-auto">
+            <button type="button" aria-expanded={chooser} aria-haspopup="true" onClick={() => setChooser((o) => !o)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#E5E5E0] bg-white text-[13px] font-semibold hover:bg-[#FAFAF8]"><Columns3 className="w-4 h-4" aria-hidden="true" />Columns</button>
+            {chooser && (
+              <div role="group" aria-label="Columns shown" className="absolute right-0 z-30 mt-1 w-56 rounded-lg border border-[#E5E5E0] bg-white shadow-lg p-2 text-[13px]">
+                <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Show columns</div>
+                {OPTIONAL_COLS.map((c) => (
+                  <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-[#FAFAF8] cursor-pointer">
+                    <input type="checkbox" checked={shown.includes(c.id)} onChange={() => setShown((s) => (s.includes(c.id) ? s.filter((x) => x !== c.id) : [...s, c.id]))} />{c.label}
+                  </label>
+                ))}
+                <div className="flex items-center justify-between px-2 pt-1.5 border-t border-[#F0F0EC] mt-1">
+                  <button className="text-[12px] underline text-[#525252]" onClick={() => setShown(DEFAULT_COLS)}>Reset</button>
+                  <button className="text-[12px] font-semibold" onClick={() => setChooser(false)}>Done</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {bulk && people.length > 0 && (
-          <BulkEdit people={people} groups={groups} teams={teams.data ?? []} skills={skills.data ?? []} templates={(tpls.data ?? []).filter((t) => t.status === 'ACTIVE')}
+          <BulkEdit preset={bulkPreset} people={people} groups={groups} teams={teams.data ?? []} skills={skills.data ?? []} templates={(tpls.data ?? []).filter((t) => t.status === 'ACTIVE')}
             onCancel={() => setBulk(false)} onDone={(text) => { setNotice({ kind: 'ok', text }); clearPicked(); setTick((t) => t + 1); }} />
         )}
         {loadError && <Banner kind="err" onClose={() => setLoadError('')}>{loadError}</Banner>}
@@ -498,10 +576,28 @@ export const EmployeesPanel: React.FC = () => {
         <div className={noOne ? 'hidden' : ''}>{/* stays mounted when empty, so it fetches again after the first person is added */}
           <Grid<Employee> rowModelType="infinite" datasource={datasource} cacheBlockSize={100} maxBlocksInCache={20} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true, suppressHeaderMenuButton: true }} height={460}
               rowSelection={canWrite ? { mode: 'multiRow', checkboxes: true, headerCheckbox: false, enableClickSelection: false } : undefined}
+              selectionColumnDef={{ pinned: 'left', width: 48, resizable: false, suppressHeaderMenuButton: true }}
               getRowId={(p) => p.data.id} onGridReady={(e) => { gridApi.current = e.api; }}
               onSelectionChanged={(e) => setPicked(e.api.getSelectedRows())}
               onRowClicked={(e) => { if (e.data && !(e.event?.target as HTMLElement | null)?.closest?.('.ag-selection-checkbox, .ag-header-select-all')) setSelected(e.data); }} rowStyle={{ cursor: 'pointer' }} />
         </div>
+        {people.length > 0 && <div aria-hidden="true" className="h-16" />}{/* room under the last row for the bar */}
+        {people.length > 0 && !bulk && (
+          <div role="region" aria-label="Actions for the people selected" className="fixed bottom-4 left-[calc(50%+120px)] -translate-x-1/2 z-40 max-w-[calc(100vw-300px)] flex flex-wrap items-center gap-2 rounded-lg border border-[#171717] bg-white px-3 py-2.5 shadow-xl text-[13px]">
+            <span className="font-semibold">{allPicked ? `All ${allPicked.length.toLocaleString('en-US')} matching selected` : `${picked.length} selected`}</span>
+            {!allPicked && (total ?? 0) > picked.length && <button className="underline text-[#525252]" onClick={selectAllMatching}>Select all {(total ?? 0).toLocaleString('en-US')} matching</button>}
+            <span className="mx-1 h-5 w-px bg-[#E5E5E0]" aria-hidden="true" />
+            {canWrite && <>
+              <Btn onClick={() => { setError(''); setSelected(null); setBulkPreset('team'); setBulk(true); }}>Assign team</Btn>
+              <Btn onClick={() => { setError(''); setSelected(null); setBulkPreset('primaryGroup'); setBulk(true); }}>Assign group</Btn>
+              <Btn onClick={() => { setError(''); setSelected(null); setBulkPreset('addSkills'); setBulk(true); }}>Add skill</Btn>
+              <Btn onClick={() => { setError(''); setSelected(null); setBulkPreset('contract'); setBulk(true); }}>Set contract</Btn>
+              <Btn variant="primary" onClick={() => { setError(''); setSelected(null); setBulkPreset(undefined); setBulk(true); }}>Edit selected</Btn>
+            </>}
+            <Btn onClick={exportSelected}>Export CSV</Btn>
+            <button className="ml-auto underline text-[#525252]" onClick={clearPicked}>Clear selection</button>
+          </div>
+        )}
       </Card>
 
       {selected && (
@@ -521,6 +617,15 @@ export const EmployeesPanel: React.FC = () => {
               <span className="text-[#6B6B6B]">{TYPE_LABEL[selected.employmentType]}</span>
             </div>
 
+            <div role="tablist" aria-label="Employee details" className="flex gap-1 border-b border-[#E5E5E0] -mx-4 px-4">
+              {([['overview', 'Overview'], ['contract', 'Contract'], ['skills', 'Skills'], ['availability', 'Availability'], ['login', 'Login']] as const).map(([k, l]) => (
+                <button key={k} role="tab" aria-selected={panelTab === k} onClick={() => setPanelTab(k)} className={`px-2.5 py-2 text-[12px] font-semibold border-b-2 -mb-px ${panelTab === k ? 'border-[#171717] text-[#171717]' : 'border-transparent text-[#6B6B6B] hover:text-[#171717]'}`}>{l}</button>
+              ))}
+            </div>
+            {panelTab === 'overview' && <OverviewTab employeeId={selected.id} />}
+            {panelTab === 'skills' && <SkillsTab employee={selected} skills={skills.data ?? []} canWrite={canWrite} onSaved={(e) => { setSelected(e); setTick((t) => t + 1); }} />}
+            {panelTab === 'availability' && <AvailabilityTab employeeId={selected.id} canWrite={canWrite} onOpenScreen={() => { history.pushState(null, '', '/workforce/availability'); window.dispatchEvent(new PopStateEvent('popstate')); }} />}
+            {panelTab === 'contract' && <div className="space-y-5">
             <PreviewSection title="Assignment">
               <AssignRow label="Team" value={selected.teamName} canWrite={canWrite} options={teams.data ?? []}
                 onAssign={(id) => assignField('teamId', id)} />
@@ -539,13 +644,9 @@ export const EmployeesPanel: React.FC = () => {
               <PreviewRow label="Start and end times" value={`${CONSISTENCY_LABEL[selected.shiftConsistency ?? 'DEFAULT']}${selected.fixedStartSlot != null ? `, starts ${slotHHMM(selected.fixedStartSlot)}` : ''}`} />
             </PreviewSection>
 
-            <PreviewSection title="Skills">
-              {selected.skills.length === 0 ? <div className="text-[#6B6B6B]">None</div> : (
-                <div className="flex flex-wrap gap-1.5">{selected.skills.map((s) => <span key={s.skillId} className="text-[11px] bg-[#F5F5F2] text-[#525252] rounded px-1.5 py-0.5">{s.name} · L{s.proficiency}</span>)}</div>
-              )}
-            </PreviewSection>
+            </div>}
 
-            <PreviewSection title="App login">
+            {panelTab === 'login' && <PreviewSection title="App login">
               {(() => {
                 const l = logins.data?.find((x) => x.employeeId === selected.id);
                 return l ? (
@@ -561,7 +662,7 @@ export const EmployeesPanel: React.FC = () => {
                 );
               })()}
               {cred && <div className="mt-2"><LoginHandover cred={cred} /></div>}
-            </PreviewSection>
+            </PreviewSection>}
           </div>
         </aside>
       )}
@@ -569,7 +670,7 @@ export const EmployeesPanel: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl border border-[#E5E5E0] w-full max-w-md p-6 space-y-4">
             <div className="flex items-center gap-3 text-[#DC2626]">
-              <span className="text-2xl">⚠️</span>
+              <span className="text-2xl font-semibold text-[#B7791F]" aria-hidden="true">!</span>
               <h3 className="text-[16px] font-semibold text-[#171717]">Employee Capacity Reached</h3>
             </div>
             <p className="text-[13px] text-[#525252]">

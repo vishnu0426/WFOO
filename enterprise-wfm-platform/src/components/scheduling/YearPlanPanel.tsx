@@ -4,12 +4,14 @@
  * Publishing goes a window at a time (the weeks up to a date are locked and live, the rest stay planned) and the planned weeks can be re-solved on today's
  * forecast as they come closer. The weeks far ahead are described by rotation lines: who works which days and times, repeating.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { addDays, api, dayYear, dec, PlanView, PlanWeek, RotationLines, ScheduleJob, ScheduleVersion } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
-import { Banner, Btn, Busy, Card, Empty, Input, Kpi, KpiRow, Pill, Select } from '../forecasting/ui';
+import { Banner, Btn, Busy, Card, Empty, Input, Pill, Select } from '../forecasting/ui';
+import { Metric } from '../wfm/app-shell';
 import { JobCard } from './JobCard';
 
 type Quality = 'SHORT' | 'BALANCED' | 'OVER' | 'NONE';
@@ -17,6 +19,13 @@ const COLORS: Record<Quality, string> = { SHORT: '#C84A4A', BALANCED: '#2F7D5A',
 const LABEL: Record<Quality, string> = { SHORT: 'Short', BALANCED: 'Balanced', OVER: 'Overstaffed', NONE: 'No target' };
 const quality = (w: PlanWeek): Quality => (w.coveragePercent === null || w.needSlots === 0 ? 'NONE' : w.coveragePercent < 95 ? 'SHORT' : w.overSlots / Math.max(1, w.needSlots) > 0.15 ? 'OVER' : 'BALANCED');
 const md = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en', { day: 'numeric', month: 'short' });
+const WEEKDAY = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+/** "Weeks run Sunday to Saturday (your pay week)." */
+const weekRule = (start?: number) => (start === undefined ? '' : `Weeks run ${WEEKDAY[start]} to ${WEEKDAY[(start + 6) % 7]} (your pay week).`);
+/** "7 days" or "4 wk": whole weeks only when the length is a multiple of 7 */
+const lengthText = (from: string, to: string) => { const d = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000) + 1; return d % 7 === 0 ? `${d / 7} wk` : `${d} days`; };
+/** the week's dates, cut to the schedule: a week that begins before the schedule starts shows its first real day */
+const weekSpan = (w: PlanWeek, periodStart: string) => `${md(w.weekStart < periodStart ? periodStart : w.weekStart)} – ${md(w.weekEnd)}`;
 const CONF: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
   HIGH: { tone: 'good', text: 'High' }, MEDIUM: { tone: 'warn', text: 'Medium' }, LOW: { tone: 'bad', text: 'Lower' }, NONE: { tone: 'neutral', text: 'No forecast' },
 };
@@ -73,22 +82,27 @@ export const YearPlanPanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   return (
     <div className="space-y-6">
       <Card title="Year plan" sub="Pick a schedule to see every week of it. Weeks near today are solved shift by shift; weeks far ahead repeat the last solved cycle until they come close enough to solve properly."
-        actions={<Select value={version?.id ?? ''} onChange={(e) => select(e.target.value)} className="!w-auto" aria-label="Schedule">{demand.map((v) => <option key={v.id} value={v.id}>{v.name} · {Math.round((new Date(v.periodEnd).getTime() - new Date(v.periodStart).getTime()) / 604_800_000 + 1 / 7)} wk · {v.status.toLowerCase()}</option>)}</Select>}>
-        {!version ? <Busy text="Loading…" /> : plan.loading && !plan.data ? <Busy text="Reading the plan…" /> : plan.error ? <Banner kind="err">{plan.error}</Banner> : plan.data && (
+        actions={<Select value={version?.id ?? ''} onChange={(e) => select(e.target.value)} className="!w-auto" aria-label="Schedule">{demand.map((v) => <option key={v.id} value={v.id}>{v.name} · {lengthText(v.periodStart, v.periodEnd)} · {v.status.toLowerCase()}</option>)}</Select>}>
+        {!version ? <Waiting what="the plan" shape="table" /> : plan.loading && !plan.data ? <Waiting what="the plan" shape="table" reload={plan.reload} /> : plan.error && !plan.data ? <LoadFailed what="the plan" error={plan.error} reload={plan.reload} /> : plan.data && (
           <>
-            <KpiRow>
-              <Kpi label="Forecast covered" value={`${dec(plan.data.summary.coverage, 1)}%`} tone={plan.data.summary.coverage >= 95 ? 'good' : plan.data.summary.coverage >= 85 ? 'warn' : 'bad'} sub={`${weeks.length} weeks`} />
-              <Kpi label="Shifts" value={plan.data.summary.shifts.toLocaleString()} sub={`${plan.data.summary.people} people`} />
-              <Kpi label="Live (locked) through" value={<span className="text-[16px]">{lockedEnd ? dayYear(lockedEnd) : 'Not published'}</span>} sub={plan.data.status === 'PUBLISHED' ? (plan.data.publishThrough ? `${planned.length} weeks still planned` : 'whole schedule') : 'draft'} />
-              <Kpi label="Solved weeks" value={weeks.filter((w) => w.shiftSource === 'SOLVED' || w.shiftSource === 'MIXED').length} sub={`${weeks.filter((w) => w.shiftSource === 'PATTERN').length} repeated`} />
-              <Kpi label="Rule violations" value={plan.data.summary.violations} tone={plan.data.summary.violations ? 'bad' : 'good'} sub={plan.data.summary.violations ? 'fix before publishing' : 'none'} />
-            </KpiRow>
+            {/* the same tiles as the Forecast Dashboard */}
+            <div className="grid grid-cols-2 divide-x divide-y rounded-lg border md:grid-cols-3 xl:grid-cols-5 xl:divide-y-0">
+              <Metric label="Forecast covered" value={`${dec(plan.data.summary.coverage, 1)}%`} hint={`${weeks.length} week${weeks.length === 1 ? '' : 's'}`} delta={plan.data.summary.coverage >= 95 ? 'On target' : plan.data.summary.coverage >= 85 ? 'A little short' : 'Short of the forecast'} tone={plan.data.summary.coverage >= 95 ? 'success' : plan.data.summary.coverage >= 85 ? 'warning' : 'critical'} />
+              <Metric label="Shifts" value={plan.data.summary.shifts.toLocaleString()} hint={`${plan.data.summary.people} people`} />
+              <Metric label="Live (locked) through" value={<span className="text-[20px]">{lockedEnd ? dayYear(lockedEnd) : 'Not published'}</span>} hint={plan.data.status === 'PUBLISHED' ? (plan.data.publishThrough ? `${planned.length} weeks still planned` : 'whole schedule') : 'draft'} />
+              <Metric label="Solved weeks" value={weeks.filter((w) => w.shiftSource === 'SOLVED' || w.shiftSource === 'MIXED').length} hint={`${weeks.filter((w) => w.shiftSource === 'PATTERN').length} repeated`} />
+              <Metric label="Rule violations" value={plan.data.summary.violations} hint={plan.data.summary.violations ? undefined : 'none'} delta={plan.data.summary.violations ? 'fix before publishing' : undefined} tone={plan.data.summary.violations ? 'critical' : undefined} />
+            </div>
 
-            {/* the year at a glance: one square per week */}
+            {/* the year at a glance: one square per week, a quarter (13 weeks) to a row */}
             <div>
-              <div className="flex flex-wrap gap-1" aria-label="Weeks at a glance">
-                {weeks.map((w) => (
-                  <button key={w.weekStart} onClick={() => openWeek(w)} title={`${md(w.weekStart)} – ${md(w.weekEnd)}: ${LABEL[quality(w)]}${w.coveragePercent !== null ? `, ${w.coveragePercent}% covered` : ''}${w.state === 'LOCKED' ? ', locked' : ''}`}
+              <div className="mb-2 flex flex-wrap items-baseline gap-2">
+                <h3 className="text-[13px] font-semibold text-[#171717]">Weeks at a glance</h3>
+                <span className="text-[12px] text-[#6B6B6B]">One square per week, in order. Click one to open it. {weekRule(plan.data.weekStartDay)}</span>
+              </div>
+              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${weeks.length > 13 ? 13 : Math.max(1, weeks.length)}, 1.5rem)` }} role="group" aria-label="Weeks at a glance">
+                {weeks.map((w, i) => (
+                  <button key={w.weekStart} type="button" onClick={() => openWeek(w)} aria-label={`Week ${i + 1}, ${weekSpan(w, plan.data!.periodStart)}: ${LABEL[quality(w)]}${w.coveragePercent !== null ? `, ${w.coveragePercent}% covered` : ''}${w.state === 'LOCKED' ? ', locked' : ''}`} title={`Week ${i + 1} · ${weekSpan(w, plan.data!.periodStart)}: ${LABEL[quality(w)]}${w.coveragePercent !== null ? `, ${w.coveragePercent}% covered` : ''}${w.state === 'LOCKED' ? ', locked' : ''}`}
                     className="relative w-6 h-6 rounded-sm" style={{ background: COLORS[quality(w)], opacity: w.shiftSource === 'PATTERN' ? 0.55 : 1, outline: w.state === 'LOCKED' ? '2px solid #171717' : undefined, outlineOffset: -2 }} />
                 ))}
               </div>
@@ -103,14 +117,14 @@ export const YearPlanPanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
               <table className="w-full text-[12px]">
                 <thead className="bg-[#FAFAF8] text-[#6B6B6B] text-left"><tr>
                   <th className="px-3 py-2 font-semibold">Week</th><th className="px-3 py-2 font-semibold">Coverage</th><th className="px-3 py-2 font-semibold">Shifts</th>
-                  <th className="px-3 py-2 font-semibold">Built from</th><th className="px-3 py-2 font-semibold">Forecast</th><th className="px-3 py-2 font-semibold">Confidence</th><th className="px-3 py-2 font-semibold">State</th><th />
+                  <th className="px-3 py-2 font-semibold">Built from</th><th className="px-3 py-2 font-semibold">Forecast</th><th className="px-3 py-2 font-semibold">Confidence</th><th className="px-3 py-2 font-semibold">State</th><th><span className="sr-only">Open</span></th>
                 </tr></thead>
                 <tbody>
                   {weeks.map((w, i) => {
                     const q = quality(w), c = CONF[w.confidence] ?? CONF.NONE;
                     return (
                       <tr key={w.weekStart} className="border-t border-[#E5E5E0] hover:bg-[#FAFAF8] cursor-pointer" onClick={() => openWeek(w)}>
-                        <td className="px-3 py-1.5 whitespace-nowrap"><span className="font-semibold">Week {i + 1}</span> <span className="text-[#6B6B6B]">{md(w.weekStart)} – {md(w.weekEnd)}</span></td>
+                        <td className="px-3 py-1.5 whitespace-nowrap"><span className="font-semibold">Week {i + 1}</span> <span className="text-[#6B6B6B]">{weekSpan(w, plan.data!.periodStart)}</span>{(w.days ?? 7) < 7 && <span className="ml-1 text-[11px] text-[#8F6200]" title="The schedule starts or ends part-way through a pay week">{w.days} day{w.days === 1 ? '' : 's'} only</span>}</td>
                         <td className="px-3 py-1.5 w-56">
                           <div className="flex items-center gap-2">
                             <div className="h-2 w-28 rounded bg-[#E5E5E0] overflow-hidden"><div className="h-full" style={{ width: `${Math.min(100, w.coveragePercent ?? 0)}%`, background: COLORS[q] }} /></div>

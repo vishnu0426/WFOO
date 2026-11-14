@@ -1,4 +1,5 @@
 /** The smaller tabs of a group: shrinkage categories, manual coverage windows, and the history of changes. */
+import { LoadState, TableSkeleton } from '../../common/loading';
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api, CoverageWindow, DOW, GroupDto, ShrinkageCategory } from '../../../services/api';
@@ -14,7 +15,8 @@ export const ShrinkageTab: React.FC<{ group: GroupDto; canWrite: boolean }> = ({
   const [f, setF] = useState<{ name: string; pct: number } | null>(null);
   const [del, setDel] = useState<ShrinkageCategory | null>(null);
   const [error, setError] = useState('');
-  const list = cats.data ?? [];
+  if (cats.data === null) return <LoadState state={cats} what="the shrinkage categories" skeleton={<TableSkeleton rows={3} cols={3} />}>{() => null}</LoadState>;
+  const list = cats.data;
   const total = Math.round(list.reduce((s, c) => s + c.pct, 0) * 100) / 100;
   const act = async (fn: () => Promise<unknown>, after: () => void) => { setError(''); try { await fn(); after(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); setDel(null); } };
 
@@ -61,7 +63,8 @@ export const CoverageTab: React.FC<{ group: GroupDto; canWrite: boolean }> = ({ 
   const [f, setF] = useState<{ dayOfWeek: number; startTime: string; endTime: string; headcount: number } | null>(null);
   const [del, setDel] = useState<CoverageWindow | null>(null);
   const [error, setError] = useState('');
-  const list = [...(windows.data ?? [])].sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime));
+  if (windows.data === null) return <LoadState state={windows} what="the coverage windows" skeleton={<TableSkeleton rows={3} cols={4} />}>{() => null}</LoadState>;
+  const list = [...windows.data].sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime));
   const act = async (fn: () => Promise<unknown>, after: () => void) => { setError(''); try { await fn(); after(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); setDel(null); } };
 
   return (
@@ -101,8 +104,7 @@ export const CoverageTab: React.FC<{ group: GroupDto; canWrite: boolean }> = ({ 
 
 export const HistoryTab: React.FC<{ group: GroupDto; sites: Site[]; tick: number }> = ({ group, sites, tick }) => {
   const rows = useApi<HistoryRow[]>(`/config/groups/${group.id}/history`, [tick]);
-  if (rows.error) return <Banner kind="err">{rows.error}</Banner>;
-  if (!rows.data) return <p className="text-[12px] text-[#6B6B6B]">Loading…</p>;
+  if (rows.data === null) return <LoadState state={rows} what="the history" skeleton={<TableSkeleton rows={5} cols={2} />}>{() => null}</LoadState>;
   if (!rows.data.length) return <Empty title="No changes recorded yet">Changes to this group and its queues appear here with who made them and why.</Empty>;
   return (
     <ol className="divide-y divide-[#E5E5E0] border border-[#E5E5E0] rounded-lg">

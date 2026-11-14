@@ -3,6 +3,7 @@
  * number. The page is a list of groups; opening one shows its settings and tabs for queues, people, shrinkage, manual coverage and history.
  * Saved to the gateway; changing targets recalculates staffing immediately.
  */
+import { LoadState, TableSkeleton } from '../common/loading';
 import React, { useState } from 'react';
 import { FileUp, Plus } from 'lucide-react';
 import { api, GroupDto, Queue, Team } from '../../services/api';
@@ -41,8 +42,6 @@ export const WfmGroupsPanel: React.FC = () => {
     setMode('list'); await refresh(); setOpenId(g.id);
   };
 
-  if (groups.error) return <Banner kind="err">{groups.error}</Banner>;
-
   if (openId && open) {
     return (
       <GroupDetail group={open} summary={summary.data?.[open.id]} sites={sites.data ?? []} teams={teams.data ?? []} queues={(queues.data ?? []).filter((q) => q.wfmGroupId === open.id)}
@@ -67,7 +66,9 @@ export const WfmGroupsPanel: React.FC = () => {
 
       {summary.error && <Banner kind="warn">The people counts, published forecasts and running schedules could not be loaded ({summary.error}). If the app was just updated, restart the gateway so it picks up the new group screens, then reload this page.</Banner>}
 
-      {groups.data && <GroupList groups={groups.data} summary={summary.data ?? {}} summaryFailed={!!summary.error} sites={sites.data ?? []} canWrite={canWrite} onOpen={setOpenId} onCreate={() => setMode('import')} />}
+      <LoadState state={groups} what="WFM groups" skeleton={<TableSkeleton rows={6} cols={8} />}>
+        {(list) => <GroupList groups={list} summary={summary.data ?? {}} summaryFailed={!!summary.error} sites={sites.data ?? []} canWrite={canWrite} onOpen={setOpenId} onCreate={() => setMode('import')} />}
+      </LoadState>
     </div>
   );
 };

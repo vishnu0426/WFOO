@@ -29,6 +29,18 @@ export function requestFinished(status: number, ms: number) {
   const s = ms / 1000; let i = 0; while (i < BUCKETS.length && s > BUCKETS[i]) i++; buckets[i]++;
 }
 
+/** Schedule builds that have finished in this process, by how they ended, and how long they took. */
+export const buildStats = { done: 0, failed: 0, cancelled: 0, requeued: 0, seconds: 0, buckets: new Array<number>(7).fill(0) };
+/** Schedules the solver returned that the independent rule check then found broken: should always be 0. */
+export const invalidBuilds = { count: 0, violations: 0 };
+export const BUILD_BUCKETS = [30, 120, 300, 600, 1200, 3600];
+export function noteBuild(outcome: 'done' | 'failed' | 'cancelled' | 'requeued', seconds: number) {
+  buildStats[outcome]++;
+  if (outcome === 'requeued') return;
+  buildStats.seconds += seconds;
+  let i = 0; while (i < BUILD_BUCKETS.length && seconds > BUILD_BUCKETS[i]) i++; buildStats.buckets[i]++;
+}
+
 /** Engine-side counters kept by infra.ts. */
 export const engineStats = { busy: 0, busyWaitSec: 0, calls: 0, callSec: 0, errors: 0, waitedGaveUp: 0 };
 
@@ -79,6 +91,12 @@ export async function metricsText(o: { pool: Pool; role: string; engines: () => 
   add('wfm_gateway_password_hash_total', 'counter', 'Password checks and hashes, by outcome', [['{result="done"}', hashStats.done], ['{result="rejected_busy"}', hashStats.rejected], ['{result="on_main_thread"}', hashStats.inline]]);
   const j = await jobCounts(o.pool);
   add('wfm_schedule_jobs', 'gauge', 'Schedule builds by state (-1: not known)', [['{state="queued"}', j.queued], ['{state="running"}', j.running]]);
+  add('wfm_schedule_builds_total', 'counter', 'Schedule builds this process has run, by how they ended', (['done', 'failed', 'cancelled', 'requeued'] as const).map((k) => [`{outcome="${k}"}`, buildStats[k]] as [string, number]));
+  let bcum = 0;
+  add('wfm_schedule_build_seconds_bucket', 'counter', 'Schedule builds finished within each time (seconds)', [...BUILD_BUCKETS.map((b, i) => [`{le="${b}"}`, (bcum += buildStats.buckets[i])] as [string, number]), ['{le="+Inf"}', bcum + buildStats.buckets[BUILD_BUCKETS.length]]]);
+  add('wfm_schedule_build_seconds_sum', 'counter', 'Total time spent on finished builds', [['', Math.round(buildStats.seconds * 1000) / 1000]]);
+  add('wfm_schedule_invalid_builds_total', 'counter', 'Built schedules the independent rule check found breaking a rule (should always be 0)', [['', invalidBuilds.count]]);
+  add('wfm_schedule_invalid_violations_total', 'counter', 'Rule breaks found in built schedules', [['', invalidBuilds.violations]]);
   add('wfm_schedule_jobs_oldest_queued_seconds', 'gauge', 'How long the oldest queued build has waited', [['', j.oldest]]);
   add('wfm_gateway_sizing', 'gauge', 'Sizes chosen at start', Object.entries(sizing).map(([k, v]) => [`{name="${k}"}`, v] as [string, number]));
   add('wfm_gateway_info', 'gauge', 'Which kind of process this is', [[`{role="${o.role}"}`, 1]]);

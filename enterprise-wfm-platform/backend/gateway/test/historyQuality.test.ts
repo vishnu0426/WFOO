@@ -66,6 +66,53 @@ describe('history quality', () => {
   });
 });
 
+describe('plain-language advice on each finding', () => {
+  it('gives every finding a kind, a title, what it means and a fix', () => {
+    const r = q(history(100).slice(0, 56));
+    const st = r.findings.find((f) => f.code === 'STALE')!;
+    assert.equal(st.kind, 'CAUTION'); assert.equal(st.title, 'Newest data is 45 days old'); assert.match(st.effect!, /less sharp/); assert.deepEqual(st.fix, { action: 'IMPORT', label: 'Import the latest data' });
+    assert.ok(r.findings.every((f) => f.kind && f.title && f.effect !== undefined));
+  });
+  it('only a missing history blocks; stale and short are cautions; optional things are tips', () => {
+    assert.equal(q([]).findings[0].kind, 'BLOCK');
+    assert.equal(q(history(20)).findings.find((f) => f.code === 'SHORT')!.kind, 'CAUTION');
+    const spiky = q(history(120, (i, row) => (i === 90 ? { ...row, volume: 9000 } : row)));
+    assert.equal(spiky.findings.find((f) => f.code === 'SPIKE_DAYS')!.kind, 'TIP');
+  });
+  it('the abandoned-calls finding offers the one-click setting', () => {
+    const heavy = q(history(120, (_i, row) => ({ ...row, abandoned: row.volume * 0.12 })));
+    assert.deepEqual(heavy.findings.find((f) => f.code === 'ABANDON_BASIS')!.fix!.action, 'SET_ANSWERED');
+  });
+});
+
+describe('length and freshness are two separate facts', () => {
+  it('a long history that is old is good on length and behind on freshness', () => {
+    const r = q(history(100).slice(0, 90));
+    assert.deepEqual(r.length, { level: 'GOOD', days: 90 }); assert.equal(r.freshness.level, 'OLD'); assert.equal(r.freshness.daysBehind, 11);
+  });
+  it('current data reads as current, and a short history as low', () => {
+    const r = q(history(20)); assert.equal(r.freshness.level, 'CURRENT'); assert.equal(r.length.level, 'LOW');
+    assert.equal(q(history(40)).length.level, 'OK');
+  });
+});
+
+describe('how old is out of date can be set', () => {
+  const old = () => history(100).slice(0, 94);
+  it('is three days by default: a week-old feed is flagged as a caution', () => {
+    const f = q(old()).findings.find((x) => x.code === 'STALE')!;
+    assert.ok(f && f.severity === 'WARNING');
+    assert.ok(!codes(q(history(100).slice(0, 98))).includes('STALE'), 'two days behind is fine by default');
+  });
+  it('a group that imports weekly can raise it so a normal gap is not flagged', () => {
+    const r = analyseQueue({ id: 'q', name: 'S', openSlot: 0, closeSlot: 96, volumeBasis: 'OFFERED', rows: old() }, TODAY, { staleAfterDays: 8 });
+    assert.ok(!r.findings.some((f) => f.code === 'STALE')); assert.equal(r.freshness.level, 'CURRENT');
+  });
+  it('becomes serious at twice the limit, and at least seven days', () => {
+    const at = (n: number, limit: number) => analyseQueue({ id: 'q', name: 'S', openSlot: 0, closeSlot: 96, volumeBasis: 'OFFERED', rows: history(100).slice(0, 100 - n + 1) }, TODAY, { staleAfterDays: limit }).findings.find((x) => x.code === 'STALE')?.severity;
+    assert.equal(at(8, 3), 'CRITICAL'); assert.equal(at(7, 3), 'WARNING'); assert.equal(at(12, 8), 'WARNING'); assert.equal(at(17, 8), 'CRITICAL');
+  });
+});
+
 describe('demand from history', () => {
   it('leaves an offered-calls volume alone', () => { assert.equal(demandVolume(100, 20, 'OFFERED', 0), 100); });
   it('adds abandoned callers back to an answered-calls volume', () => { assert.equal(demandVolume(100, 20, 'ANSWERED', 0), 120); });

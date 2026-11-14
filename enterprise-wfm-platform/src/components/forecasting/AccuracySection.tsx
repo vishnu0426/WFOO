@@ -1,6 +1,6 @@
 /**
- * 6 · Accuracy Heatmap: how good was the forecast? Two views: a hold-out test (forecast the last N days from the history
- * before them and compare with what really happened) and realised accuracy of forecasts that were published.
+ * Accuracy: how good was the forecast? It opens on the one headline figure (Forecast accuracy: published forecasts against actual, daily, last 28 days), then accuracy over time for the
+ * published forecasts, then a test on recent history (forecast the last N days from the history before them and compare with what really happened), labelled as a test.
  */
 import React, { useState } from 'react';
 import { dayName, dayYear, dec, pct, lean, MODEL_LABEL, Score } from '../../services/api';
@@ -8,6 +8,9 @@ import { useForecast } from '../../services/forecastStore';
 import { useApi } from './hooks';
 import { AccuracyGrid, CHART, LineChart } from './charts';
 import { AccuracyTrend } from './AccuracyTrend';
+import { AccuracyHero, Define } from './AccuracyHeadline';
+import { GroupScope } from './RefScope';
+import { OTHER_MEASURES } from '../../services/accuracyTerms';
 import { Banner, Busy, Card, Empty, Kpi, KpiRow, Seg, Table } from './ui';
 
 type Metric = { wape: number; bias: number; actual: number; forecast: number };
@@ -24,7 +27,7 @@ type Accuracy = {
 
 const tone = (w: number) => (w < 0.08 ? 'good' : w < 0.15 ? 'warn' : 'bad');
 
-export const AccuracySection: React.FC = () => {
+export const AccuracySection: React.FC<{ bare?: boolean }> = ({ bare }) => {
   const { group } = useForecast();
   const [span, setSpan] = useState('14');
   const acc = useApi<Accuracy>(group ? `/forecast/accuracy?groupId=${group.id}&days=${span}` : null);
@@ -32,11 +35,13 @@ export const AccuracySection: React.FC = () => {
 
   const a = acc.data;
   return (
-    <div className="space-y-6">
+    <GroupScope bare={bare} crumb="Accuracy" title="Accuracy" description="How close the published forecasts were to what really happened.">
+    <div className="space-y-6 p-6">
+      <AccuracyHero groupId={group.id} />
       <AccuracyTrend />
       <Card
-        title="Forecast accuracy"
-        sub="A fair test: the forecast is rebuilt using only the history from before the window, then compared with what actually happened. The score shown is the average miss: how far off the forecast was, as a share of real volume."
+        title="Test on recent history"
+        sub="A test run now, not the published forecasts: the forecast is rebuilt using only the history from before the window, then compared with what actually happened. It shows how good the method is. Its misses are named Test miss to keep them apart from Forecast accuracy above."
         actions={<Seg options={[{ id: '7', label: '7 days' }, { id: '14', label: '14 days' }, { id: '28', label: '28 days' }]} value={span} onChange={setSpan} />}
       >
         {acc.loading && <Busy text="Re-forecasting the last days from earlier history…" />}
@@ -44,9 +49,9 @@ export const AccuracySection: React.FC = () => {
         {a && (
           <>
             <KpiRow>
-              <Kpi label="Avg. miss · 15 min" value={pct(a.total.interval.wape, 1)} tone={tone(a.total.interval.wape)} sub={`${lean(a.total.interval.bias)} overall`} />
-              <Kpi label="Avg. miss · hourly" value={pct(a.total.hourly.wape, 1)} tone={tone(a.total.hourly.wape)} sub="what most schedules are built on" />
-              <Kpi label="Avg. miss · daily" value={pct(a.total.daily.wape, 1)} tone={tone(a.total.daily.wape)} sub={`${a.total.daily.forecast.toLocaleString()} forecast vs ${a.total.daily.actual.toLocaleString()} actual`} />
+              <Kpi label={OTHER_MEASURES.test15.label} value={pct(a.total.interval.wape, 1)} tone={tone(a.total.interval.wape)} sub={`${lean(a.total.interval.bias)} overall`} />
+              <Kpi label={OTHER_MEASURES.testHourly.label} value={pct(a.total.hourly.wape, 1)} tone={tone(a.total.hourly.wape)} sub="what most schedules are built on" />
+              <Kpi label={OTHER_MEASURES.testDaily.label} value={pct(a.total.daily.wape, 1)} tone={tone(a.total.daily.wape)} sub={`${a.total.daily.forecast.toLocaleString()} forecast vs ${a.total.daily.actual.toLocaleString()} actual`} />
               <Kpi label="Window" value={<span className="text-[15px]">{dayYear(a.window.from)} → {dayYear(a.window.to)}</span>} />
             </KpiRow>
 
@@ -65,8 +70,8 @@ export const AccuracySection: React.FC = () => {
             <AccuracyGrid cells={a.byDayHour} dayLabel={dayName} />
           </Card>
 
-          <Card title="By queue">
-            <Table head={['Queue', 'Model used', 'Avg. miss · 15 min', 'Avg. miss · hourly', 'Avg. miss · daily', 'Over / under', 'Actual within range']} right={[2, 3, 4, 5, 6]}>
+          <Card title="Test on recent history, by queue">
+            <Table head={['Queue', 'Model used', 'Test miss · 15 min', 'Test miss · hourly', 'Test miss · daily', 'Over / under', 'Actual within range']} right={[2, 3, 4, 5, 6]}>
               {a.queues.map((q) => (
                 <tr key={q.queueId}>
                   <td className="p-3 font-medium">{q.name}</td><td className="p-3">{MODEL_LABEL[q.model] ?? q.model}</td>
@@ -80,7 +85,7 @@ export const AccuracySection: React.FC = () => {
 
           <Card title="Published forecasts vs what happened" sub="Once a published forecast's days have passed, its numbers are compared with the actuals that arrived.">
             {a.realised.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">Nothing to compare yet: publish a short-term forecast and let some of its days pass.</p> : (
-              <Table head={['Day', 'Forecast', 'Actual', 'Avg. miss · 15 min', 'Over / under']} right={[1, 2, 3, 4]}>
+              <Table head={['Day', 'Forecast', 'Actual', 'Miss · 15 min', 'Over / under']} right={[1, 2, 3, 4]}>
                 {a.realised.map((r) => (
                   <tr key={r.day}><td className="p-3">{dayName(r.day)}</td><td className="p-3 text-right font-mono">{dec(r.forecast, 0)}</td><td className="p-3 text-right font-mono">{dec(r.actual, 0)}</td><td className="p-3 text-right font-mono">{pct(r.wape15, 1)}</td><td className="p-3 text-right font-mono">{lean(r.bias)}</td></tr>
                 ))}
@@ -90,5 +95,6 @@ export const AccuracySection: React.FC = () => {
         </>
       )}
     </div>
+    </GroupScope>
   );
 };

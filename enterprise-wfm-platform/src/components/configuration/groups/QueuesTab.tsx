@@ -9,7 +9,7 @@ import { Confirm } from './shared';
 type Form = { id: string | null; name: string; channel: Channel; ahtDefault: number; concurrency: number; turnaroundHours: number; skillId: string; aliases: string };
 const blank = (): Form => ({ id: null, name: '', channel: 'VOICE', ahtDefault: 300, concurrency: 2, turnaroundHours: 24, skillId: '', aliases: '' });
 const fromQueue = (q: Queue): Form => ({ id: q.id, name: q.name, channel: q.channel, ahtDefault: q.ahtDefault, concurrency: q.concurrency, turnaroundHours: q.turnaroundHours ?? 24, skillId: q.skillId ?? '', aliases: (q.aliases ?? []).join(', ') });
-const turnaroundLabel = (h: number | null) => (!h || h <= 24 ? 'same day' : h % 24 === 0 ? `${h / 24}d turnaround` : `${h}h turnaround`);
+const turnaroundLabel = (h: number | null, email = false) => (!h || h === 24 ? 'same day' : h < 24 ? `reply within ${h}h` : h % 24 === 0 ? `${h / 24}d turnaround` : `${h}h turnaround`);
 
 export const QueuesTab: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: boolean; onChange: () => Promise<void> }> = ({ group, queues, canWrite, onChange }) => {
   const [f, setF] = useState<Form | null>(null);
@@ -24,8 +24,8 @@ export const QueuesTab: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: b
     setBusy(true); setError('');
     const aliases = f.aliases.split(/[,\n]/).map((a) => a.trim()).filter(Boolean);
     try {
-      if (f.id) await api(`/config/queues/${f.id}`, { method: 'PUT', body: { name: f.name, ahtDefault: f.ahtDefault, skillId: f.skillId || null, aliases, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' ? { turnaroundHours: f.turnaroundHours } : {}) } });
-      else await api('/config/queues', { method: 'POST', body: { name: f.name, channel: f.channel, ahtDefault: f.ahtDefault, wfmGroupId: group.id, aliases, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' ? { turnaroundHours: f.turnaroundHours } : {}), ...(f.skillId ? { skillId: f.skillId } : {}) } });
+      if (f.id) await api(`/config/queues/${f.id}`, { method: 'PUT', body: { name: f.name, ahtDefault: f.ahtDefault, skillId: f.skillId || null, aliases, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' || f.channel === 'EMAIL' ? { turnaroundHours: f.turnaroundHours } : {}) } });
+      else await api('/config/queues', { method: 'POST', body: { name: f.name, channel: f.channel, ahtDefault: f.ahtDefault, wfmGroupId: group.id, aliases, ...(f.channel === 'CHAT' ? { concurrency: f.concurrency } : {}), ...(f.channel === 'BACKOFFICE' || f.channel === 'EMAIL' ? { turnaroundHours: f.turnaroundHours } : {}), ...(f.skillId ? { skillId: f.skillId } : {}) } });
       setF(null); await onChange();
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -44,7 +44,7 @@ export const QueuesTab: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: b
           {queues.map((q) => (
             <tr key={q.id}>
               <td className="p-2.5"><div className="font-medium">{q.name}</div><div className="text-[11px] font-mono text-[#6B6B6B]">{q.code}</div></td>
-              <td className="p-2.5">{CHANNEL_LABEL[q.channel]}{q.channel === 'CHAT' ? ` · ${q.concurrency} at once` : q.channel === 'BACKOFFICE' ? ` · ${turnaroundLabel(q.turnaroundHours)}` : ''}</td>
+              <td className="p-2.5">{CHANNEL_LABEL[q.channel]}{q.channel === 'CHAT' ? ` · ${q.concurrency} at once` : q.channel === 'BACKOFFICE' || q.channel === 'EMAIL' ? ` · ${turnaroundLabel(q.turnaroundHours, q.channel === 'EMAIL')}` : ''}</td>
               <td className="p-2.5 text-[#525252]">{skillName(q.skillId)}</td>
               <td className="p-2.5">{(q.aliases ?? []).length ? <div className="flex flex-wrap gap-1">{q.aliases!.map((a) => <Pill key={a}>{a}</Pill>)}</div> : <span className="text-[#6B6B6B]">None</span>}</td>
               <td className="p-2.5 text-right font-mono">{q.ahtDefault}s</td>
@@ -65,7 +65,7 @@ export const QueuesTab: React.FC<{ group: GroupDto; queues: Queue[]; canWrite: b
             <Field label="Handle time (s)"><Input type="number" min={1} max={7200} value={f.ahtDefault} onChange={(e) => setF({ ...f, ahtDefault: Number(e.target.value) })} /></Field>
             <Field label="Skill needed" hint="Queues needing different skills are staffed skill by skill"><Select value={f.skillId} onChange={(e) => setF({ ...f, skillId: e.target.value })}><option value="">Any skill</option>{(skills.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
             {f.channel === 'CHAT' && <Field label="Chats at once"><Input type="number" min={1} max={10} value={f.concurrency} onChange={(e) => setF({ ...f, concurrency: Number(e.target.value) })} /></Field>}
-            {f.channel === 'BACKOFFICE' && <Field label="Turnaround (hours)" hint="0 or 24 = same day"><Input type="number" min={0} max={720} value={f.turnaroundHours} onChange={(e) => setF({ ...f, turnaroundHours: Number(e.target.value) })} /></Field>}
+            {(f.channel === 'BACKOFFICE' || f.channel === 'EMAIL') && <Field label={f.channel === 'EMAIL' ? 'Reply within (hours)' : 'Turnaround (hours)'} hint={f.channel === 'EMAIL' ? 'Hours the team is open. 24 = same day; for example 4 staffs the team so each message is answered within 4 open hours' : '0 or 24 = same day'}><Input type="number" min={0} max={720} value={f.turnaroundHours} onChange={(e) => setF({ ...f, turnaroundHours: Number(e.target.value) })} /></Field>}
             <div className="col-span-2"><Field label="Other names (aliases)" hint="How the phone system or your exported files name this queue, separated by commas. A file row with one of these lands here."><Input value={f.aliases} onChange={(e) => setF({ ...f, aliases: e.target.value })} placeholder="TS_VOICE, Tech Support Voice" /></Field></div>
           </div>
           {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}

@@ -13,7 +13,7 @@ import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { addDays, dayRange } from './forecast/service.ts';
-import { payWeekFor } from './payWeek.ts';
+import { payWeekFor, weekendDaysFor } from './payWeek.ts';
 import { shiftDelta } from './clockChange.ts';
 import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
 import { nightMinutes, roundHours, splitPay, type DayHours } from './payMath.ts';
@@ -76,6 +76,7 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
   if (dayRange(from, to, 400).length > 62) throw bad('Run up to 62 days (two months) at a time.');
   const st = await loadPaySettings(tx);
   const weekStart = (await payWeekFor(tx, groupId)).start;
+  const weekend = new Set(await weekendDaysFor(tx));
   const emps = await tx.q<any>(
     `SELECT e.id, e.employee_number, e.first_name || ' ' || e.last_name AS name, e.weekly_contract_hours, e.work_days_per_week, coalesce(t.name, '') AS department, coalesce(g.timezone, 'UTC') AS tz
        FROM employees e LEFT JOIN teams t ON t.id = e.team_id LEFT JOIN wfm_groups g ON g.id = e.primary_group_id
@@ -87,7 +88,7 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
   const shifts = await tx.q<any>(
     `SELECT s.employee_id, s.day::text AS day, s.start_slot, s.length_slots, ${TPL_JOIN_COLS} FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id LEFT JOIN shift_templates t ON t.id = s.template_id
       WHERE s.tenant_id = :t AND v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through) AND s.employee_id = ANY($1::uuid[]) AND s.day >= $2 AND s.day <= $3`, [ids, from, to]);
-  const holidays = new Set((await tx.q<{ d: string }>(`SELECT d::date::text AS d FROM special_events e, generate_series(e.start_day, e.end_day, interval '1 day') d WHERE e.tenant_id = :t AND e.kind = 'holiday' AND e.start_day <= $2::date AND e.end_day >= $1::date AND (e.wfm_group_id IS NULL OR $3::uuid IS NULL OR e.wfm_group_id = $3)`, [from, to, groupId])).map((r) => r.d));
+  const holidays = new Set((await tx.q<{ d: string }>(`SELECT d::date::text AS d FROM special_events e, generate_series(e.start_day, e.end_day, interval '1 day') d WHERE e.tenant_id = :t AND e.kind = 'holiday' AND e.start_day <= $2::date AND e.end_day >= $1::date AND ((e.wfm_group_id IS NULL AND e.site_id IS NULL) OR e.wfm_group_id = $3 OR (e.site_id IS NOT NULL AND e.site_id = (SELECT site_id FROM wfm_groups WHERE id = $3)) OR (e.site_id IS NULL AND $3::uuid IS NULL))`, [from, to, groupId])).map((r) => r.d));
   const leave = await tx.q<any>(`SELECT employee_id, type, start_day::text AS start_day, end_day::text AS end_day FROM time_off WHERE tenant_id = :t AND status = 'APPROVED' AND employee_id = ANY($1::uuid[]) AND end_day >= $2::date AND start_day <= $3::date`, [ids, from, to]);
 
   const punchBy = new Map<string, any[]>(), shiftBy = new Map<string, any[]>();
@@ -121,7 +122,7 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
     }
     // pay weeks: overtime is counted per week, so a period that starts mid-week still counts the days before it that fall in the same week
     const weeks = new Map<string, DayHours[]>();
-    for (const [day, c] of byDay) { const wk = mondayOf(day, weekStart); weeks.set(wk, [...(weeks.get(wk) ?? []), { day, hours: c.hours, nightHours: c.night, weekend: dowOf(day) >= 5, holiday: holidays.has(day) }]); }
+    for (const [day, c] of byDay) { const wk = mondayOf(day, weekStart); weeks.set(wk, [...(weeks.get(wk) ?? []), { day, hours: c.hours, nightHours: c.night, weekend: weekend.has(dowOf(day)), holiday: holidays.has(day) }]); }
     const contract = Number(e.weeklyContractHours) || 0, weeklyLimit = st.weeklyOvertimeAfter ?? contract;
     const tot: Record<string, number> = {}, supp: Record<string, number> = { NIGHT: 0, WEEKEND: 0 };
     for (const days of weeks.values()) {
@@ -130,11 +131,11 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
       supp.NIGHT += sp.supplements.NIGHT; supp.WEEKEND += sp.supplements.WEEKEND;
       for (const d of sp.daily) daily.push({ employeeNumber: e.employeeNumber, name: e.name, day: d.day, payCode: st.payCodes[d.category] ?? d.category, hours: d.hours });
     }
-    // paid leave: a day of the person's usual hours for each weekday (Monday to Friday) of approved leave of a paid kind
+    // paid leave: a day of the person's usual hours for each working day (not a weekend day or holiday) of approved leave of a paid kind
     const perDay = contract > 0 ? contract / Math.max(1, e.workDaysPerWeek) : 0;
     for (const l of leave.filter((x) => x.employeeId === e.id)) {
       if (!st.paidLeave.includes(l.type)) continue;
-      const days = dayRange(l.startDay < from ? from : l.startDay, l.endDay > to ? to : l.endDay, 400).filter((d) => dowOf(d) < 5 && !holidays.has(d));
+      const days = dayRange(l.startDay < from ? from : l.startDay, l.endDay > to ? to : l.endDay, 400).filter((d) => !weekend.has(dowOf(d)) && !holidays.has(d));
       const h = days.length * perDay;
       if (h > 0) { const key = `LEAVE:${l.type}`; tot[key] = (tot[key] ?? 0) + h; for (const d of days) daily.push({ employeeNumber: e.employeeNumber, name: e.name, day: d, payCode: st.payCodes[l.type === 'HOLIDAY' ? 'HOLIDAY_LEAVE' : l.type] ?? l.type, hours: r2(perDay) }); }
     }

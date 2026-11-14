@@ -4,7 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { Banner, Btn, inputCls } from '../../forecasting/ui';
 
-export type Site = { id: string; name: string; code: string; timezone: string; country: string };
+export type Site = { id: string; name: string; code: string; timezone: string; country: string; status?: 'ACTIVE' | 'CLOSED'; regionName?: string | null };
 export type GroupSummary = {
   queues: number; people: number; primaryPeople: number;
   forecast: { name: string; seq: number; kind: string; fromDay: string; toDay: string } | null;
@@ -24,13 +24,13 @@ export const DAYS_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'
 /** What a stored field is called on screen. */
 export const FIELD_LABEL: Record<string, string> = {
   name: 'Name', description: 'Description', timezone: 'Time zone', status: 'Status', siteId: 'Site', managerName: 'Group manager', serviceLevelGoal: 'Service level goal (%)', serviceLevelThresholdSec: 'Answer within (s)',
-  targetOccupancy: 'Occupancy cap (%)', shrinkagePercent: 'Shrinkage (%)', method: 'Staffing method', patienceSec: 'Customer patience (s)', blended: 'Blended pool', model: 'Forecast model',
+  targetOccupancy: 'Occupancy cap (%)', shrinkagePercent: 'Shrinkage (%)', chatEfficiency: 'Chat efficiency', method: 'Staffing method', patienceSec: 'Customer patience (s)', blended: 'Blended pool', model: 'Forecast model',
   fteHoursWeek: 'Full-time hours', payWeekStart: 'Pay week starts on', code: 'Code',
 };
 
 /** The fields whose change moves staffing numbers or weekly hours: the same list the gateway asks for a reason on. */
 export const IMPACT_LABEL: Record<string, string> = {
-  serviceLevelGoal: 'service level goal', serviceLevelThresholdSec: 'answer-within time', targetOccupancy: 'occupancy cap', shrinkagePercent: 'shrinkage', method: 'staffing method',
+  serviceLevelGoal: 'service level goal', serviceLevelThresholdSec: 'answer-within time', targetOccupancy: 'occupancy cap', shrinkagePercent: 'shrinkage', chatEfficiency: 'chat efficiency', method: 'staffing method',
   patienceSec: 'customer patience', blended: 'blended pool', fteHoursWeek: 'full-time hours', payWeekStart: 'pay week start', timezone: 'time zone',
 };
 

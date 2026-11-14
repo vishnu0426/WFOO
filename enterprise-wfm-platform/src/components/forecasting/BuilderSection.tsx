@@ -4,13 +4,17 @@
  * (/forecast/preview). Service parameters are shown read-only because they belong to the WFM group (Configuration › WFM Groups).
  * Below: a what-if for one interval and the special events the models learn from.
  */
-import React, { useEffect, useState } from "react";
+import { Waiting } from '../common/loading';
+import React, { useEffect, useRef, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { addDays, api, CHANNEL_LABEL, DOW, dayYear, dec, fmtDate, int, MODEL_LABEL, pct } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi, useVersionFull } from "./hooks";
 import { HistoryHealth } from "./HistoryHealth";
+import { EventsCalendar } from "./EventsCalendar";
+import { SectionNav, StickyFooter, useScrollSpy, type FormSection } from "./FormIndex";
+import { createBlockers, footerNote, goalSentence, occupancySentence, pickRange, shrinkageSentence, type FindingSummary } from "../../services/forecastForm";
 import { ChartTooltip } from "./ChartTooltip";
 import { Banner, Btn, Busy, Card, Empty, Field as StackField, Input as PlainInput, Pill, Select as PlainSelect, Table } from "./ui";
 import { OutlineButton, PageHeader, PrimaryButton, Section, StatusPill } from "../wfm/app-shell";
@@ -20,7 +24,7 @@ type EventRow = { id: string; groupName: string | null; queueName: string | null
 type Preview =
   | { ready: false; reason: string }
   | {
-    ready: true; dow: number; aht: number | null; ahtHistory: number | null; basis: { from: string; to: string; weeks: number };
+    ready: true; staffing?: { intervals: number; targetNotMet: number; methodFallback: number; lowConfidence: number }; dow: number; aht: number | null; ahtHistory: number | null; basis: { from: string; to: string; weeks: number };
     slots: { slot: number; volume: number; required: number; onPhones: number }[];
     day: { volume: number; peakRequired: number; agentHours: number }; week: { volume: number; agentHours: number; fte: number };
     targets: { serviceLevel: number; answerSec: number; occupancyCap: number; shrinkage: number; method: string; fteHoursWeek: number };
@@ -67,6 +71,9 @@ function Chip({ label, on, onClick, disabled, title }: { label: string; on: bool
   );
 }
 
+/** The shrinkage staffing really uses: the group's categories added up when it has any, otherwise its flat percentage. */
+const shrinkOf = (g: { shrinkagePercent: number; shrinkageEffectivePercent?: number }) => g.shrinkageEffectivePercent ?? g.shrinkagePercent;
+
 export function BuilderSection() {
   const { groups, group, setGroupId, version, can, reload, go, setNotice } = useForecast();
   const [name, setName] = useState("");
@@ -82,8 +89,8 @@ export function BuilderSection() {
   type WhatIf = { sl: number; answer: number; occ: number; shrink: number; aht: number | null };
   const [wi, setWi] = useState<WhatIf>({ sl: 80, answer: 20, occ: 85, shrink: 30, aht: null });
   useEffect(() => {
-    if (group) setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: group.shrinkagePercent, aht: null });
-  }, [group?.id, group?.serviceLevelGoal, group?.serviceLevelThresholdSec, group?.targetOccupancy, group?.shrinkagePercent]);
+    if (group) setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: shrinkOf(group), aht: null });
+  }, [group?.id, group?.serviceLevelGoal, group?.serviceLevelThresholdSec, group?.targetOccupancy, group?.shrinkagePercent, group?.shrinkageEffectivePercent]);
   const wiD = useDebounced(wi);
 
   // the horizon opens as six weeks (short-term) or a year (long-term) from today
@@ -104,6 +111,9 @@ export function BuilderSection() {
   const last = useVersionFull(version && group && version.wfmGroupId === group.id ? version : null).full;
   const lastSeries = last?.summary?.series?.[0];
   const lastPick = lastSeries?.scores.find((s) => s.selected);
+  const [fsum, setFsum] = useState<FindingSummary | null>(null);                      // what the history check found, for the section index and the footer
+  const spyRef = useRef<HTMLDivElement>(null);
+  const spy = useScrollSpy(["scope", "period", "service", "model", "history", "events"], spyRef);
 
   if (!group) return <Empty title="No WFM group yet">Create one under Configuration › WFM Groups, then import interval history.</Empty>;
 
@@ -125,11 +135,18 @@ export function BuilderSection() {
   };
 
   const pv = preview.data && preview.data.ready ? preview.data : null;
-  const changed = !!group && (wi.sl !== group.serviceLevelGoal || wi.answer !== group.serviceLevelThresholdSec || wi.occ !== group.targetOccupancy || wi.shrink !== group.shrinkagePercent || wi.aht !== null);
+  const changed = !!group && (wi.sl !== group.serviceLevelGoal || wi.answer !== group.serviceLevelThresholdSec || wi.occ !== group.targetOccupancy || wi.shrink !== shrinkOf(group) || wi.aht !== null);
   const open = pv ? pv.slots.filter((s) => s.volume > 0 || s.required > 0) : [];
   const shown = pv ? pv.slots.slice(Math.max(0, (open[0]?.slot ?? 0) - 1), (open.at(-1)?.slot ?? 95) + 2) : [];
   const chart = shown.map((s) => ({ time: `${String(Math.floor(s.slot / 4)).padStart(2, "0")}:${String((s.slot % 4) * 15).padStart(2, "0")}`, forecast: s.volume, requiredStaff: s.required }));
   const canCreate = can("forecast:create");
+  const blockers = createBlockers({ canCreate, shortestHistoryDays: shortest, horizonProblem, busy });
+  const sections: FormSection[] = [
+    { id: "scope", label: "Scope" }, { id: "period", label: "Period", badge: horizonProblem ? { text: "Check", tone: "bad" } : null }, { id: "service", label: "Service parameters" }, { id: "model", label: "Model" },
+    { id: "history", label: "History check", badge: fsum && fsum.total ? { text: String(fsum.total), tone: fsum.blocks ? "bad" : "warn" } : null },
+    { id: "events", label: "Special events" },
+  ];
+  const summary = `${kind === "SHORT" ? "Short-term" : "Long-term"} forecast for ${group.name} · ${kind === "SHORT" ? `${weeks} week${weeks === 1 ? "" : "s"}` : `${daysAhead} days`}${hStart ? ` from ${dayYear(hStart)}` : ""} · ${model === "auto" ? "best model chosen for you" : MODEL_LABEL[model] ?? model}`;
 
   return (
     <div>
@@ -137,17 +154,15 @@ export function BuilderSection() {
         breadcrumb={["Forecasting", "Forecast Builder"]}
         title="Forecast Builder"
         description="Preview the demand and staffing outcome before the forecast is created."
-        actions={canCreate
-          ? <>
-            <OutlineButton onClick={() => create(false)} disabled={busy || shortest === 0 || !!horizonProblem} title="Creates the forecast as a draft and stays here">Save as draft</OutlineButton>
-            <PrimaryButton onClick={() => create(true)} disabled={busy || shortest === 0 || !!horizonProblem}><Plus className="size-3.5" />{busy ? "Creating…" : "Create forecast"}</PrimaryButton>
-          </>
-          : <Pill>You do not have permission to create forecasts</Pill>}
       />
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="border-r">
-          <Section title="Scope">
+        <div className="border-r" ref={spyRef}>
+          <SectionNav variant="strip" sections={sections} active={spy.active} onGo={spy.go} />
+          <div className="2xl:grid 2xl:grid-cols-[190px_minmax(0,1fr)]">
+          <SectionNav variant="rail" sections={sections} active={spy.active} onGo={spy.go} />
+          <div className="min-w-0">
+          <div id="sec-scope" className="scroll-mt-14"><Section title="Scope">
             <Field label="Forecast name" hint="Your name is used exactly as typed. Blank = numbered automatically">
               <input className={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="e.g. April campaign plan" />
             </Field>
@@ -172,9 +187,9 @@ export function BuilderSection() {
                 ))}
               </div>
             </Field>
-          </Section>
+          </Section></div>
 
-          <Section title="Period">
+          <div id="sec-period" className="scroll-mt-14"><Section title="Period">
             <Field label="Type" hint={kind === "SHORT" ? "15-minute intervals, drives the schedule" : "Daily volumes, drives capacity planning"}>
               <div className="flex gap-1.5">
                 <Chip label="Short-term" on={kind === "SHORT"} onClick={() => setKind("SHORT")} />
@@ -202,27 +217,38 @@ export function BuilderSection() {
                   : <Chip label="Daily" on />}
               </div>
             </Field>
-          </Section>
+          </Section></div>
 
-          <Section title="Service parameters">
+          <div id="sec-service" className="scroll-mt-14"><Section title="Service parameters">
             <Field label="Forecast metric"><select className={input} value="Offered volume" disabled aria-label="Forecast metric"><option>Offered volume</option></select></Field>
             <Field label="AHT" hint={`Seconds per contact${pv?.ahtHistory ? `, ${pv.ahtHistory}s in your history` : ""}`}>
               <input type="number" min={1} className={input} value={wi.aht ?? pv?.ahtHistory ?? ""} placeholder="–" aria-label="AHT" onChange={(e) => setWi({ ...wi, aht: e.target.value === "" ? null : Math.max(1, Math.min(7200, +e.target.value)) })} />
             </Field>
-            <Field label="Service goal" hint="Percent answered within threshold">
-              <div className="num flex items-center gap-2">
-                <input type="number" min={1} max={99} className={input} value={wi.sl} aria-label="Service goal" onChange={(e) => setWi({ ...wi, sl: Math.max(1, Math.min(99, +e.target.value || 1)) })} />
-                <span className="text-subtle-foreground">/</span>
-                <input type="number" min={1} max={600} className={input} value={wi.answer} aria-label="Threshold seconds" onChange={(e) => setWi({ ...wi, answer: Math.max(1, Math.min(600, Math.round(+e.target.value) || 1)) })} />
-                <span className="text-[13px] text-subtle-foreground">sec</span>
+            <Field label="Service goal" hint={goalSentence(wi.sl, wi.answer)}>
+              <div className="num flex flex-wrap items-center gap-2 text-[13px]">
+                <span>Answer</span>
+                <input type="number" min={1} max={99} className={`${input} !w-20`} value={wi.sl} aria-label="Service goal" onChange={(e) => setWi({ ...wi, sl: Math.max(1, Math.min(99, +e.target.value || 1)) })} />
+                <span>% of contacts within</span>
+                <input type="number" min={1} max={600} className={`${input} !w-20`} value={wi.answer} aria-label="Threshold seconds" onChange={(e) => setWi({ ...wi, answer: Math.max(1, Math.min(600, Math.round(+e.target.value) || 1)) })} />
+                <span>seconds</span>
               </div>
             </Field>
-            <Field label="Occupancy target"><input type="number" min={31} max={100} className={input} value={wi.occ} aria-label="Occupancy target" onChange={(e) => setWi({ ...wi, occ: Math.max(31, Math.min(100, +e.target.value || 31)) })} /></Field>
-            <Field label="Shrinkage" hint="Applied to gross requirement"><input type="number" min={0} max={90} className={input} value={wi.shrink} aria-label="Shrinkage" onChange={(e) => setWi({ ...wi, shrink: Math.max(0, Math.min(90, +e.target.value || 0)) })} /></Field>
+            <Field label="Occupancy target" hint={occupancySentence(wi.occ)}>
+              <div className="num flex items-center gap-2 text-[13px]">
+                <input type="number" min={31} max={100} className={`${input} !w-20`} value={wi.occ} aria-label="Occupancy target" onChange={(e) => setWi({ ...wi, occ: Math.max(31, Math.min(100, +e.target.value || 31)) })} />
+                <span>% of logged-in time, at most</span>
+              </div>
+            </Field>
+            <Field label="Shrinkage" hint={shrinkageSentence(wi.shrink) + (group.shrinkageSource === "CATEGORIES" ? ". This is the total of the group's shrinkage categories." : "")}>
+              <div className="num flex items-center gap-2 text-[13px]">
+                <input type="number" min={0} max={90} className={`${input} !w-20`} value={wi.shrink} aria-label="Shrinkage" onChange={(e) => setWi({ ...wi, shrink: Math.max(0, Math.min(90, +e.target.value || 0)) })} />
+                <span>% of paid time, added to the gross requirement</span>
+              </div>
+            </Field>
             {changed ? (
               <div className="flex flex-wrap items-center gap-3 border-b bg-warning-bg/60 px-6 py-3 text-[12px] text-warning">
-                <span>Preview only: the forecast is created with {group.name}'s saved targets ({group.serviceLevelGoal}/{group.serviceLevelThresholdSec}s, {group.targetOccupancy}% occupancy, {group.shrinkagePercent}% shrinkage).</span>
-                <button className="font-medium underline" onClick={() => setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: group.shrinkagePercent, aht: null })}>Reset to the group</button>
+                <span>Preview only: the forecast is created with {group.name}'s saved targets ({group.serviceLevelGoal}/{group.serviceLevelThresholdSec}s, {group.targetOccupancy}% occupancy, {shrinkOf(group)}% shrinkage).</span>
+                <button className="font-medium underline" onClick={() => setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: shrinkOf(group), aht: null })}>Reset to the group</button>
                 <button className="font-medium underline" onClick={() => go("wfm-groups", "configuration")}>Change the group's targets</button>
               </div>
             ) : (
@@ -231,9 +257,9 @@ export function BuilderSection() {
                 <button className="underline" onClick={() => go("wfm-groups", "configuration")}>Change the group's own targets in Configuration › WFM Groups</button>.
               </div>
             )}
-          </Section>
+          </Section></div>
 
-          <Section title="Model">
+          <div id="sec-model" className="scroll-mt-14"><Section title="Model">
             <div className="mx-6 my-4 rounded-md border bg-info-bg/60 p-4">
               <div className="flex items-center gap-2 text-[13px] font-semibold">
                 <Sparkles className="size-4 text-info" /> Auto ensemble recommended
@@ -267,7 +293,11 @@ export function BuilderSection() {
                 </select>
               </Field>
             )}
-          </Section>
+          </Section></div>
+          <div id="sec-history" className="scroll-mt-14 p-6"><HistoryHealth groupId={group.id} onSummary={setFsum} onGoSection={spy.go} /></div>
+          <div id="sec-events" className="scroll-mt-14 p-6"><EventsCard groupId={group.id} canEdit={canCreate} /></div>
+          </div>
+          </div>
         </div>
 
         <aside className="h-fit xl:sticky xl:top-0">
@@ -281,10 +311,12 @@ export function BuilderSection() {
               {DOW.map((d, n) => <Chip key={d} label={d} on={(pv?.dow ?? dow) === n} onClick={() => setDow(n)} />)}
             </div>
           </div>
-          {preview.loading && !pv ? <div className="p-6"><Busy text="Working out a typical day…" /></div>
+          {preview.loading && !pv ? <div className="p-6"><Waiting what="a typical day" shape="panel" reload={preview.reload} /></div>
             : preview.error ? <div className="p-6"><Banner kind="err">{preview.error}</Banner></div>
               : !pv ? <div className="p-6 text-[13px] text-muted-foreground">{preview.data && preview.data.ready === false ? preview.data.reason : ""}</div> : (
                 <>
+                  {!!pv.staffing?.targetNotMet && <div className="px-6 pt-4"><Banner kind="warn">{pv.staffing.targetNotMet} of {pv.staffing.intervals} intervals cannot reach the service level target even at the engine's agent limit, so the staffing shown there falls short of the target. Check the volume, handle time and targets.</Banner></div>}
+                  {!!pv.staffing?.methodFallback && <div className="px-6 pt-4"><Banner kind="info">{pv.staffing.methodFallback} intervals were sized with Erlang C because Erlang A was not reliable for that load; Erlang C never needs fewer agents, so those numbers are on the safe side.</Banner></div>}
                   <div className="num grid grid-cols-2 divide-x divide-y border-b">
                     <Stat label={`Forecast volume, a ${DOW[pv.dow]}`} value={int(pv.day.volume)} />
                     <Stat label="Peak required staff" value={String(pv.day.peakRequired)} />
@@ -323,10 +355,18 @@ export function BuilderSection() {
         </aside>
       </div>
 
-      <div className="space-y-6 p-6">
-        <HistoryHealth groupId={group.id} />
-        <EventsCard groupId={group.id} canEdit={canCreate} />
-      </div>
+      <StickyFooter summary={summary}
+        notes={<>
+          {blockers.map((b) => <div key={b} className="text-critical">{b}</div>)}
+          {fsum && footerNote(fsum) && <div className={footerNote(fsum)!.tone === "bad" ? "text-critical" : "text-warning"}>{footerNote(fsum)!.text}. <button type="button" className="underline" onClick={() => spy.go("history")}>Review it</button></div>}
+        </>}>
+        {canCreate ? (
+          <>
+            <OutlineButton onClick={() => create(false)} disabled={busy || blockers.length > 0} title="Creates the forecast as a draft and stays here">Save draft</OutlineButton>
+            <PrimaryButton onClick={() => create(true)} disabled={busy || blockers.length > 0} title="Creates the forecast as a draft and opens it on the dashboard"><Plus className="size-3.5" />{busy ? "Creating…" : "Create forecast"}</PrimaryButton>
+          </>
+        ) : <Pill>You do not have permission to create forecasts</Pill>}
+      </StickyFooter>
     </div>
   );
 }
@@ -345,8 +385,10 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
   };
   return (
     <Card title="Special events" sub="Holidays, campaigns, outages. The models learn the uplift from past events and apply the same effect to future ones; the percentage you enter is used until there is history to learn from. Ramp days let the effect build up before the event and taper off after, instead of switching on and off at its exact dates.">
+      <EventsCalendar events={events.data ?? []} range={f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null}
+        onPick={canEdit ? (d) => { const r = pickRange(f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null, d); setF({ ...f, startDay: r.start, endDay: r.end }); } : undefined} />
       {events.data && events.data.length > 0 && (
-        <Table head={['Event', 'Type', 'From', 'To', 'Expected change', 'Ramp', 'Applies to', '']} right={[4]}>
+        <div className="overflow-x-auto"><Table head={['Event', 'Type', 'From', 'To', 'Expected change', 'Ramp', 'Applies to', '']} right={[4]}>
           {events.data.map((e) => (
             <tr key={e.id}>
               <td className="p-3 font-medium">{e.name}</td><td className="p-3 capitalize">{e.kind}</td>
@@ -357,11 +399,11 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
               <td className="p-3 text-right">{canEdit && <button aria-label="Delete event" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={async () => { await api(`/forecast/events/${e.id}`, { method: 'DELETE' }); setTick((t) => t + 1); }}><Trash2 className="w-4 h-4" /></button>}</td>
             </tr>
           ))}
-        </Table>
+        </Table></div>
       )}
       {events.data?.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No events recorded yet.</p>}
       {canEdit && (
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 items-end">
           <div className="col-span-2"><StackField label="Name"><PlainInput value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Spring sale" /></StackField></div>
           <StackField label="Type"><PlainSelect value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{['campaign', 'holiday', 'outage', 'other'].map((k) => <option key={k} value={k}>{k}</option>)}</PlainSelect></StackField>
           <StackField label="From"><PlainInput type="date" value={f.startDay} onChange={(e) => setF({ ...f, startDay: e.target.value })} /></StackField>
@@ -369,7 +411,7 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
           <StackField label="Change %"><PlainInput type="number" value={f.upliftPct} onChange={(e) => setF({ ...f, upliftPct: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp in (days)"><PlainInput type="number" min={0} max={60} value={f.leadDays} onChange={(e) => setF({ ...f, leadDays: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp out (days)"><PlainInput type="number" min={0} max={60} value={f.lagDays} onChange={(e) => setF({ ...f, lagDays: Number(e.target.value) })} /></StackField>
-          <div className="col-span-2 md:col-span-6 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Add event</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
+          <div className="col-span-2 lg:col-span-4 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Add event</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
     </Card>

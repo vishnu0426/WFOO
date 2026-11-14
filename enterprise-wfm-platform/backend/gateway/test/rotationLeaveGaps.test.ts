@@ -11,7 +11,8 @@ const BASE = process.env.BASE_URL || 'http://localhost:4000';
 const TENANT = process.env.TENANT || 'ORG';
 const PASSWORD = process.env.ADMIN_PASSWORD || '';
 const RUN = Date.now().toString(36);
-const MON = '2026-11-02';   // a Monday in the future
+/** The Monday two to three weeks from now (it was a fixed date that stopped being in the future). */
+const MON = (() => { const d = new Date(); d.setUTCDate(d.getUTCDate() + 14 + ((8 - d.getUTCDay()) % 7)); return d.toISOString().slice(0, 10); })();
 
 async function call(token: string | null, method: string, path: string, body?: unknown) {
   const r = await fetch(`${BASE}/api/v1${path}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -117,7 +118,12 @@ describe('rotations: approved time off, and gaps offered as overtime', () => {
     assert.equal(pub.status, 200, pub.text);
     const s = await call(admin, 'GET', `/scheduling/offers/shortages?groupId=${ctx.group.id}&from=${MON}&days=7`);
     assert.equal(s.status, 200, s.text);
-    assert.equal(s.json.gaps.find((g: any) => g.day === addDays(MON, 1)), undefined, 'the fill covers the person on leave, so Tuesday is no longer short');
+    // Four people are needed and exactly four are rostered, so a meal (which is not cover) leaves a short stretch on every day, Monday included. What the fill must remove is the
+    // whole-shift gap left by the person on leave: Tuesday's remaining gap is a meal-sized stretch inside the shift, not 07:00 to 15:00, and is no worse than other full days.
+    const tue = s.json.gaps.find((g: any) => g.day === addDays(MON, 1));
+    assert.ok(!tue || (tue.startTime !== '07:00' && tue.shortHours <= 2.5), `the fill covers the person on leave, so Tuesday is only short around meals (got ${JSON.stringify(tue)})`);
+    const mon = s.json.gaps.find((g: any) => g.day === MON);
+    assert.ok(mon && mon.shortHours <= 2.5, 'a day with nobody on leave is short around meals too: that is the meal rule, not the leave');
     const sat = s.json.gaps.find((g: any) => g.day === addDays(MON, 5));
     assert.ok(sat && sat.spots < 4, 'the fill person now counts at the weekend, and the rest is still short');
   });

@@ -1,4 +1,5 @@
 """Backup solvers and failover: every backend answers the same question, obeys the same hard rules, and a failure of one never stops the schedule."""
+import sys
 import threading
 
 import pytest
@@ -104,7 +105,7 @@ def test_weekend_counts_from_earlier_windows_carry_into_fairness():
     req = build(n_emp=6, days=14, weekend=True)
     req.time_limit_sec = 30
     for e in req.employees:
-        e.prior_weekend = 4 if e.id == 0 else 0
+        e.prior_weekend = 32 if e.id == 0 else 0
     res = scheduling.solve_period(req)
     assert res.status in ("OPTIMAL", "FEASIBLE")
     mine = sum(1 for a in res.assignments if a.employee == 0 and (req.first_dow + a.day) % 7 >= 5)
@@ -325,3 +326,89 @@ def test_a_staged_search_runs_to_the_end_on_a_model_that_needs_more_than_one_sta
     assert res.status in ("OPTIMAL", "FEASIBLE")
     assert not any("failed" in a for a in res.attempts), res.attempts
     check(req, res)
+
+
+# ---------------------------------------------------------------- the lifecycle of solver processes
+
+def test_a_solver_process_that_hangs_is_ended_at_a_hard_limit_and_the_chain_moves_on(monkeypatch, tmp_path):
+    hangs = tmp_path / "hangs.py"
+    hangs.write_text("import time; time.sleep(600)")                     # stuck before it ever writes an answer
+    monkeypatch.setattr(scheduling, "WORKER_SCRIPT", str(hangs))
+    monkeypatch.setenv("ENGINE_WORKER_MAX_SEC", "2")
+    req = small(backend="cpsat,greedy")
+    res = scheduling.solve(req)
+    assert res.backend == "greedy" and res.status in ("OPTIMAL", "FEASIBLE"), res.attempts
+    assert res.attempts[0].startswith("cpsat: failed (the solver process did not finish within 2 s"), res.attempts
+    assert not scheduling._LIVE, "the stuck process is no longer tracked, and was killed"
+    check(req, res)
+
+
+def test_a_hang_is_not_retried(monkeypatch, tmp_path):
+    starts = tmp_path / "starts.txt"
+    hangs = tmp_path / "hangs.py"
+    hangs.write_text(f"import time\nopen(r'{starts}', 'a').write('x')\ntime.sleep(600)")
+    monkeypatch.setattr(scheduling, "WORKER_SCRIPT", str(hangs))
+    monkeypatch.setenv("ENGINE_WORKER_MAX_SEC", "2")
+    scheduling.solve(small(backend="cpsat,greedy"))
+    assert starts.read_text() == "x", "the same model would stick again: one attempt only"
+
+
+def test_stopping_the_engine_ends_every_solver_process():
+    import subprocess, sys
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    with scheduling._LIVE_LOCK:
+        scheduling._LIVE.add(p)
+    scheduling.stop_all_workers()
+    p.wait(10)
+    assert p.poll() is not None
+    scheduling._LIVE.discard(p)
+
+
+def test_the_hard_limit_follows_the_time_limit(monkeypatch):
+    monkeypatch.delenv("ENGINE_WORKER_MAX_SEC", raising=False)
+    assert scheduling.worker_deadline_sec(30) == 180 and scheduling.worker_deadline_sec(0) == 160
+    monkeypatch.setenv("ENGINE_WORKER_MAX_SEC", "45")
+    assert scheduling.worker_deadline_sec(30) == 45
+
+
+def test_a_worker_notices_when_the_engine_that_started_it_is_gone():
+    import os, subprocess, sys
+    import solve_worker
+    assert solve_worker._parent_alive(os.getpid())
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait(10)
+    assert not solve_worker._parent_alive(gone.pid)
+
+
+# ---------------------------------------------------------------- memory, in a container or not
+
+def _cgroup(tmp_path, v2=True, limit=2 * 1024**3, used=1536 * 1024**2, cache=256 * 1024**2):
+    if v2:
+        (tmp_path / "memory.max").write_text(str(limit))
+        (tmp_path / "memory.current").write_text(str(used))
+        (tmp_path / "memory.stat").write_text(f"anon 1\ninactive_file {cache}\n")
+    else:
+        (tmp_path / "memory").mkdir()
+        (tmp_path / "memory" / "memory.limit_in_bytes").write_text(str(limit))
+        (tmp_path / "memory" / "memory.usage_in_bytes").write_text(str(used))
+        (tmp_path / "memory" / "memory.stat").write_text(f"total_inactive_file {cache}\n")
+    return str(tmp_path)
+
+
+@pytest.mark.parametrize("v2", [True, False])
+def test_the_container_limit_and_what_it_has_used_decide_what_is_left(tmp_path, v2):
+    root = _cgroup(tmp_path, v2=v2)
+    limit, used = scheduling.cgroup_memory(root)
+    assert limit == 2 * 1024**3 and used == (1536 - 256) * 1024**2, "cached files are not counted as used"
+
+
+def test_no_limit_means_no_container_figure(tmp_path):
+    (tmp_path / "memory.max").write_text("max")
+    assert scheduling.cgroup_memory(str(tmp_path)) is None
+    assert scheduling.cgroup_memory(str(tmp_path / "nowhere")) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="container limits are read on Linux")
+def test_free_memory_is_the_smaller_of_the_machine_and_the_container(tmp_path):
+    root = _cgroup(tmp_path, limit=512 * 1024**2, used=500 * 1024**2, cache=0)
+    assert scheduling.free_memory_mb(root) <= 12, "12 MB left in the container, whatever the machine has"

@@ -22,8 +22,10 @@ describe('blockedReason answers from one person\'s own rows', () => {
       { employeeId: 'p1', day: '2026-11-10', startSlot: 0, lengthSlots: 96, groupName: 'Sales' },
     ] });
     assert.equal(blockedReason(ctx, person, DAY, 40, 16), 'is already scheduled for Billing then');
-    assert.equal(blockedReason(ctx, person, DAY, 64, 16), null, 'starts exactly when the other shift ends');
-    assert.equal(blockedReason(ctx, person, DAY, 0, 32), null, 'ends exactly when the other shift starts');
+    // one shift a day across groups: touching shifts are no longer allowed on the same day either
+    assert.match(blockedReason(ctx, person, DAY, 64, 16)!, /already works a shift for Billing that day/, 'starts exactly when the other shift ends');
+    assert.match(blockedReason(ctx, person, DAY, 0, 32)!, /already works a shift for Billing that day/, 'ends exactly when the other shift starts');
+    assert.equal(blockedReason(ctx, person, '2026-11-12', 36, 16), null, 'a day with nothing elsewhere is free');
   });
   it('still applies time off and availability to the right person', () => {
     const ctx = ctxWith({

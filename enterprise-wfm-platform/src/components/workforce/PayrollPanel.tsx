@@ -2,6 +2,7 @@
  * Workforce › Payroll. A pay period's worked time becomes pay codes (regular, overtime, night, weekend, holiday, paid leave). Check it, approve it (that locks it) and
  * export it for the payroll system. The settings say what counts as night, when overtime starts and how hours are rounded.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { api, dec, download, weekFloor } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
@@ -88,7 +89,7 @@ export const PayrollPanel: React.FC = () => {
       )}
 
       <Card title="Pay runs">
-        {runs.loading && !runs.data ? <Busy text="Loading…" /> : (runs.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No pay runs yet.</p> : (
+        {runs.loading && !runs.data ? <Waiting what="pay runs" shape="table" reload={runs.reload} /> : runs.error && !runs.data ? <LoadFailed what="pay runs" error={runs.error} reload={runs.reload} /> : (runs.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No pay runs yet.</p> : (
           <table className="w-full text-[12px]">
             <thead className="text-left text-[#6B6B6B]"><tr><th className="py-1">Period</th><th>Who</th><th>Status</th><th className="text-right">People</th><th className="text-right">Hours</th><th className="text-right">Overtime</th><th /></tr></thead>
             <tbody>{runs.data!.map((r) => (

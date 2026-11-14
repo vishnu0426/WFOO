@@ -10,7 +10,6 @@ import { LiveEvent } from '../../services/live';
 
 interface AppHeaderProps {
   session: Session;
-  activeGroupName?: string | null;
   events: LiveEvent[];
   unread: number;
   onMarkRead: () => void;
@@ -26,7 +25,7 @@ const ROLE_LABEL: Record<string, string> = {
 const ago = (t: number) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`; };
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?';
 
-export const AppHeader: React.FC<AppHeaderProps> = ({ session, activeGroupName, events, unread, onMarkRead, onOpenCommandPalette, onNavigate, onSignOut, onSwitchWorkspace }) => {
+export const AppHeader: React.FC<AppHeaderProps> = ({ session, events, unread, onMarkRead, onOpenCommandPalette, onNavigate, onSignOut, onSwitchWorkspace }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [showBell, setShowBell] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
@@ -121,29 +120,26 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ session, activeGroupName, 
             </div>
           )}
         </div>
-
-        {activeGroupName && (
-          <div className="hidden lg:flex items-center gap-2 text-[12px] text-[#525252] bg-[#FAFAF8] px-2.5 py-1 rounded border border-[#E5E5E0]">
-            <Layers className="w-3.5 h-3.5 text-[#6B6B6B]" />
-            <span>Active WFM Group:</span>
-            <span className="font-semibold text-[#171717]">{activeGroupName}</span>
-          </div>
+        {session.access?.restricted && (
+          <span className="hidden lg:inline-flex items-center gap-1.5 text-[12px] text-[#525252] bg-[#FAFAF8] px-2.5 py-1 rounded border border-[#E5E5E0]" title="Your access is limited to these sites and regions">
+            Your access: <span className="font-semibold text-[#171717]">{[...session.access.regions, ...session.access.sites].map((x) => x.name).join(', ') || 'no sites yet'}</span>
+          </span>
         )}
       </div>
 
       <div className="flex-1 max-w-lg mx-6">
-        <button type="button" onClick={onOpenCommandPalette} aria-label="Search (Ctrl+K)" className="w-full flex items-center justify-between px-3 py-1.5 bg-[#FAFAF8] hover:bg-[#F5F5F2] border border-[#E5E5E0] hover:border-[#D6D6D0] rounded cursor-pointer transition-colors">
+        <button type="button" onClick={onOpenCommandPalette} className="w-full flex items-center justify-between px-3 py-1.5 bg-[#FAFAF8] hover:bg-[#F5F5F2] border border-[#E5E5E0] hover:border-[#D6D6D0] rounded cursor-pointer transition-colors">
           <div className="flex items-center gap-2 text-[#6B6B6B] text-[13px]">
             <Search className="w-4 h-4 text-[#6B6B6B]" aria-hidden="true" />
             <span>Search screens, people, WFM groups...</span>
           </div>
-          <div className="flex items-center gap-1 text-[11px] text-[#6B6B6B] bg-[#FFFFFF] border border-[#E5E5E0] px-1.5 py-0.5 rounded shadow-xs font-mono"><Command className="w-3 h-3" aria-hidden="true" /><span>K</span></div>
+          <div className="flex items-center gap-1 text-[11px] text-[#6B6B6B] bg-[#FFFFFF] border border-[#E5E5E0] px-1.5 py-0.5 rounded shadow-xs font-mono"><Command className="w-3 h-3" aria-hidden="true" /><span>K</span><span className="sr-only"> keyboard shortcut</span></div>
         </button>
       </div>
 
       <div className="flex items-center gap-2.5">
         <div className="relative">
-          <button onClick={() => { setShowBell(!showBell); setShowMenu(false); if (!showBell) onMarkRead(); }} className="p-2 text-[#525252] hover:text-[#171717] hover:bg-[#F5F5F2] rounded relative transition-colors" title="Notifications" aria-label="Notifications">
+          <button onClick={() => { setShowBell(!showBell); setShowMenu(false); if (!showBell) onMarkRead(); }} className="p-2 text-[#525252] hover:text-[#171717] hover:bg-[#F5F5F2] rounded relative transition-colors" title="Notifications" aria-label={unread > 0 ? `${unread > 9 ? '9+' : unread} unread notifications` : 'Notifications'}>
             <Bell className="w-4 h-4" />
             {unread > 0 && <span className="absolute top-1 right-1 min-w-4 h-4 px-1 rounded-full bg-[#C84A4A] text-white text-[10px] font-semibold flex items-center justify-center ring-2 ring-white">{unread > 9 ? '9+' : unread}</span>}
           </button>
@@ -168,12 +164,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ session, activeGroupName, 
         </div>
 
         <div className="relative">
-          <button onClick={() => { setShowMenu(!showMenu); setShowBell(false); }} className="flex items-center gap-2 pl-2 border-l border-[#E5E5E0] hover:opacity-80" aria-label="Account menu">
+          <button onClick={() => { setShowMenu(!showMenu); setShowBell(false); }} className="flex items-center gap-2 pl-2 border-l border-[#E5E5E0] hover:opacity-80">
             <div className="w-7 h-7 rounded-full bg-[#FAFAF8] border border-[#D6D6D0] flex items-center justify-center text-[12px] font-semibold text-[#171717]">{initials(user.userName)}</div>
             <div className="hidden xl:block text-left">
               <div className="text-[12px] font-semibold text-[#171717] leading-none">{user.userName}</div>
               <div className="text-[11px] text-[#6B6B6B] leading-tight">{ROLE_LABEL[user.role] ?? user.role}</div>
             </div>
+            <span className="sr-only">account menu</span>
             <ChevronDown className="w-3 h-3 text-[#6B6B6B]" />
           </button>
           {showMenu && (

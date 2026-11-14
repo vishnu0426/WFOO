@@ -20,6 +20,8 @@ import { loadPolicy } from './policyRoutes.ts';
 import { requirementFor } from './scheduleRoutes.ts';
 import { suggestBreakMoves, type ShiftActs } from './breakOptimizer.ts';
 import { cached, dropAdherence } from './adherenceCache.ts';
+import { addShiftCoverage } from './shiftCoverage.ts';
+import { dayCoverage, groupAdherencePercent, weightedMean } from './overviewMath.ts';
 
 export const intraday = Router();
 const uuid = z.string().uuid();
@@ -75,7 +77,9 @@ const EventsBody = z.object({
 /** Shared with the Integration Station: a connector's live/webhook agent-state records go through this exact path too. */
 export async function ingestAgentEvents(tenantId: string, events: z.infer<typeof EventsBody>['events']) {
   return withTenant(tenantId, async (tx) => {
-    const emps = await tx.q<{ id: string; employeeNumber: string }>('SELECT id, employee_number FROM employees WHERE tenant_id = :t');
+    // only the people named in this batch are looked up: a live feed sends one event at a time, and reading every employee for each one does not scale
+    const wanted = [...new Set(events.map((ev) => ev.employeeNumber.toLowerCase()))];
+    const emps = await tx.q<{ id: string; employeeNumber: string }>('SELECT id, employee_number FROM employees WHERE tenant_id = :t AND lower(employee_number) = ANY($1::text[])', [wanted]);
     const byNo = new Map(emps.map((e) => [e.employeeNumber.toLowerCase(), e.id]));
     const errors: { index: number; message: string }[] = [];
     const rows: { e: string; s: string; r: string; at: string }[] = [];
@@ -84,8 +88,9 @@ export async function ingestAgentEvents(tenantId: string, events: z.infer<typeof
       const id = byNo.get(ev.employeeNumber.toLowerCase());
       if (!id) return errors.push({ index, message: `Unknown employee number '${ev.employeeNumber}'` });
       const t = ev.at ? Date.parse(ev.at) : now;
+      if (!Number.isFinite(t)) return errors.push({ index, message: `The time '${ev.at}' could not be read` });
       if (t > now + 5 * 60_000) return errors.push({ index, message: 'The time is in the future' });
-      rows.push({ e: id, s: ev.state, r: ev.reason ?? '', at: new Date(t).toISOString() });
+      rows.push({ e: id, s: ev.state.slice(0, 80), r: (ev.reason ?? '').slice(0, 80), at: new Date(t).toISOString() });
     });
     if (rows.length) await tx.exec(
       'INSERT INTO agent_state_events (tenant_id, employee_id, state, reason, at) SELECT :t, x.e, x.s, x.r, x.a::timestamptz FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS x(e, s, r, a)',
@@ -342,7 +347,7 @@ export function summarise(rows: AgentRow[]) {
   const scored = rows.filter((a) => a.dayPercent !== null);
   return {
     total: rows.length, inAdherence: count('IN'), outOfAdherence: count('OUT'), unscheduled: count('UNSCHEDULED'), ignored: count('IGNORED'), unknown: count('UNKNOWN'),
-    dayPercent: scored.length ? Math.round((scored.reduce((s, a) => s + a.dayPercent!, 0) / scored.length) * 10) / 10 : null,
+    dayPercent: groupAdherencePercent(rows),
   };
 }
 
@@ -498,6 +503,12 @@ export async function liveReforecast(tenantId: string, groupId: string, day: str
 
 intraday.get('/coverage', requires('intraday:read'), async (req, res) => {
   const p = me(req), q = parse(CoverageQ, req.query);
+  res.json(await coverageFor(p.tenantId, q));
+});
+
+/** Live coverage of one day for one group: the forecast's requirement, the people scheduled, what actually arrived, the gaps ahead. The Today page and the Live coverage screen show this one result. */
+export async function coverageFor(tenantId: string, q: z.infer<typeof CoverageQ>): Promise<any> {
+  const p = { tenantId };
   const { group, v, actuals, shifts, lastWeek } = await withTenant(p.tenantId, async (tx) => {
     const group = await loadGroup(tx, q.groupId);
     const day = q.day ?? todayIn(group.timezone);
@@ -511,20 +522,21 @@ intraday.get('/coverage', requires('intraday:read'), async (req, res) => {
       `SELECT h.slot, sum(h.volume)::int AS volume, sum(h.abandoned)::int AS abandoned, sum(h.volume * h.aht_sec)::float8 / nullif(sum(h.volume), 0) AS aht
        FROM interval_history h JOIN queues qu ON qu.id = h.queue_id WHERE h.tenant_id = :t AND qu.wfm_group_id = $1 AND h.day = $2 GROUP BY h.slot ORDER BY h.slot`, [q.groupId, day]);
     const shifts = await tx.q<any>(
-      `SELECT s.start_slot, s.length_slots FROM schedule_shifts s JOIN schedule_versions sv ON sv.id = s.version_id
-       WHERE s.tenant_id = :t AND sv.wfm_group_id = $1 AND sv.status = 'PUBLISHED' AND (sv.publish_through IS NULL OR s.day <= sv.publish_through) AND s.day = $2`, [q.groupId, day]);
+      // today's shifts WITH their meals and breaks (a meal covers nothing), and yesterday's, whose late hours run on past midnight into today
+      `SELECT s.start_slot, s.length_slots, s.activities, (s.day = $2::date) AS today FROM schedule_shifts s JOIN schedule_versions sv ON sv.id = s.version_id
+       WHERE s.tenant_id = :t AND sv.wfm_group_id = $1 AND sv.status = 'PUBLISHED' AND (sv.publish_through IS NULL OR s.day <= sv.publish_through) AND s.day IN ($2::date, $2::date - 1)`, [q.groupId, day]);
     return { group: { ...group, day }, v, actuals, shifts, lastWeek };
   });
   const day = group.day, isToday = day === todayIn(group.timezone);
-  if (!v) return res.json({ day, ready: false, reason: q.versionId ? 'That short-term forecast was not found for this group.' : 'There is no published short-term forecast for this group yet. Publish one under Forecasting first.' });
+  if (!v) return ({ day, ready: false, reason: q.versionId ? 'That short-term forecast was not found for this group.' : 'There is no published short-term forecast for this group yet. Publish one under Forecasting first.' });
   const { records } = await versionRecords(p.tenantId, v);
   const fc = new Map(records.filter((r) => r.day === day).map((r) => [r.slot, r]));
-  if (!fc.size) return res.json({ day, ready: false, reason: `The forecast "${v.name}" does not cover ${day} (it runs ${v.fromDay} to ${v.toDay}).` });
+  if (!fc.size) return ({ day, ready: false, reason: `The forecast "${v.name}" does not cover ${day} (it runs ${v.fromDay} to ${v.toDay}).` });
   const act = new Map(actuals.map((a) => [a.slot, a]));
   const hist = new Map<number, number>(lastWeek.map((h: any) => [h.slot, h.volume]));
   const nowSlot = isToday ? Math.floor(localClock(group.timezone) / 15) : SPD;   // first slot that has not completed
   const sched = new Array(SPD).fill(0);
-  for (const s of shifts) for (let g = s.startSlot; g < Math.min(SPD, s.startSlot + s.lengthSlots); g++) sched[g]++;
+  for (const s of shifts) addShiftCoverage(sched, s.today ? 0 : -1, s);          // -1: the day before, so only the part after midnight lands here
 
   // reforecast the rest of the day from what has actually arrived
   let ratio = 1, credibility = 0; const adj = new Map<number, number>();
@@ -549,7 +561,7 @@ intraday.get('/coverage', requires('intraday:read'), async (req, res) => {
       abandoned: a && s < nowSlot ? a.abandoned : null, required: Math.round(need * 10) / 10, requiredReforecast: reNeed === null ? null : Math.round(reNeed * 10) / 10, scheduled: sched[s],
     };
   });
-  const open = slots.filter((s) => s.forecast > 0 || s.scheduled > 0 || s.actual !== null);
+  const open = slots.filter((s) => s.forecast > 0 || s.scheduled > 0 || s.actual !== null);   // (people scheduled already leave out meals and the like)
   const upcoming = slots.filter((s) => s.slot >= nowSlot && (s.forecast > 0 || s.scheduled > 0));
   const needOf = (s: (typeof slots)[number]) => s.requiredReforecast ?? s.required;
   const fSoFar = slots.filter((s) => s.slot < nowSlot).reduce((t, s) => t + s.forecast, 0);
@@ -559,22 +571,27 @@ intraday.get('/coverage', requires('intraday:read'), async (req, res) => {
   const actualSum = withActual.reduce((t, s) => t + (s.actual ?? 0), 0);
   const wape = actualSum > 0 ? withActual.reduce((t, s) => t + Math.abs((s.actual ?? 0) - s.forecast), 0) / actualSum : null;
   const workSlots = slots.filter((s) => s.required > 0);
+  const day_ = dayCoverage(slots.map((s) => needOf(s)), slots.map((s) => s.scheduled));
   const stats = {
-    wape, coveragePercent: workSlots.length ? Math.round((workSlots.filter((s) => s.scheduled >= s.required).length / workSlots.length) * 100) : null,
+    wape, wapeBasis: 'INTERVAL' as const,
+    // coverage the way a schedule's is measured: the share of the required people-time that is scheduled (not how many intervals are fully met, which hides how short the short ones are)
+    coveragePercent: day_.coveragePercent, intervalsMetPercent: workSlots.length ? Math.round((workSlots.filter((s) => s.scheduled >= s.required).length / workSlots.length) * 1000) / 10 : null,
+    requiredHours: day_.requiredHours, scheduledHours: day_.scheduledHours, shortHours: day_.shortHours, surplusHours: day_.surplusHours,
     peakRequired: Math.max(0, ...slots.map((s) => s.required)),
     ahtAvg: (() => { const vol = slots.reduce((t, s) => t + s.forecast, 0); return vol ? Math.round(slots.reduce((t, s) => t + (s.aht ?? 0) * s.forecast, 0) / vol) : null; })(),
-    serviceLevel: workSlots.length ? workSlots.reduce((t, s) => t + (s.serviceLevel ?? 0), 0) / workSlots.length : null,
-    occupancy: workSlots.length ? workSlots.reduce((t, s) => t + (s.occupancy ?? 0), 0) / workSlots.length : null,
+    // weighted by the contacts in each interval: a quiet interval must not count as much as a busy one
+    serviceLevel: weightedMean(slots.filter((s) => s.serviceLevel !== null && s.forecast > 0).map((s) => ({ value: s.serviceLevel as number, weight: s.forecast }))),
+    occupancy: weightedMean(slots.filter((s) => s.occupancy !== null && s.forecast > 0).map((s) => ({ value: s.occupancy as number, weight: s.forecast * (s.aht ?? 0) }))),
   };
   const gaps = upcoming.map((s) => ({ slot: s.slot, time: s.time, gap: Math.round((s.scheduled - needOf(s)) * 10) / 10 }));
-  res.json({
+  return ({
     day, ready: true, timezone: group.timezone, nowSlot, nowTime: isToday ? hhmm(nowSlot * 15) : null, forecastName: v.name,
     reforecast: { applied: adj.size > 0, ratio: Math.round(ratio * 100) / 100, credibility: Math.round(credibility * 100) / 100 },
     totals: { forecastSoFar: Math.round(fSoFar), actualSoFar: aSoFar, forecastDay: Math.round(slots.reduce((t, s) => t + s.forecast, 0)), reforecastDay: adj.size ? Math.round(slots.reduce((t, s) => t + (s.slot < nowSlot ? (s.actual ?? 0) : (s.reforecast ?? s.forecast)), 0)) : null },
-    hasActuals: actuals.length > 0, hasSchedule: shifts.length > 0, first: open[0]?.slot ?? 0, last: open.at(-1)?.slot ?? SPD - 1,
+    hasActuals: actuals.length > 0, hasSchedule: shifts.some((s: any) => s.today), first: open[0]?.slot ?? 0, last: open.at(-1)?.slot ?? SPD - 1,
     gaps, slots, stats, versionId: v.id, versionStatus: v.status,
   });
-});
+}
 
 // ---------------------------------------------------------------- dynamic break/meal re-optimization
 // Moves only activities that have not started yet, never a shift's own start/end time or paid hours; every rule the

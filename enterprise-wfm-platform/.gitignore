@@ -12,3 +12,6 @@ __pycache__/
 *.rdb
 dump.rdb
 
+
+# Java build output
+backend/timefold-service/target/

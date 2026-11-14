@@ -17,10 +17,18 @@ export type AuthType = 'API_KEY_HEADER' | 'BEARER_STATIC' | 'OAUTH2_CLIENT_CREDE
 export interface FieldSpec { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean }
 export interface DefaultMap { targetField: string; sourcePath: string; transform?: string }
 
+/** What to do with an event type from the first message, for the types whose meaning is certain (a heartbeat carries no state). Everything else waits for a person. */
+export interface DefaultEventRule { eventType: string; action: 'SKIP' | 'STATE'; state?: string; reason?: string }
+
+/** What the setup screen shows instead of one long paragraph: what it does, what you need before you start, and what it does not do. */
+export interface Guide { what: string; needs: string[]; limits: string[] }
+
 export interface Preset {
   id: string; category: Category; method: Method; label: string; authType: AuthType;
   fields: FieldSpec[];              // exactly what the admin sees for this vendor -- the real parameters
   defaultMaps?: DefaultMap[];       // pre-filled field-map rows; state/reason left blank where vendor-agnostic
+  defaultEventRules?: DefaultEventRule[];
+  guide?: Guide;                    // the short, structured version of `note` the setup screen shows when present
   writesTo: 'interval_history' | 'agent_state' | 'employees';
   note?: string;
 }
@@ -66,6 +74,29 @@ export const PRESETS: Preset[] = [
     note: 'Real-time: CMS opens a TCP connection out to the connector at this host:port. Historical: JDBC/ODBC against CMS\'s own Informix database. Wire-level parsing needs Avaya\'s own SDK -- see the plan\'s honesty note.',
   },
   {
+    id: 'AVAYA_AACC', category: 'ACD', method: 'ONPREM_RELAY', label: 'Avaya Aura Contact Center (AACC)', authType: 'NONE', writesTo: 'interval_history',
+    fields: [
+      { key: 'aaccVersion', label: 'AACC version', kind: 'text', help: 'e.g. 7.1. Recorded so support knows which release the history tables came from.' },
+      { key: 'sqlHost', label: 'Reporting database host (for your own records)', kind: 'text', help: 'The reader runs inside your network and holds the database login; we never store it.' },
+      { key: 'database', label: 'Database name', kind: 'text', help: 'The AACC statistics database the reader will read.' },
+      { key: 'intervalMinutes', label: 'Interval length in the data', kind: 'select', options: ['15', '30', '60'], help: '15 if blank. Set this to match the interval statistics table you read (30 is common for AACC), or volumes land in the wrong slots.' },
+    ],
+    defaultMaps: [{ targetField: 'day', sourcePath: 'day' }, { targetField: 'time', sourcePath: 'time' }, { targetField: 'volume', sourcePath: 'volume' }, { targetField: 'ahtSec', sourcePath: 'ahtSec' }, { targetField: 'abandoned', sourcePath: 'abandoned' }],
+    guide: {
+      what: 'Brings skillset call volumes, abandoned calls and handle times from your Avaya Aura Contact Center into interval history.',
+      needs: [
+        'A machine inside your network that can reach the AACC reporting database (SQL Server)',
+        'A read-only database login, kept on that machine and never sent to us',
+        'Skillset names that match your queues: name queues after skillsets, add the skillset as an alias, or use queue matching',
+      ],
+      limits: [
+        'History only: live agent state needs Avaya\'s real-time SDK',
+        'Column names are not yet confirmed against a real AACC: run the reader with --check-columns first',
+      ],
+    },
+    note: 'History only. Run integrations/avaya-aacc-connector on a machine that can reach the AACC reporting database with a read-only login; it sends skillset interval statistics out to us. Skillsets arrive as the queue name, so name queues after skillsets, add the skillset as an alias, or use queue matching. Table and column names follow Avaya\'s documented iSkillsetStat table but have not been checked against a live AACC: run the reader with --check-columns first. Live agent state needs Avaya\'s real-time SDK and is not included.',
+  },
+  {
     id: 'CISCO_UCCE', category: 'ACD', method: 'ONPREM_RELAY', label: 'Cisco UCCX / UCCE', authType: 'BASIC', writesTo: 'interval_history',
     fields: [...authField('BASIC'), { key: 'finesseHost', label: 'Finesse host', kind: 'text', required: true }, { key: 'awHdsDdsHost', label: 'AW-HDS-DDS host (historical)', kind: 'text' }],
     note: 'Agent state via Finesse REST; historical 15/30-min summaries via AW-HDS-DDS. Same on-prem relay shape as Avaya.',
@@ -79,7 +110,26 @@ export const PRESETS: Preset[] = [
       { key: 'tlsRejectUnauthorized', label: 'Verify TLS certificate', kind: 'select', options: ['true', 'false'], help: 'false for a self-signed cluster cert' },
       { key: 'subject', label: 'Agent-state subject', kind: 'text', required: true, help: 'e.g. cc.acd.workspace.req.> (Workspace -> ACD requests, which is where EVT_AGENT_READY rides)' },
     ],
-    note: 'Credentials and the request subject are confirmed (cc.acd.workspace.req.> / cc.acd.workspace.res). The subject carries every Workspace request, not just presence changes, and the payload shape is still unconfirmed -- one real sample of an EVT_AGENT_READY message is needed before the field map (and a filter for which messages are state changes at all) can be built. Not guessed at here.',
+    defaultMaps: [
+      { targetField: 'employeeNumber', sourcePath: 'agent_id' },
+      { targetField: 'eventType', sourcePath: 'event_type' },
+      { targetField: 'state', sourcePath: 'state' },
+      { targetField: 'reason', sourcePath: 'reason' },
+    ],
+    defaultEventRules: [{ eventType: 'EVT_AGENT_HEARTBEAT', action: 'SKIP' }],
+    guide: {
+      what: 'Listens to your AgnoShin phone system and records each agent\'s ready, not-ready, login and logout changes for real-time adherence.',
+      needs: [
+        'The NATS server address, user and password, and the subject to listen on',
+        'Each agent matched to an employee (set the employee number to the agent id, or use the matching box below)',
+        'A state chosen for login and logout events, under RTA State Mapping, the first time each appears',
+      ],
+      limits: [
+        'Messages carry no timestamp, so each change is stamped when it arrives',
+        'Heartbeats are ignored but count as proof the feed is alive',
+      ],
+    },
+    note: 'Fields as seen on this cluster\'s live traffic: agent_id (e.g. 1002@agnoshin.com), event_type, and state and reason on a ready or not-ready message; none of the messages seen carried a timestamp, so each event is stamped when it arrives (map a time field if yours sends one). The map above is filled in for you. Heartbeats are ignored but count as proof the feed is alive. A login or logout carries no state, so each new event type waits under RTA State Mapping until someone says which state it means. Match agent ids to employees under Match your queues and people, or set the employee number to the agent id.',
   },
   {
     id: 'AGNOSHIN_NATS_CDR', category: 'ACD', method: 'STREAM_SUBSCRIBE', label: 'AgnoShin ACD (NATS CDR/events)', authType: 'BASIC', writesTo: 'interval_history',

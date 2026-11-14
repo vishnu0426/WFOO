@@ -9,7 +9,7 @@ export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     server: {
-      port: 3002,
+      port: 3001,
       proxy: { '/api': api, '/health': api },
     },
   };

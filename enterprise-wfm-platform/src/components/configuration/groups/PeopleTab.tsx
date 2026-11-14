@@ -1,4 +1,5 @@
 /** A group's people as a table with search, a team filter and paging, so a group of hundreds stays usable. */
+import { LoadState, TableSkeleton } from '../../common/loading';
 import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
 import { api, Employee, GroupDto, Team } from '../../../services/api';
@@ -94,11 +95,12 @@ export const PeopleTab: React.FC<{ group: GroupDto; teams: Team[]; canWrite: boo
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
 
-      {page.error ? <Banner kind="err">{page.error}</Banner> : data && total === 0 ? (
+      <LoadState state={page} what="the people in this group" skeleton={<TableSkeleton rows={8} cols={5} />} isEmpty={(d) => d.total === 0} empty={(
         <Empty title={search || teamId ? 'Nobody matches' : 'No one is linked to this group yet'}>{search || teamId ? 'Clear the search or the team filter.' : canWrite ? 'Use "Add employee" or "Link a team".' : ''}</Empty>
-      ) : (
+      )}>
+        {(d) => (
         <Table head={['Name', 'Number', 'Team', 'Type', '']} right={[4]}>
-          {(data?.items ?? []).map((m) => (
+          {d.items.map((m) => (
             <tr key={m.id}>
               <td className="p-2.5 font-medium">{m.name}{m.primary && <span className="ml-2"><Pill tone="info" title="This is their main group">Primary</Pill></span>}</td>
               <td className="p-2.5 font-mono text-[12px] text-[#525252]">{m.employeeNumber}</td>
@@ -110,7 +112,8 @@ export const PeopleTab: React.FC<{ group: GroupDto; teams: Team[]; canWrite: boo
             </tr>
           ))}
         </Table>
-      )}
+        )}
+      </LoadState>
 
       {total > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-[#6B6B6B]">

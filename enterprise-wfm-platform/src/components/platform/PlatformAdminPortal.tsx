@@ -4,7 +4,7 @@
  * Uses dedicated platform token authentication (PLATFORM_JWT_SECRET, audience 'platform').
  * Isolated from tenant sessions and tenant RLS.
  * Visual theme matches the Enterprise WFM white theme (#FAFAF8, #FFFFFF, #E5E5E0, #171717, #2F7D5A).
- * Features Interactive Hierarchical Tree View (Platform → Organisations → Workspaces & Admins).
+ * Features Interactive Hierarchical Tree View (Platform to Organisations to Workspaces & Admins).
  */
 import React, { useEffect, useState } from 'react';
 import {
@@ -12,7 +12,7 @@ import {
   LogOut, RefreshCw, Key, Copy, CheckCircle2, ArrowLeft, Edit2, Settings, ExternalLink,
   FolderTree, List, ChevronDown, ChevronRight, Layers, Server, Shield,
   BarChart3, Activity, TrendingUp, Database, HardDrive, Cpu, Radio, Clock, Sparkles, Filter, Search, ArrowUpRight, BarChart2,
-  ShieldCheck, FileText, KeyRound, Lock, Unlock, AlertOctagon, Terminal, ScrollText, UserCheck, UserX
+  ShieldCheck, FileText, KeyRound, Lock, Unlock, AlertOctagon, Terminal, ScrollText, UserCheck, UserX, X
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend
@@ -84,8 +84,6 @@ interface PlatformAnalyticsData {
     totalIntervals: number;
     totalConnectors: number;
     totalAuditLogs: number;
-    telemetryUptime: string;
-    telemetryStatus: string;
   };
   tenants: TenantTelemetry[];
   storageDistribution: StorageDistributionItem[];
@@ -974,7 +972,7 @@ export const PlatformAdminPortal: React.FC = () => {
             </div>
             <div>
               <h1 className="text-[16px] font-semibold text-[#171717] leading-tight">Platform Super Admin</h1>
-              <p className="text-[12px] text-[#737373]">Root multi-tenant portal · Token isolation</p>
+              <p className="text-[12px] text-[#737373]">Root multi-tenant portal | Token isolation</p>
             </div>
           </div>
 
@@ -1009,7 +1007,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 type="password"
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••••••"
+                placeholder="************"
                 required
                 className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] placeholder-[#737373] focus:outline-none focus:border-[#171717]"
               />
@@ -1235,7 +1233,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 <Check className="w-4 h-4 text-[#2F7D5A]" />
                 <span>{notice}</span>
               </div>
-              <button onClick={() => setNotice('')} className="text-[#2F7D5A] hover:underline text-[12px]">✕</button>
+              <button onClick={() => setNotice('')} className="text-[#2F7D5A] hover:underline text-[12px]"><X className="w-4 h-4" /></button>
             </div>
           )}
 
@@ -1245,7 +1243,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 <AlertCircle className="w-4 h-4 text-[#C84A4A]" />
                 <span>{error}</span>
               </div>
-              <button onClick={() => setError('')} className="text-[#C84A4A] hover:underline text-[12px]">✕</button>
+              <button onClick={() => setError('')} className="text-[#C84A4A] hover:underline text-[12px]"><X className="w-4 h-4" /></button>
             </div>
           )}
 
@@ -1274,7 +1272,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   {analyticsData?.platform.totalActiveUsers ?? totalUsers} <span className="text-[14px] font-normal text-[#737373]">/ {analyticsData?.platform.totalUsers ?? totalUsers}</span>
                 </div>
                 <div className="text-[11px] text-[#2F7D5A] mt-0.5 font-medium">
-                  Active user seats · {analyticsData?.platform.totalEmployees ?? 0} employees
+                  Active user seats | {analyticsData?.platform.totalEmployees ?? 0} employees
                 </div>
               </div>
 
@@ -1300,7 +1298,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   {analyticsData?.platform.totalIntervals?.toLocaleString() ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
-                  15-min intervals · {analyticsData?.platform.totalForecasts ?? 0} models
+                  15-min intervals | {analyticsData?.platform.totalForecasts ?? 0} models
                 </div>
               </div>
 
@@ -1314,7 +1312,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   <span>OPTIMAL</span>
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
-                  {analyticsData?.platform.totalAuditLogs ?? 0} audit events · 99.98% uptime
+                  {analyticsData?.platform.totalAuditLogs ?? 0} audit events | 99.98% uptime
                 </div>
               </div>
             </div>
@@ -1468,7 +1466,7 @@ export const PlatformAdminPortal: React.FC = () => {
               </h2>
               <p className="text-[12px] text-[#737373] mt-0.5">
                 {tab === 'TREE'
-                  ? 'Interactive hierarchical structural tree: Platform → Organisations → Workspaces & Admins.'
+                  ? 'Interactive hierarchical structural tree: Platform to Organisations to Workspaces & Admins.'
                   : tab === 'ANALYTICS'
                   ? 'Real-time multi-tenant resource consumption, operational workload, and capacity distribution across isolated tenant boundaries.'
                   : tab === 'SECURITY'
@@ -1601,9 +1599,9 @@ export const PlatformAdminPortal: React.FC = () => {
 
               <div className="text-[12px] text-[#737373] flex items-center gap-3">
                 <span><strong>{filteredTreeOrgs.length}</strong> Organisation{filteredTreeOrgs.length !== 1 ? 's' : ''}</span>
-                <span>·</span>
+                <span>|</span>
                 <span><strong>{treeTotalWorkspaces}</strong> Workspaces</span>
-                <span>·</span>
+                <span>|</span>
                 <span><strong>{treeTotalAdmins}</strong> Administrators</span>
               </div>
             </div>
@@ -1622,7 +1620,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     </span>
                   </div>
                   <div className="text-[12px] text-[#737373]">
-                    Central infrastructure host · Isolated multi-tenant boundaries
+                    Central infrastructure host | Isolated multi-tenant boundaries
                   </div>
                 </div>
               </div>
@@ -1676,7 +1674,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                   {org.code}
                                 </span>
                                 <span className="text-[11px] text-[#737373]">
-                                  {org.timezone} · {org.currency}
+                                  {org.timezone} | {org.currency}
                                 </span>
                               </div>
                               {org.legalName && org.legalName !== org.name && (
@@ -1776,7 +1774,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                           </span>
                                         )}
                                         <span className="font-mono text-[10px] text-[#737373]">
-                                          [{w.code}] · {w.slug}
+                                          [{w.code}] | {w.slug}
                                         </span>
                                       </div>
 
@@ -1842,7 +1840,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                           <span className="text-[11px] text-[#737373]">({u.displayName})</span>
                                         )}
                                         {u.email && (
-                                          <span className="text-[11px] text-[#737373]">· {u.email}</span>
+                                          <span className="text-[11px] text-[#737373]">| {u.email}</span>
                                         )}
                                       </div>
 
@@ -1936,7 +1934,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           </td>
                           <td className="p-3 font-mono font-bold text-[#171717]">{org.code}</td>
                           <td className="p-3 text-[#737373]">
-                            {org.timezone} · {org.currency}
+                            {org.timezone} | {org.currency}
                           </td>
                           <td className="p-3">
                             <button
@@ -2205,9 +2203,9 @@ export const PlatformAdminPortal: React.FC = () => {
                               <div className="font-semibold text-[#171717]">{t.displayName || t.name}</div>
                               <div className="text-[11px] text-[#737373] flex items-center gap-1.5 mt-0.5">
                                 <span className="font-mono bg-[#F0F0ED] px-1 rounded text-[#525252] font-semibold">{t.code}</span>
-                                <span>·</span>
+                                <span>|</span>
                                 <span>{t.timezone}</span>
-                                <span>·</span>
+                                <span>|</span>
                                 <span>{t.currency}</span>
                               </div>
                             </td>
@@ -2439,13 +2437,13 @@ export const PlatformAdminPortal: React.FC = () => {
                               </span>
                             </td>
                             <td className="p-3 text-[#737373] text-[11px] whitespace-nowrap">
-                              {createdAt ? new Date(createdAt).toLocaleString() : '—'}
+                              {createdAt ? new Date(createdAt).toLocaleString() : 'N/A'}
                             </td>
                             <td className="p-3">
                               {status === 'ACTIVE' ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#FFF8EB] border border-[#B35900]/30 text-[#B35900] font-bold text-[10px]">
                                   <span className="w-1.5 h-1.5 rounded-full bg-[#B35900] animate-pulse" />
-                                  ACTIVE · PENDING USE
+                                  ACTIVE | PENDING USE
                                 </span>
                               ) : status === 'USED' ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EAF5EF] border border-[#2F7D5A]/30 text-[#2F7D5A] font-semibold text-[10px]">
@@ -2458,7 +2456,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                 </span>
                               )}
                               <div className="text-[10px] text-[#737373] mt-0.5">
-                                Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                                Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
                               </div>
                             </td>
                           </tr>
@@ -2546,7 +2544,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     <tbody className="divide-y divide-[#E5E5E0]">
                       {(auditData?.items || (auditData as any)?.logs || []).map((log: PlatformAuditItem) => {
                         const adminEmail = log.adminEmail || (log as any).admin_email || 'System';
-                        const ipAddr = log.ipAddress || (log as any).ip_address || '—';
+                        const ipAddr = log.ipAddress || (log as any).ip_address || 'N/A';
                         const tenantName = log.targetTenantName || (log as any).target_tenant_name;
                         const tenantCode = log.targetTenantCode || (log as any).target_tenant_code;
                         const entityType = log.targetEntityType || (log as any).target_entity_type;
@@ -2582,7 +2580,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           else if (action === 'CREATE_WORKSPACE') detailSummary = `Created workspace '${details.name || ''}' [${details.code || ''}]`;
                           else if (action === 'PROVISION_ORGANIZATION') detailSummary = `Created organization '${details.name || ''}' [${details.code || ''}]`;
                           else if (action === 'PROVISION_ADMIN') detailSummary = `Created administrator '${details.username || ''}'`;
-                          else detailSummary = Object.keys(details).length ? JSON.stringify(details) : '—';
+                          else detailSummary = Object.keys(details).length ? JSON.stringify(details) : 'N/A';
                         }
 
                         return (
@@ -2627,10 +2625,10 @@ export const PlatformAdminPortal: React.FC = () => {
                               {entityType ? (
                                 <div>
                                   <span className="font-medium text-[#737373]">{entityType}:</span>{' '}
-                                  <span className="font-semibold text-[#171717]">{entityName || '—'}</span>
+                                  <span className="font-semibold text-[#171717]">{entityName || 'N/A'}</span>
                                 </div>
                               ) : (
-                                <span className="text-[#737373]">—</span>
+                                <span className="text-[#737373]">N/A</span>
                               )}
                             </td>
 
@@ -2694,7 +2692,7 @@ export const PlatformAdminPortal: React.FC = () => {
                             </span>
                           </div>
                           <div className="text-[12px] text-[#525252]">
-                            Requested <b>+{r.additionalNeeded} seats</b> (Current: {r.currentCapacity} → Target: {r.requestedCapacity}) by <b>{r.requesterName}</b> ({r.requesterEmail})
+                            Requested <b>+{r.additionalNeeded} seats</b> (Current: {r.currentCapacity} to Target: {r.requestedCapacity}) by <b>{r.requesterName}</b> ({r.requesterEmail})
                           </div>
                           {r.justification && (
                             <div className="text-[11px] text-[#737373] italic">
@@ -2829,7 +2827,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           </td>
 
                           <td className="py-3 px-4 text-[#737373] whitespace-nowrap">
-                            <div>{lic.endDate ? new Date(lic.endDate).toLocaleDateString() : '—'}</div>
+                            <div>{lic.endDate ? new Date(lic.endDate).toLocaleDateString() : 'N/A'}</div>
                             <div className="text-[10px]">{lic.gracePeriodDays}d grace period</div>
                           </td>
 
@@ -2861,7 +2859,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-[#171717]" /> Provision New Organisation
               </h3>
-              <button onClick={() => setShowNewOrg(false)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setShowNewOrg(false)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             {createdOrgSummary ? (
@@ -2995,7 +2993,7 @@ export const PlatformAdminPortal: React.FC = () => {
                       <label className="block text-[#737373] text-[11px] font-semibold mb-1">Admin Password (min 8 chars)</label>
                       <input
                         type="password"
-                        placeholder="••••••••"
+                        placeholder="********"
                         value={newOrgForm.adminPassword}
                         onChange={(e) => setNewOrgForm({ ...newOrgForm, adminPassword: e.target.value })}
                         className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
@@ -3056,7 +3054,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 }}
                 className="text-[#737373] hover:text-[#171717] text-sm"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -3073,7 +3071,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     <div><strong>Organisation:</strong> {createdLicenseSummary.org.name} ({createdLicenseSummary.org.code})</div>
                     <div><strong>License Key:</strong> {createdLicenseSummary.license.license_key}</div>
                     <div><strong>Plan Tier:</strong> {createdLicenseSummary.license.plan_tier}</div>
-                    <div><strong>Capacity Quota:</strong> {createdLicenseSummary.license.max_employees} Employees · {createdLicenseSummary.license.max_users} Users · {createdLicenseSummary.license.max_sites} Sites</div>
+                    <div><strong>Capacity Quota:</strong> {createdLicenseSummary.license.max_employees} Employees | {createdLicenseSummary.license.max_users} Users | {createdLicenseSummary.license.max_sites} Sites</div>
                     <div><strong>Valid Until:</strong> {new Date(createdLicenseSummary.license.end_date).toLocaleDateString()}</div>
                   </div>
                   <button
@@ -3338,7 +3336,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 </h3>
                 <p className="text-[11px] text-[#737373] font-mono">{selectedLicenseForEdit.licenseKey}</p>
               </div>
-              <button onClick={() => setShowEditLicenseModal(false)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setShowEditLicenseModal(false)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleSaveLicenseEdit} className="space-y-4 text-xs">
@@ -3474,7 +3472,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   disabled={busy}
                   className="px-4 py-1.5 bg-[#171717] hover:bg-[#333333] text-white font-semibold text-xs rounded transition-colors"
                 >
-                  {busy ? 'Saving…' : 'Save License Changes'}
+                  {busy ? 'Saving...' : 'Save License Changes'}
                 </button>
               </div>
             </form>
@@ -3495,7 +3493,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   All workspaces within this organisation share its billing and tenant boundary, with strictly isolated operational data.
                 </p>
               </div>
-              <button onClick={() => setSelectedOrgForWs(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForWs(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             {/* Workspaces list */}
@@ -3658,7 +3656,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   Grants full WFM_ADMIN role within organisation {selectedOrgForAdmin.code}.
                 </p>
               </div>
-              <button onClick={() => setSelectedOrgForAdmin(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForAdmin(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleCreateAdmin} className="space-y-3">
@@ -3681,7 +3679,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   minLength={8}
                   value={newAdminForm.password}
                   onChange={(e) => setNewAdminForm({ ...newAdminForm, password: e.target.value })}
-                  placeholder="••••••••"
+                  placeholder="********"
                   className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
                 />
               </div>
@@ -3737,7 +3735,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
                 <Settings className="w-4 h-4 text-[#171717]" /> Edit Organisation: {selectedOrgForEdit.code}
               </h3>
-              <button onClick={() => setSelectedOrgForEdit(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForEdit(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleSaveOrgEdit} className="space-y-3">
@@ -3851,7 +3849,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 }}
                 className="text-[#737373] hover:text-[#171717] text-sm"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 

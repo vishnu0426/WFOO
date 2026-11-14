@@ -3,6 +3,7 @@
  *   the score and the estimated service level, where it is short of the requirement (with who could and could not cover it and what to do),
  *   what happened in the generation run (who was left out and why), and re-placing meals and breaks inside their slack.
  */
+import { Waiting } from '../common/loading';
 import React, { useState } from 'react';
 import { AlertTriangle, Download, Info } from 'lucide-react';
 import { api, dayName, dayYear, dec, download, Evaluation, GenerationReport, ScheduleVersion, Shortage, TemplateProposal } from '../../services/api';
@@ -160,7 +161,7 @@ export const QualityPanel: React.FC<{ versions: ScheduleVersion[]; version: Sche
       </Card>
 
       <Card title="Score" sub="One number for how well this schedule serves the forecast. It is an estimate: service level uses Erlang C on the interval's whole workload, with meals, breaks and shrinkage taken off the people on the phones.">
-        {evalR.loading && !ev && <Busy text="Estimating service level…" />}
+        {evalR.loading && !ev && <Waiting what="the service-level estimate" shape="cards" reload={evalR.reload} />}
         {evalR.error && <p className="text-[13px] text-[#BC3F3F]">{evalR.error}</p>}
         {ev && !ev.available && <Banner kind="info">{ev.reason}</Banner>}
         {ev && ev.available && (
@@ -207,7 +208,7 @@ export const QualityPanel: React.FC<{ versions: ScheduleVersion[]; version: Sche
       {version && version.coverageSource !== 'MANUAL' && version.forecastVersionId && <StressTest version={version} />}
 
       <Card title="Where it falls short" sub="Gaps against the requirement, worst first. For each, who could and could not have covered it, and what you can do about it.">
-        {short.loading && !sh && <Busy text="Looking for gaps…" />}
+        {short.loading && !sh && <Waiting what="the gap check" shape="table" reload={short.reload} />}
         {short.error && <p className="text-[13px] text-[#BC3F3F]">{short.error}</p>}
         {sh && (
           <>
@@ -269,7 +270,7 @@ export const QualityPanel: React.FC<{ versions: ScheduleVersion[]; version: Sche
 
       <Card title="What happened when it was generated" sub="Who was scheduled, who was not and why, and anything the planner should know before publishing."
         actions={r?.available ? <Btn onClick={() => download(`/scheduling/versions/${version!.id}/report.csv`, `schedule-report-v${version!.seq}.csv`).catch(() => {})}><Download className="w-3.5 h-3.5" />Download report</Btn> : undefined}>
-        {rep.loading && !r && <Busy text="Loading…" />}
+        {rep.loading && !r && <Waiting what="the build report" shape="lines" reload={rep.reload} />}
         {r && !r.available && <p className="text-[13px] text-[#6B6B6B]">This schedule was made before generation reports existed.</p>}
         {r?.available && r.people && r.exceptions && (
           <>

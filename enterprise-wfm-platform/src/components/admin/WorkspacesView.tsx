@@ -15,7 +15,10 @@ import {
   fetchOrganization,
   switchWorkspace, refreshSession, api
 } from '../../services/api';
-import { Banner, Btn, Busy, Card, Empty, Field, Input, Kpi, KpiRow, Pill, Select, Table } from '../forecasting/ui';
+import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from '../forecasting/ui';
+import { Grid } from '../forecasting/Grid';
+import { CreateWorkspaceDialog, EditWorkspaceDialog } from './WorkspaceDialogs';
+import type { ColDef, ICellRendererParams } from 'ag-grid-community';
 
 const ROLES = ['WFM_ADMIN', 'WFM_MANAGER', 'FORECAST_PLANNER', 'SCHEDULER', 'SUPERVISOR_RTA', 'ANALYST', 'AGENT'] as const;
 const ROLE_LABEL: Record<string, string> = {
@@ -61,28 +64,11 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'ARCHIVED'>('ALL');
 
   // Workspace Modals
   const [showCreateWs, setShowCreateWs] = useState(false);
-  const [newWs, setNewWs] = useState({
-    name: '',
-    code: '',
-    slug: '',
-    description: '',
-    timezone: session.tenant.timezone || 'UTC',
-    currency: session.tenant.currency || 'USD',
-  });
-
   const [editWs, setEditWs] = useState<Workspace | null>(null);
-  const [editWsForm, setEditWsForm] = useState({
-    name: '',
-    code: '',
-    slug: '',
-    description: '',
-    timezone: 'UTC',
-    currency: 'USD',
-  });
-
   // Members Modal
   const [activeMembersWs, setActiveMembersWs] = useState<Workspace | null>(null);
   const [wsMembers, setWsMembers] = useState<WorkspaceMember[]>([]);
@@ -110,56 +96,6 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
   useEffect(() => {
     loadData();
   }, [session.workspace?.id]);
-
-  const handleCreateWorkspace = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newWs.name || !newWs.code) return;
-    setBusy(true);
-    setError('');
-    try {
-      const created = await createWorkspace({
-        ...newWs,
-        code: newWs.code.trim().toUpperCase(),
-        slug: newWs.slug.trim().toLowerCase() || newWs.code.toLowerCase().replace(/[^a-z0-9]/g, '-'),
-      });
-      setShowCreateWs(false);
-      setNewWs({
-        name: '',
-        code: '',
-        slug: '',
-        description: '',
-        timezone: session.tenant.timezone || 'UTC',
-        currency: session.tenant.currency || 'USD',
-      });
-      setNotice(`Workspace "${created.name}" created successfully.`);
-      const updatedSession = await refreshSession().catch(() => null);
-      if (updatedSession && onSwitchWorkspace) {
-        onSwitchWorkspace(updatedSession);
-      }
-      await loadData();
-    } catch (err: any) {
-      setError(err.message || 'Failed to create workspace');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleEditWorkspace = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editWs) return;
-    setBusy(true);
-    setError('');
-    try {
-      await updateWorkspace(editWs.id, editWsForm);
-      setEditWs(null);
-      setNotice(`Workspace updated.`);
-      await loadData();
-    } catch (err: any) {
-      setError(err.message || 'Failed to update workspace');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handleArchiveWorkspace = async (ws: Workspace) => {
     if (!confirm(`Are you sure you want to archive workspace "${ws.name}"? Users will no longer be able to select it.`)) return;
@@ -253,23 +189,115 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
 
   const filteredWorkspaces = workspaces.filter(
     (w) =>
-      w.name.toLowerCase().includes(search.toLowerCase()) ||
-      w.code.toLowerCase().includes(search.toLowerCase()) ||
-      w.timezone.toLowerCase().includes(search.toLowerCase())
+      (statusFilter === 'ALL' || w.status === statusFilter) &&
+      (w.name.toLowerCase().includes(search.toLowerCase()) ||
+        w.code.toLowerCase().includes(search.toLowerCase()) ||
+        w.timezone.toLowerCase().includes(search.toLowerCase()))
   );
 
   const activeCount = workspaces.filter((w) => w.status === 'ACTIVE').length;
+  const totalMembers = workspaces.reduce((n, w) => n + (w.memberCount || 0), 0);
+
+  const startEdit = (ws: Workspace) => setEditWs(ws);
+
+  const exportCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [
+      ['Name', 'Code', 'Slug', 'Status', 'Timezone', 'Currency', 'Members', 'Default', 'Created'],
+      ...filteredWorkspaces.map((w) => [w.name, w.code, w.slug, w.status, w.timezone, w.currency, w.memberCount, w.isDefault ? 'Yes' : 'No', w.createdAt || '']),
+    ];
+    const blob = new Blob([rows.map((r) => r.map(esc).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'workspaces.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const columns: ColDef<Workspace>[] = [
+    {
+      headerName: 'Workspace', field: 'name', flex: 2, minWidth: 240,
+      cellRenderer: (p: ICellRendererParams<Workspace>) => {
+        const ws = p.data!;
+        const isCurrent = ws.id === session.workspace?.id;
+        return (
+          <div className="flex items-center gap-2.5 h-full">
+            <Building2 className={`w-4 h-4 shrink-0 ${isCurrent ? 'text-[#2F7D5A]' : 'text-[#737373]'}`} />
+            <div className="min-w-0 leading-tight">
+              <div className="font-semibold text-[#171717] flex items-center gap-1.5">
+                <span className="truncate">{ws.name}</span>
+                {ws.isDefault && <Pill tone="info">Default</Pill>}
+                {isCurrent && <Pill tone="good">Current</Pill>}
+              </div>
+              {ws.description && <div className="text-[11px] text-[#737373] truncate">{ws.description}</div>}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      headerName: 'Code', field: 'code', width: 150,
+      cellRenderer: (p: ICellRendererParams<Workspace>) => (
+        <div className="leading-tight flex flex-col justify-center h-full">
+          <span className="font-mono text-[12px] font-semibold text-[#171717]">{p.data!.code}</span>
+          <span className="text-[11px] text-[#737373]">/{p.data!.slug}</span>
+        </div>
+      ),
+    },
+    {
+      headerName: 'Status', field: 'status', width: 120,
+      cellRenderer: (p: ICellRendererParams<Workspace>) => (
+        <div className="flex items-center h-full">
+          <Pill tone={p.data!.status === 'ACTIVE' ? 'good' : 'neutral'}>{p.data!.status === 'ACTIVE' ? 'Active' : 'Archived'}</Pill>
+        </div>
+      ),
+    },
+    { headerName: 'Timezone', field: 'timezone', width: 160 },
+    { headerName: 'Currency', field: 'currency', width: 110 },
+    {
+      headerName: 'Members', field: 'memberCount', width: 130, type: 'numericColumn',
+      cellRenderer: (p: ICellRendererParams<Workspace>) => (
+        <button onClick={() => openMembersModal(p.data!)} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#2F7D5A] hover:underline">
+          <Users className="w-3.5 h-3.5" /> {p.data!.memberCount}
+        </button>
+      ),
+    },
+    {
+      headerName: 'Created', field: 'createdAt', width: 130,
+      valueFormatter: (p) => (p.value ? new Date(p.value).toLocaleDateString() : '—'),
+    },
+    {
+      headerName: 'Actions', colId: 'actions', width: 250, pinned: 'right', sortable: false, filter: false,
+      cellRenderer: (p: ICellRendererParams<Workspace>) => {
+        const ws = p.data!;
+        const isCurrent = ws.id === session.workspace?.id;
+        return (
+          <div className="flex items-center gap-2 h-full">
+            {!isCurrent && ws.status === 'ACTIVE' && (
+              <Btn variant="secondary" onClick={() => handleSwitchWorkspace(ws.id)}>
+                <ArrowRight className="w-3 h-3 text-[#2F7D5A]" /> Switch
+              </Btn>
+            )}
+            <Btn onClick={() => startEdit(ws)} title="Edit settings"><Edit2 className="w-3 h-3" /> Edit</Btn>
+            {!ws.isDefault && !isCurrent && ws.status === 'ACTIVE' && (
+              <Btn onClick={() => handleArchiveWorkspace(ws)} className="text-[#C84A4A] hover:bg-[#FCEBEC]" title="Archive workspace">
+                <Archive className="w-3 h-3" /> Archive
+              </Btn>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+  const gridHeight = Math.min(filteredWorkspaces.length, 10) * 56 + 48 + (filteredWorkspaces.length > 10 ? 48 : 2);
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 w-full max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E5E5E0] pb-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-[20px] font-bold text-[#171717] tracking-tight">Workspaces & Organisation</h1>
-            <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-[#EAF5EF] text-[#2F7D5A] border border-[#2F7D5A]/20">
-              Multi-Tenant & Isolated
-            </span>
           </div>
           <p className="text-[13px] text-[#737373] mt-1">
             Manage operational workspaces and settings for <strong className="text-[#171717]">{session.tenant.name}</strong>.
@@ -306,28 +334,39 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
         <div className="py-12 flex justify-center"><Busy text="Loading configuration..." /></div>
       ) : tab === 'WORKSPACES' ? (
         <div className="space-y-6">
-          {/* KPI Summary */}
-          <KpiRow>
-            <Kpi label="Total Workspaces" value={workspaces.length} />
-            <Kpi label="Active Workspaces" value={activeCount} tone="good" />
-            <Kpi
-              label="Current Workspace"
-              value={session.workspace?.name || 'Default'}
-              sub={session.workspace?.code ? `Code: ${session.workspace.code}` : undefined}
-            />
-            <Kpi label="Data Isolation" value="100% Strict" sub="Enforced by RLS & workspace_id" tone="good" />
-          </KpiRow>
+          {/* Compact summary */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] px-4 py-2.5 text-[13px] text-[#525252]">
+            <span><strong className="tabular-nums text-[#171717]">{workspaces.length}</strong> workspace{workspaces.length !== 1 ? 's' : ''} ({activeCount} active)</span>
+            <span><strong className="tabular-nums text-[#171717]">{totalMembers}</strong> member assignments</span>
+            <span>Current: <strong className="text-[#171717]">{session.workspace?.name || 'Default'}</strong>{session.workspace?.code ? ` (${session.workspace.code})` : ''}</span>
+            <span className="inline-flex items-center gap-1.5 text-[#2A7553]" title="Queues, people, schedules and forecasts in one workspace are never visible from another.">
+              <Shield className="w-3.5 h-3.5" /> Data is kept separate for each workspace
+            </span>
+          </div>
 
           {/* Action & Filter Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="w-72">
-              <Input
-                placeholder="Search workspaces by name or code..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+            <div className="flex items-center gap-2">
+              <div className="w-72">
+                <Input
+                  placeholder="Search by name, code or timezone"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  aria-label="Search workspaces"
+                />
+              </div>
+              <div className="w-36">
+                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'ALL' | 'ACTIVE' | 'ARCHIVED')} aria-label="Filter by status">
+                  <option value="ALL">All statuses</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="ARCHIVED">Archived</option>
+                </Select>
+              </div>
             </div>
             <div className="flex items-center gap-2">
+              <Btn onClick={exportCsv} title="Download the listed workspaces as CSV" disabled={filteredWorkspaces.length === 0}>
+                Export CSV
+              </Btn>
               <Btn onClick={loadData} title="Refresh list">
                 <RefreshCw className="w-3.5 h-3.5" /> Refresh
               </Btn>
@@ -338,92 +377,24 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
           </div>
 
           {/* Workspaces Table */}
-          <Card title="Operational Workspaces" sub="Each workspace provides independent queues, shifts, employees, schedules, and forecasts that never leak across workspace boundaries.">
-            {filteredWorkspaces.length === 0 ? (
-              <Empty title="No workspaces found">
-                Create your first additional workspace using the button above.
-              </Empty>
-            ) : (
-              <Table head={['Workspace', 'Code & Slug', 'Status', 'Timezone & Currency', 'Members', 'Actions']}>
-                {filteredWorkspaces.map((ws) => {
-                  const isCurrent = ws.id === session.workspace?.id;
-                  return (
-                    <tr key={ws.id} className={isCurrent ? 'bg-[#FAFAF8]' : ''}>
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <Building2 className={`w-4 h-4 ${isCurrent ? 'text-[#2F7D5A]' : 'text-[#737373]'}`} />
-                          <div>
-                            <div className="font-semibold text-[#171717] flex items-center gap-1.5">
-                              {ws.name}
-                              {ws.isDefault && <Pill tone="info">Default</Pill>}
-                              {isCurrent && <Pill tone="good">Active Now</Pill>}
-                            </div>
-                            {ws.description && <p className="text-[11px] text-[#737373] line-clamp-1">{ws.description}</p>}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="font-mono text-[12px] font-semibold text-[#171717]">{ws.code}</div>
-                        <div className="text-[11px] text-[#737373]">/{ws.slug}</div>
-                      </td>
-                      <td className="p-3">
-                        <Pill tone={ws.status === 'ACTIVE' ? 'good' : 'neutral'}>
-                          {ws.status}
-                        </Pill>
-                      </td>
-                      <td className="p-3">
-                        <div className="text-[12px] text-[#171717]">{ws.timezone}</div>
-                        <div className="text-[11px] text-[#737373]">{ws.currency}</div>
-                      </td>
-                      <td className="p-3">
-                        <button
-                          onClick={() => openMembersModal(ws)}
-                          className="flex items-center gap-1.5 text-[12px] font-semibold text-[#2F7D5A] hover:underline"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                          <span>{ws.memberCount} member{ws.memberCount !== 1 ? 's' : ''}</span>
-                        </button>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          {!isCurrent && ws.status === 'ACTIVE' && (
-                            <Btn variant="secondary" onClick={() => handleSwitchWorkspace(ws.id)}>
-                              <ArrowRight className="w-3 h-3 text-[#2F7D5A]" /> Switch
-                            </Btn>
-                          )}
-                          <Btn
-                            onClick={() => {
-                              setEditWs(ws);
-                              setEditWsForm({
-                                name: ws.name,
-                                code: ws.code,
-                                slug: ws.slug,
-                                description: ws.description || '',
-                                timezone: ws.timezone,
-                                currency: ws.currency,
-                              });
-                            }}
-                            title="Edit settings"
-                          >
-                            <Edit2 className="w-3 h-3" /> Edit
-                          </Btn>
-                          {!ws.isDefault && !isCurrent && ws.status === 'ACTIVE' && (
-                            <Btn
-                              onClick={() => handleArchiveWorkspace(ws)}
-                              className="text-[#C84A4A] hover:bg-[#FCEBEC]"
-                              title="Archive workspace"
-                            >
-                              <Archive className="w-3 h-3" /> Archive
-                            </Btn>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Table>
-            )}
-          </Card>
+          {filteredWorkspaces.length === 0 ? (
+            <Empty title={workspaces.length === 0 ? 'No workspaces yet' : 'No workspaces match your filters'}>
+              {workspaces.length === 0 ? 'Create your first workspace using the button above.' : 'Clear the search or status filter to see all workspaces.'}
+            </Empty>
+          ) : (
+            <Grid<Workspace>
+              height={gridHeight}
+              rowData={filteredWorkspaces}
+              columnDefs={columns}
+              defaultColDef={{ sortable: true, resizable: true, cellStyle: { display: 'flex', alignItems: 'center', lineHeight: '1.4' } }}
+              rowHeight={56}
+              getRowId={(p) => p.data.id}
+              pagination={filteredWorkspaces.length > 10}
+              paginationPageSize={10}
+              paginationPageSizeSelector={false}
+            />
+          )}
+          <p className="text-[12px] text-[#737373]">Each workspace has its own queues, shifts, people, schedules and forecasts.</p>
         </div>
       ) : (
         /* Organisation & Multi-Tenancy Provisioning Tab (Read-Only) */
@@ -508,144 +479,25 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
         </div>
       )}
 
-      {/* Modal: Create Workspace */}
       {showCreateWs && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-lg border border-[#E5E5E0] shadow-2xl max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
-              <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-[#2F7D5A]" /> Create New Workspace
-              </h3>
-              <button onClick={() => setShowCreateWs(false)} className="text-[#737373] hover:text-[#171717]">✕</button>
-            </div>
-
-            <form onSubmit={handleCreateWorkspace} className="space-y-3">
-              <Field label="Workspace Name">
-                <Input
-                  placeholder="e.g. EMEA Customer Care"
-                  value={newWs.name}
-                  onChange={(e) => {
-                    const name = e.target.value;
-                    const code = name.replace(/[^A-Za-z0-9]/g, '_').slice(0, 16).toUpperCase();
-                    setNewWs((prev) => ({
-                      ...prev,
-                      name,
-                      code: prev.code ? prev.code : code,
-                      slug: name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30),
-                    }));
-                  }}
-                  required
-                />
-              </Field>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Code (e.g. EMEA_CC)">
-                  <Input
-                    value={newWs.code}
-                    onChange={(e) => setNewWs({ ...newWs, code: e.target.value.toUpperCase() })}
-                    required
-                  />
-                </Field>
-                <Field label="URL Slug">
-                  <Input
-                    value={newWs.slug}
-                    onChange={(e) => setNewWs({ ...newWs, slug: e.target.value.toLowerCase() })}
-                    required
-                  />
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Timezone">
-                  <Select
-                    value={newWs.timezone}
-                    onChange={(e) => setNewWs({ ...newWs, timezone: e.target.value })}
-                  >
-                    {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Currency">
-                  <Select
-                    value={newWs.currency}
-                    onChange={(e) => setNewWs({ ...newWs, currency: e.target.value })}
-                  >
-                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </Select>
-                </Field>
-              </div>
-
-              <Field label="Description (Optional)">
-                <Input
-                  placeholder="Operational purpose, department, or location..."
-                  value={newWs.description}
-                  onChange={(e) => setNewWs({ ...newWs, description: e.target.value })}
-                />
-              </Field>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E5E5E0]">
-                <Btn type="button" onClick={() => setShowCreateWs(false)}>Cancel</Btn>
-                <Btn variant="primary" type="submit" disabled={busy || !newWs.name || !newWs.code}>
-                  {busy ? <Busy text="Creating..." /> : 'Create Workspace'}
-                </Btn>
-              </div>
-            </form>
-          </div>
-        </div>
+        <CreateWorkspaceDialog session={session} workspaces={workspaces} onClose={() => setShowCreateWs(false)} onCreated={async (created) => {
+          setShowCreateWs(false);
+          const st = created.setup;
+          const bits = st ? [st.copied.length ? `copied ${st.copied.join(', ')}` : '', st.holidaysAdded ? `added ${st.holidaysAdded} public holidays` : '', st.packName ? `applied the ${st.packName} labour-law pack` : ''].filter(Boolean) : [];
+          setNotice(`Workspace "${created.name}" created${bits.length ? `: ${bits.join(', ')}` : ''}.${st?.failed ? ` Part of the setup could not be completed (${st.failed}). You can finish it from Configuration.` : ''}`);
+          const updatedSession = await refreshSession().catch(() => null);
+          if (updatedSession && onSwitchWorkspace) onSwitchWorkspace(updatedSession);
+          await loadData();
+        }} />
       )}
 
-      {/* Modal: Edit Workspace */}
       {editWs && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-lg border border-[#E5E5E0] shadow-2xl max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
-              <h3 className="text-[16px] font-bold text-[#171717]">Edit Workspace: {editWs.name}</h3>
-              <button onClick={() => setEditWs(null)} className="text-[#737373] hover:text-[#171717]">✕</button>
-            </div>
-
-            <form onSubmit={handleEditWorkspace} className="space-y-3">
-              <Field label="Workspace Name">
-                <Input
-                  value={editWsForm.name}
-                  onChange={(e) => setEditWsForm({ ...editWsForm, name: e.target.value })}
-                  required
-                />
-              </Field>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Timezone">
-                  <Select
-                    value={editWsForm.timezone}
-                    onChange={(e) => setEditWsForm({ ...editWsForm, timezone: e.target.value })}
-                  >
-                    {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Currency">
-                  <Select
-                    value={editWsForm.currency}
-                    onChange={(e) => setEditWsForm({ ...editWsForm, currency: e.target.value })}
-                  >
-                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </Select>
-                </Field>
-              </div>
-
-              <Field label="Description">
-                <Input
-                  value={editWsForm.description}
-                  onChange={(e) => setEditWsForm({ ...editWsForm, description: e.target.value })}
-                />
-              </Field>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E5E5E0]">
-                <Btn type="button" onClick={() => setEditWs(null)}>Cancel</Btn>
-                <Btn variant="primary" type="submit" disabled={busy}>
-                  {busy ? <Busy text="Saving..." /> : 'Save Changes'}
-                </Btn>
-              </div>
-            </form>
-          </div>
-        </div>
+        <EditWorkspaceDialog workspace={editWs} current={editWs.id === session.workspace?.id} onClose={() => setEditWs(null)} onChanged={async (message) => {
+          setEditWs(null); setNotice(message);
+          const updatedSession = await refreshSession().catch(() => null);
+          if (updatedSession && onSwitchWorkspace) onSwitchWorkspace(updatedSession);
+          await loadData();
+        }} />
       )}
 
       {/* Modal: Manage Workspace Members */}
@@ -661,7 +513,7 @@ export const WorkspacesView: React.FC<WorkspacesViewProps> = ({ session, onSwitc
                   Users assigned to this workspace can access and edit its data according to their role.
                 </p>
               </div>
-              <button onClick={() => setActiveMembersWs(null)} className="text-[#737373] hover:text-[#171717]">✕</button>
+              <button onClick={() => setActiveMembersWs(null)} className="text-[#737373] hover:text-[#171717]" aria-label="Close">Close</button>
             </div>
 
             {/* Add Member Form */}

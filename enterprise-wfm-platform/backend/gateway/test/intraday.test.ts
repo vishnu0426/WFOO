@@ -65,7 +65,7 @@ describe('intraday and adherence', () => {
     assert.equal((await call(admin, 'POST', '/workforce/employees/import', { csv: lines.join('\n'), dryRun: false })).status, 200);
     const v = await call(admin, 'POST', '/scheduling/versions', { groupId: g.json.id, from: ctx.day, weeks: 1, timeLimitSec: 10 });
     assert.equal(v.status, 201, v.text);
-    assert.equal((await call(admin, 'POST', `/scheduling/versions/${v.json.id}/publish`)).status, 200);
+    { const pub = await call(admin, 'POST', `/scheduling/versions/${v.json.id}/publish`); assert.equal(pub.status, 200, pub.text); }
     ctx.shifts = (await call(admin, 'GET', `/scheduling/versions/${v.json.id}/shifts?from=${ctx.day}&to=${ctx.day}`)).json;
     assert.ok(ctx.shifts.length >= 3, 'need some shifts yesterday');
   });

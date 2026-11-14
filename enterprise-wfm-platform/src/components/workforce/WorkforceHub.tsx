@@ -1,31 +1,35 @@
 /**
  * Workforce: Employees, Teams, Skills, Availability, Time Off. All data comes from the gateway.
  */
-import React, { useEffect, useMemo, useState } from 'react';
-import { ColDef } from 'ag-grid-community';
+import { LoadState, TableSkeleton, Waiting, LoadFailed } from '../common/loading';
+import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { api, AvailabilityWindow, DOW, Employee, Skill, Team, TimeOff, dayYear, when } from '../../services/api';
+import { api, AvailabilityWindow, DOW, Employee, Skill, Team, when } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { PersonPicker } from '../common/PersonPicker';
-import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Card, Empty, Field, Input, PageHeader, Pill, Select, Table } from '../forecasting/ui';
-import { MultiSelect } from '../common/MultiSelect';
 import { NoticeBanner } from '../forecasting/VersionBar';
 import { EmployeesPanel } from './EmployeesPanel';
 import { AttendancePanel } from './AttendancePanel';
 import { PayrollPanel } from './PayrollPanel';
 import { OrgChartPanel } from './OrgChartPanel';
+import { LoansPanel } from './LoansPanel';
 import { Confirm } from '../configuration/groups/shared';
+import { DeleteTeamDialog, LeadSetup, RowMenu, SpreadNotice } from './TeamsExtras';
+import { AvailabilityGrid } from './AvailabilityGrid';
+import { TimeOffPanel } from './TimeOffPanel';
+import { CoverageSummary, DeleteSkillDialog, FixSkillDialog, LevelBar, PeopleLink, RiskFlag } from './SkillsExtras';
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   employees: { title: 'Employees', sub: 'People, contracts and the limits a schedule must respect.' },
   teams: { title: 'Teams', sub: 'How people are organised and who leads them.' },
   'org-chart': { title: 'Org chart', sub: 'Who reports to whom, from the top down.' },
-  skills: { title: 'Skills', sub: 'What people can do, and how well.' },
+  skills: { title: 'Skills', sub: 'What people can do, and how well. A WFM group can require skills: see the Skills tab of the group.' },
   availability: { title: 'Availability', sub: 'When each person can and cannot be scheduled.' },
   'time-off': { title: 'Time Off', sub: 'Leave requests. Approved time off is never scheduled over.' },
   attendance: { title: 'Time & Attendance', sub: 'Punches compared against the published schedule, and the payroll export.' },
+  'cross-site-cover': { title: 'Cross-Site Cover', sub: 'Have someone cover at another site for a few days, and see who is covering where.' },
   payroll: { title: 'Payroll', sub: 'Turn a pay period into pay codes, check it, approve it and export it for payroll.' },
 };
 
@@ -35,7 +39,7 @@ export const WorkforceHub: React.FC<{ activeSubSection?: string }> = ({ activeSu
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-[#FFFFFF] p-6 space-y-6">
       <PageHeader title={meta.title} sub={meta.sub} />
       <NoticeBanner />
-      {activeSubSection === 'org-chart' ? <OrgChartPanel /> : activeSubSection === 'teams' ? <TeamsPanel /> : activeSubSection === 'skills' ? <SkillsPanel /> : activeSubSection === 'availability' ? <AvailabilityPanel /> : activeSubSection === 'time-off' ? <TimeOffPanel /> : activeSubSection === 'attendance' ? <AttendancePanel /> : activeSubSection === 'payroll' ? <PayrollPanel /> : <EmployeesPanel />}
+      {activeSubSection === 'org-chart' ? <OrgChartPanel /> : activeSubSection === 'teams' ? <TeamsPanel /> : activeSubSection === 'skills' ? <SkillsPanel /> : activeSubSection === 'availability' ? <AvailabilityPanel /> : activeSubSection === 'time-off' ? <TimeOffPanel /> : activeSubSection === 'attendance' ? <AttendancePanel /> : activeSubSection === 'cross-site-cover' ? <LoansPanel /> : activeSubSection === 'payroll' ? <PayrollPanel /> : <EmployeesPanel />}
     </div>
   );
 };
@@ -53,6 +57,9 @@ const TeamsPanel: React.FC = () => {
   const w = can('workforce:write');
   const [lines, setLines] = useState<Team | null>(null);          // putting everyone in a team under its supervisor
   const [overwrite, setOverwrite] = useState(false);
+  const [leadOpen, setLeadOpen] = useState(false);               // the "teams without a lead" box is open, with a picker on each
+  const [leadFor, setLeadFor] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<Team | null>(null);
   const [linesError, setLinesError] = useState('');
   const applyLines = async (reason: string) => {
     if (!lines) return; setLinesError('');
@@ -67,7 +74,6 @@ const TeamsPanel: React.FC = () => {
       setF(null); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); }
   };
-  const del = async (t: Team) => { if (!confirm(`Delete team “${t.name}”?`)) return; try { await api(`/workforce/teams/${t.id}`, { method: 'DELETE' }); setTick((x) => x + 1); } catch (e: any) { setNotice({ kind: 'err', text: e.message }); } };
   return (
     <Card title="Teams" actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', description: '', location: '', managerId: '', deputyId: '' }); }}><Plus className="w-3.5 h-3.5" />Add team</Btn>}>
       {f && (
@@ -80,20 +86,23 @@ const TeamsPanel: React.FC = () => {
           <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save team</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
+      {teams.data && <LeadSetup teams={teams.data} canWrite={w} open={leadOpen} setOpen={setLeadOpen} autoFocusId={leadFor} onDone={() => { setTick((x) => x + 1); setLeadFor(null); }} />}
+      {teams.data && <SpreadNotice teams={teams.data} />}
       <div className="max-w-xs"><Input aria-label="Find a team" placeholder="Find a team by name or code" value={find} onChange={(e) => { setFind(e.target.value); setShown(100); }} /></div>
-      {teams.data?.length === 0 ? <Empty title={find.trim() ? 'No team matches that search' : 'No teams yet'}>{find.trim() ? 'Try part of the name.' : 'Teams group people under a team lead. Create one, then assign people to it.'}</Empty> : (
+      {teams.data === null ? <LoadState state={teams} what="the teams" skeleton={<TableSkeleton rows={6} cols={6} />}>{() => null}</LoadState> : teams.data.length === 0 ? <Empty title={find.trim() ? 'No team matches that search' : 'No teams yet'}>{find.trim() ? 'Try part of the name.' : 'Teams group people under a team lead. Create one, then assign people to it.'}</Empty> : (
         <Table head={['Team', 'Team lead', 'Deputy', 'Location', 'People', 'Status', '']} right={[4]}>
           {teams.data?.map((t) => (
             <tr key={t.id}>
               <td className="p-3"><div className="font-semibold">{t.name}</div><div className="text-[11px] text-[#6B6B6B]">{t.description}</div></td>
-              <td className="p-3">{t.managerName ?? <span className="text-[#B7791F]">None</span>}</td><td className="p-3">{t.deputyName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono">{t.memberCount}</td>
+              <td className="p-3">{t.managerName ?? (t.status === 'ACTIVE' ? (w ? <button className="text-[12px] font-semibold text-[#8F6200] underline" onClick={() => { setLeadFor(t.id); setLeadOpen(true); }}>No lead: assign</button> : <span className="text-[#8F6200]">No lead</span>) : <span className="text-[#6B6B6B]">–</span>)}</td><td className="p-3">{t.deputyName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono">{t.memberCount}</td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <>{t.managerId && <button className="text-[12px] underline mr-3" title="Make everyone in the team report to its supervisor" onClick={() => { setLinesError(''); setLines(t); }}>Set reporting lines</button>}<button className="text-[12px] underline mr-3" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '', deputyId: t.deputyId ?? '' })}>Edit</button><button aria-label="Delete team" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-2" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '', deputyId: t.deputyId ?? '' })}>Edit</button><RowMenu label={`More actions for ${t.name}`} items={[...(t.managerId ? [{ label: 'Set reporting lines', onClick: () => { setLinesError(''); setLines(t); } }] : []), { label: 'Delete team…', danger: true, onClick: () => setDeleting(t) }]} /></>}</td>
             </tr>
           ))}
         </Table>
       )}
       {(teams.data?.length ?? 0) >= shown && <button type="button" className="text-[12px] underline" onClick={() => setShown(shown + 200)}>Show more teams</button>}
+      {deleting && <DeleteTeamDialog team={deleting} others={teams.data ?? []} onCancel={() => setDeleting(null)} onDeleted={(text) => { setDeleting(null); setNotice({ kind: 'ok', text }); setTick((x) => x + 1); }} />}
       {lines && (
         <Confirm title={`Put ${lines.name} under ${lines.managerName}`} confirmLabel="Set reporting lines" reason error={linesError} onCancel={() => setLines(null)} onConfirm={applyLines}>
           <p>Everyone in {lines.name} will report to {lines.managerName}. People who already report to someone are left as they are.</p>
@@ -156,7 +165,12 @@ const CoverPanel: React.FC = () => {
 const SkillsPanel: React.FC = () => {
   const { can, setNotice } = useForecast();
   const [tick, setTick] = useState(0);
-  const skills = useApi<Skill[]>('/workforce/skills', [tick]);
+  // how few people make a skill thin: a setting of this browser, asked of the server so the flag and its reason are worked out in one place
+  const [thin, setThin] = useState<number>(() => { const v = Number(localStorage.getItem('wfm.skills.thin')); return v >= 1 && v <= 100 ? v : 3; });
+  useEffect(() => { try { localStorage.setItem('wfm.skills.thin', String(thin)); } catch { /* not kept */ } }, [thin]);
+  const skills = useApi<Skill[]>(`/workforce/skills?thin=${thin}`, [tick]);
+  const [deleting, setDeleting] = useState<Skill | null>(null);
+  const [fixing, setFixing] = useState<Skill | null>(null);
   const [f, setF] = useState<{ id: string | null; name: string; category: Skill['category']; type: Skill['type']; requiresCertification: boolean } | null>(null);
   const [error, setError] = useState('');
   const w = can('workforce:write');
@@ -168,7 +182,6 @@ const SkillsPanel: React.FC = () => {
       setF(null); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); }
   };
-  const del = async (s: Skill) => { if (!confirm(`Delete skill “${s.name}”? It is removed from ${s.holders} people.`)) return; try { await api(`/workforce/skills/${s.id}`, { method: 'DELETE' }); setTick((x) => x + 1); } catch (e: any) { setNotice({ kind: 'err', text: e.message }); } };
   return (
     <Card title="Skills" sub="Assign skills and levels on each employee." actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', category: 'PRODUCTS', type: 'CORE', requiresCertification: false }); }}><Plus className="w-3.5 h-3.5" />Add skill</Btn>}>
       {f && (
@@ -180,16 +193,26 @@ const SkillsPanel: React.FC = () => {
           <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save skill</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
-      {skills.data?.length === 0 ? <Empty title="No skills yet">Skills describe what people can handle, such as a product line, a language or a tier.</Empty> : (
-        <Table head={['Skill', 'Category', 'Importance', 'Certification', 'People', '']} right={[4]}>
+      {skills.data && skills.data.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <CoverageSummary skills={skills.data as any} thin={thin} />
+          <label className="ml-auto text-[12px] text-[#525252] flex items-center gap-2">Flag skills held by fewer than<input type="number" min={1} max={100} value={thin} aria-label="Thin coverage threshold, people" onChange={(e) => setThin(Math.min(100, Math.max(1, Number(e.target.value) || 1)))} className="w-14 rounded border border-[#E5E5E0] px-1.5 py-1 text-[13px]" />people</label>
+        </div>
+      )}
+      {skills.data === null ? (skills.error ? <LoadFailed what="skills" error={skills.error} reload={skills.reload} /> : <Waiting what="skills" shape="table" reload={skills.reload} />) : skills.data.length === 0 ? <Empty title="No skills yet">Skills describe what people can handle, such as a product line, a language or a tier.</Empty> : (
+        <Table head={['Skill', 'Category', 'Importance', ...(skills.data.some((s) => s.requiresCertification) ? ['Certification'] : []), 'Levels', 'People', '']} right={[skills.data.some((s) => s.requiresCertification) ? 5 : 4]}>
           {skills.data?.map((s) => (
-            <tr key={s.id}><td className="p-3 font-semibold">{s.name}<div className="text-[11px] font-mono text-[#6B6B6B] font-normal">{s.code}</div></td>
+            <tr key={s.id}><td className="p-3 font-semibold"><span title={`Code ${s.code}`}>{s.name}</span><span className="sr-only"> code {s.code}</span><RiskFlag s={s as any} />{s.risk?.reason && s.risk.level !== 'OK' && <div className="text-[11px] text-[#6B6B6B] font-normal">{s.risk.reason}{w && s.risk.fixGroupId && <> · <button className="underline font-semibold text-[#171717]" onClick={() => setFixing(s)}>Fix…</button></>}</div>}</td>
               <td className="p-3">{s.category[0] + s.category.slice(1).toLowerCase()}</td><td className="p-3">{s.type[0] + s.type.slice(1).toLowerCase()}</td>
-              <td className="p-3">{s.requiresCertification ? 'Required' : '–'}</td><td className="p-3 text-right font-mono">{s.holders}</td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => setF({ id: s.id, name: s.name, category: s.category, type: s.type, requiresCertification: s.requiresCertification })}>Edit</button><button aria-label="Delete skill" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(s)}><Trash2 className="w-4 h-4 inline" /></button></>}</td></tr>
+              {skills.data!.some((x) => x.requiresCertification) && <td className="p-3">{s.requiresCertification ? <Pill tone="info">Required</Pill> : ''}</td>}
+              <td className="p-3"><LevelBar levels={s.levels} name={s.name} /></td>
+              <td className="p-3 text-right"><PeopleLink s={s as any} />{s.holders > (s.activeHolders ?? s.holders) && <div className="text-[11px] text-[#6B6B6B]" title="People who have the skill on their record but cannot be scheduled (left, suspended or onboarding)">+{s.holders - (s.activeHolders ?? s.holders)} not active</div>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-2" onClick={() => setF({ id: s.id, name: s.name, category: s.category, type: s.type, requiresCertification: s.requiresCertification })}>Edit</button><RowMenu label={`More actions for ${s.name}`} items={[{ label: 'Delete skill…', danger: true, onClick: () => setDeleting(s) }]} /></>}</td></tr>
           ))}
         </Table>
       )}
+      {fixing && <FixSkillDialog skill={fixing as any} onClose={() => setFixing(null)} onChanged={() => setTick((x) => x + 1)} />}
+      {deleting && <DeleteSkillDialog skill={deleting as any} onCancel={() => setDeleting(null)} onDeleted={(text) => { setDeleting(null); setNotice({ kind: 'ok', text }); setTick((x) => x + 1); }} />}
     </Card>
   );
 };
@@ -221,7 +244,11 @@ const AvailabilityPanel: React.FC = () => {
   const step = (d: number) => { const next = crew.data?.[at + d]; if (next) setEmpId(next.id); };
   const saveAndNext = async () => { if (await save()) step(1); };
   return (
-    <Card title="Weekly availability" sub="With nothing entered, a person can work any time a shift template allows. “Only available” narrows a day to those hours; “Unavailable” removes hours; “Prefer” is a wish the scheduler tries to honour.">
+    <div className="space-y-6">
+      <Card title="Team week" sub="With nothing entered, a person can work any time a shift template allows. Paint cells, copy a week, or set days for the people you tick; then save once.">
+        <AvailabilityGrid onOpenDetail={(id) => { setEmpId(id); window.setTimeout(() => document.getElementById('availability-detail')?.scrollIntoView({ block: 'start' }), 50); }} />
+      </Card>
+      {empId && <div id="availability-detail"><Card title="One person in detail" sub="With nothing entered, a person can work any time a shift template allows. “Only available” narrows a day to those hours; “Unavailable” removes hours; “Prefer” is a wish the scheduler tries to honour.">
       <div className="flex flex-wrap items-start gap-4">
         <div className="w-56"><Field label="Team" hint="Optional: step through one team"><Select value={teamId} onChange={(e) => { setTeamId(e.target.value); setEmpId(''); }}><option value="">Everyone</option>{teams.data?.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.memberCount})</option>)}</Select></Field></div>
         <div className="w-full max-w-sm"><Field label="Employee"><PersonPicker ariaLabel="Employee" value={empId} status="ACTIVE" teamId={teamId || undefined} placeholder="Choose a person" onChange={(id) => setEmpId(id)} /></Field></div>
@@ -250,66 +277,8 @@ const AvailabilityPanel: React.FC = () => {
           {w && <div className="flex gap-2"><Btn onClick={() => setRows((r) => [...r, { dayOfWeek: 0, startTime: '09:00', endTime: '17:00', kind: 'UNAVAILABLE' }])}><Plus className="w-3.5 h-3.5" />Add window</Btn><Btn variant="primary" onClick={() => void save()}>Save availability</Btn>{teamId && at >= 0 && at < (crew.data?.length ?? 0) - 1 && <Btn onClick={saveAndNext}>Save and next person</Btn>}</div>}
         </div>
       )}
-    </Card>
+    </Card></div>}
+    </div>
   );
 };
 
-// ---------------------------------------------------------------- time off
-
-const STATUS_TONE = { REQUESTED: 'warn', APPROVED: 'good', REJECTED: 'bad', CANCELLED: 'neutral' } as const;
-
-const TimeOffPanel: React.FC = () => {
-  const { can, setNotice } = useForecast();
-  const [tick, setTick] = useState(0);
-  const [statuses, setStatuses] = useState<string[]>([]);
-  const list = useApi<TimeOff[]>(`/workforce/time-off${statuses.length ? `?statuses=${statuses.join(',')}` : ''}`, [tick, statuses.join(',')]);
-  const [f, setF] = useState<{ employeeId: string; type: string; startDate: string; endDate: string; reason: string; approve: boolean } | null>(null);
-  const [error, setError] = useState('');
-  const w = can('workforce:write');
-
-  const decide = async (t: TimeOff, s: 'APPROVED' | 'REJECTED' | 'CANCELLED') => {
-    let reason = '';
-    if (s === 'REJECTED') { reason = prompt(`Why is ${t.employeeName}'s request being rejected?`) ?? ''; if (reason.trim().length < 3) return; }
-    try { await api(`/workforce/time-off/${t.id}/decide`, { method: 'POST', body: { status: s, reason } }); setTick((x) => x + 1); } catch (e: any) { setNotice({ kind: 'err', text: e.message }); }
-  };
-  const create = async () => {
-    if (!f) return; setError('');
-    try { await api('/workforce/time-off', { method: 'POST', body: f }); setF(null); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
-  };
-  const cols = useMemo<ColDef<TimeOff>[]>(() => [
-    { headerName: 'Employee', field: 'employeeName', minWidth: 160 },
-    { headerName: 'Type', field: 'type', valueFormatter: (p) => p.value[0] + p.value.slice(1).toLowerCase(), width: 120 },
-    { headerName: 'From', field: 'startDate', valueFormatter: (p) => dayYear(p.value) },
-    { headerName: 'To', field: 'endDate', valueFormatter: (p) => dayYear(p.value) },
-    { headerName: 'Days', field: 'days', type: 'rightAligned', width: 90 },
-    { headerName: 'Status', field: 'status', width: 130, cellRenderer: (p: any) => <span className="flex items-center gap-1 h-full"><Pill tone={STATUS_TONE[p.value as keyof typeof STATUS_TONE]}>{p.value[0] + p.value.slice(1).toLowerCase()}</Pill>{p.data?.escalatedAt && p.value === 'REQUESTED' && <Pill tone="warn" title="Waited longer than the escalation time: the managers have been told">Overdue</Pill>}</span> },
-    { headerName: 'Reason / note', field: 'reason', flex: 2, minWidth: 160 },
-    { headerName: 'Decided', valueGetter: (p) => (p.data!.decidedBy ? `${p.data!.decidedBy}${p.data!.decidedLevel ? ` (${p.data!.decidedLevel === 'SUPERVISOR' ? 'supervisor' : 'manager'})` : ''} · ${when(p.data!.decidedAt)}` : ''), minWidth: 200 },
-    { headerName: '', width: 190, sortable: false, filter: false, cellRenderer: (p: any) => !w ? null : (
-      <span className="flex gap-2 items-center h-full text-[12px]">
-        {p.data.status === 'REQUESTED' && <><button className="font-semibold text-[#2A7553] underline" onClick={() => decide(p.data, 'APPROVED')}>Approve</button><button className="font-semibold text-[#BC3F3F] underline" onClick={() => decide(p.data, 'REJECTED')}>Reject</button></>}
-        {(p.data.status === 'REQUESTED' || p.data.status === 'APPROVED') && <button className="underline text-[#6B6B6B]" onClick={() => decide(p.data, 'CANCELLED')}>Cancel</button>}
-      </span>) },
-  ], [w]);
-
-  return (
-    <Card title="Time off" sub="Approved time off blocks scheduling for those days. Requests wait for a decision."
-      actions={<>
-        <MultiSelect ariaLabel="Status" allLabel="All requests" noun={['status', 'statuses']} value={statuses} onChange={setStatuses} options={[{ value: 'REQUESTED', label: 'Waiting' }, { value: 'APPROVED', label: 'Approved' }, { value: 'REJECTED', label: 'Rejected' }, { value: 'CANCELLED', label: 'Cancelled' }]} />
-        {w && <Btn variant="primary" onClick={() => { setError(''); setF({ employeeId: '', type: 'VACATION', startDate: '', endDate: '', reason: '', approve: false }); }}><Plus className="w-3.5 h-3.5" />New request</Btn>}
-      </>}>
-      {f && (
-        <div className="border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
-          <div className="md:col-span-2"><Field label="Employee"><PersonPicker ariaLabel="Employee" value={f.employeeId} status="ACTIVE" placeholder="Choose: type a name or number" onChange={(id) => setF({ ...f, employeeId: id })} /></Field></div>
-          <Field label="Type"><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>{['VACATION', 'SICK', 'PERSONAL', 'HOLIDAY', 'TRAINING', 'LEAVE', 'OTHER'].map((t) => <option key={t} value={t}>{t[0] + t.slice(1).toLowerCase()}</option>)}</Select></Field>
-          <Field label="From"><Input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate || e.target.value })} /></Field>
-          <Field label="To"><Input type="date" min={f.startDate} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></Field>
-          <Field label="Decision"><Select value={f.approve ? 'y' : 'n'} onChange={(e) => setF({ ...f, approve: e.target.value === 'y' })}><option value="n">Leave for approval</option><option value="y">Approve now</option></Select></Field>
-          <div className="md:col-span-6"><Field label="Reason (optional)"><Input value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field></div>
-          <div className="md:col-span-6 flex items-center gap-2"><Btn variant="primary" disabled={!f.employeeId || !f.startDate || !f.endDate} onClick={create}>Save</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
-        </div>
-      )}
-      {list.data?.length === 0 ? <Empty title="No time-off requests">Requests and approved leave appear here.</Empty> : <Grid<TimeOff> rowData={list.data ?? []} columnDefs={cols} defaultColDef={{ sortable: true, resizable: true }} loading={list.loading} height={420} />}
-    </Card>
-  );
-};

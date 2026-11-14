@@ -4,7 +4,8 @@
  * anything. Activity blocks can be dragged to move and dragged at their right edge to resize, in 15-minute steps, and each
  * change asks for a reason before it is saved.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { fitPx, gapWindows, labelEvery, layoutRows, naturalCompare, nowRowIndex, windowOf } from '../../services/scheduleIssues';
 import { Activity, Employee, ScheduleShift, SchedulingPolicy, slotHHMM } from '../../services/api';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Input } from '../forecasting/ui';
@@ -24,20 +25,31 @@ const textFor = (bg: string) => {
   const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
   return (r * 299 + g * 587 + b * 114) / 1000 >= 150 ? '#171717' : '#FFFFFF';
 };
+/** Darkens a colour just enough that white text on it can be read (a contrast of 4.5 to 1), keeping its hue: the colours people pick for shifts are not always dark enough for the white label. */
+const lum = (h: string) => { const c = [0, 2, 4].map((i) => parseInt(h.slice(1 + i, 3 + i), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const withWhiteText = (hex: string): string => {
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  let c = hex;
+  for (let k = 0; k < 12 && 1.05 / (lum(c) + 0.05) < 4.5; k++) c = '#' + [0, 2, 4].map((i) => Math.max(0, Math.round(parseInt(c.slice(1 + i, 3 + i), 16) * 0.92)).toString(16).padStart(2, '0')).join('');
+  return c;
+};
 /** pixels per 15 minutes at each zoom level */
 const PX: Record<string, number> = { '15': 30, '30': 20, '60': 12, '120': 7 };
 /** how often a time label is drawn, in 15-minute slots */
 const LABEL_EVERY: Record<string, number> = { '15': 4, '30': 4, '60': 8, '120': 16 };
-const ROW_H = 52;
+const ROW_COMFORTABLE = 52;
+const ROW_COMPACT = 38;
+const BAR_H = 28;
 const LEFT = 224;
 
 const hm = (slot: number) => slotHHMM(slot);
 const hoursOf = (s: ScheduleShift) => (s.lengthSlots - s.activities.filter((a) => a.type === 'MEAL').reduce((n, a) => n + a.slots, 0)) / 4;
 
-type Drag = { shiftId: string; idx: number; mode: 'move' | 'resize' | 'shift'; startX: number; origStart: number; origSlots: number; delta: number };
+type Drag = { shiftId: string; idx: number; mode: 'move' | 'resize' | 'shift'; startX: number; origStart: number; origSlots: number; delta: number; overId?: string | null };
 type Pending =
   | { kind: 'acts'; shift: ScheduleShift; acts: Act[]; what: string }
-  | { kind: 'shift'; shift: ScheduleShift; newStart: number; what: string };
+  | { kind: 'shift'; shift: ScheduleShift; newStart: number; what: string }
+  | { kind: 'swap'; shift: ScheduleShift; other: ScheduleShift; what: string };
 type Tip = { x: number; y: number; title: string; lines: string[] };
 
 export const DayTimeline: React.FC<{
@@ -49,14 +61,29 @@ export const DayTimeline: React.FC<{
   focus: boolean;
   problem: 'ALL' | 'UNDERSTAFFED' | 'VIOLATIONS';
   canEdit: boolean;
+  density?: 'comfortable' | 'compact';
+  groupBy?: boolean;
+  day?: string;
   selected: string | null;
   onSelect: (s: ScheduleShift) => void;
   onOpen: (employeeId: string) => void;
   onSaveActivities: (shift: ScheduleShift, acts: Act[], reason: string) => Promise<void>;
   onMoveShift: (shift: ScheduleShift, newStartSlot: number, reason: string) => Promise<void>;
-}> = ({ shifts, bad, coverage, people, zoom, focus, problem, canEdit, selected, onSelect, onOpen, onSaveActivities, onMoveShift }) => {
-  const px = PX[zoom] ?? 20;
-  const every = LABEL_EVERY[zoom] ?? 4;
+  onSwap?: (a: ScheduleShift, b: ScheduleShift, reason: string) => Promise<void>;
+  checked?: Set<string>;
+  onCheck?: (id: string, on: boolean) => void;
+  onFillGap?: (startSlot: number, slots: number, need: number) => void;
+  /** fill the height of the space it is in (one scroll area, the page does not scroll with it) instead of a fixed maximum */
+  fill?: boolean;
+  /** scroll to and flash a person's row (and the time on it), or a time on the staffing strip; a new `n` asks again */
+  focusReq?: { shiftId?: string; slot?: number; now?: boolean; n: number } | null;
+  /** the date and time of day right now on the group's clock: the line marking it, and where to scroll to on "now" */
+  now?: { day: string; slot: number };
+  /** whose clock the axis is on, for its heading ("UTC+5:30") */
+  clockLabel?: string;
+}> = ({ shifts, bad, coverage, people, zoom, focus, problem, canEdit, density = 'comfortable', groupBy = false, day, selected, onSelect, onOpen, onSaveActivities, onMoveShift, onSwap, checked, onCheck, onFillGap, fill, focusReq, now, clockLabel }) => {
+  const ROW_H = density === 'compact' ? ROW_COMPACT : ROW_COMFORTABLE;
+  const barTop = (ROW_H - BAR_H) / 2;
   const [drag, setDrag] = useState<Drag | null>(null);
   const [editing, setEditing] = useState<{ shiftId: string; idx: number } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -64,6 +91,22 @@ export const DayTimeline: React.FC<{
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [tip, setTip] = useState<Tip | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null);             // set when the scrolling area appears, so it can be measured
+  const box = { current: boxEl };
+  const [scrollTop, setScrollTop] = useState(0);
+  const [view, setView] = useState({ w: 1000, h: 700 });
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [flashGap, setFlashGap] = useState<number | null>(null);
+  const [keyOpen, setKeyOpen] = useState(false);
+  // the size of the scrolling area: the day is fitted to its width and only the rows in its height are drawn
+  useEffect(() => {
+    const el = boxEl; if (!el) return undefined;
+    const measure = () => setView({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure); ro.observe(el);
+    return () => ro.disconnect();
+  }, [boxEl]);
   const activities = useApi<Activity[]>('/config/activities', []);
   const policy = useApi<SchedulingPolicy>('/config/scheduling-policy', []);
   const timelineColors = policy.data?.timelineColors ?? { shift: '#7B6CA6', manual: '#6B7F99', violation: '#C9605F' };
@@ -79,12 +122,25 @@ export const DayTimeline: React.FC<{
   coverage.forEach((c, i) => { if (c.delta < 0) short.add(i); });
   const hasGap = (s: ScheduleShift) => { for (let q = s.startSlot; q < s.startSlot + s.lengthSlots; q++) if (short.has(q)) return true; return false; };
 
-  let rows = [...shifts].sort((a, b) => a.startSlot - b.startSlot || a.employeeName.localeCompare(b.employeeName));
+  let rows = [...shifts].sort((a, b) => a.startSlot - b.startSlot || naturalCompare(a.employeeName, b.employeeName));
   if (problem === 'UNDERSTAFFED' || focus) rows = rows.filter(hasGap);
   if (problem === 'VIOLATIONS') rows = rows.filter((s) => bad.has(`${s.employeeId}|${s.day}`));
 
-  const lo = rows.length ? Math.max(0, Math.floor(Math.min(...rows.map((s) => s.startSlot)) / 4) * 4 - 4) : 24;
-  const hi = rows.length ? Math.min(96, Math.ceil(Math.max(...rows.map((s) => s.startSlot + s.lengthSlots)) / 4) * 4 + 4) : 80;
+  const teamOf = (s: ScheduleShift) => s.teamName ?? people.get(s.employeeId)?.teamName ?? 'No team';
+  if (groupBy) rows = [...rows].sort((a, b) => naturalCompare(teamOf(a), teamOf(b)) || a.startSlot - b.startSlot || naturalCompare(a.employeeName, b.employeeName));
+  const sections: { key: string; team: string | null; items: ScheduleShift[] }[] = groupBy
+    ? rows.reduce<{ key: string; team: string | null; items: ScheduleShift[] }[]>((o, s) => { const t = teamOf(s); const last = o[o.length - 1]; if (last && last.team === t) last.items.push(s); else o.push({ key: t, team: t, items: [s] }); return o; }, [])
+    : [{ key: 'all', team: null, items: rows }];
+  const toggleGroup = (k: string) => setCollapsed((c) => { const n = new Set(c); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  // the axis covers the hours the day is staffed or needs staffing, whoever is shown: filtering or thinning the morning must not move the start of the day
+  const open: number[] = [];
+  coverage.forEach((c, i) => { if (c && (c.required > 0 || c.scheduled > 0)) open.push(i); });
+  const first = Math.min(...rows.map((s) => s.startSlot), open.length ? open[0] : 96), last = Math.max(...rows.map((s) => s.startSlot + s.lengthSlots), open.length ? open[open.length - 1] + 1 : 0);
+  const lo = rows.length || open.length ? Math.max(0, Math.floor(first / 4) * 4 - 4) : 24;
+  const hi = rows.length || open.length ? Math.min(96, Math.ceil(last / 4) * 4 + 4) : 80;
+  const px = zoom === 'fit' ? fitPx(view.w - 24, LEFT, hi - lo) : (PX[zoom] ?? 20);
+  const every = zoom === 'fit' ? labelEvery(px) : (LABEL_EVERY[zoom] ?? 4);
   const x = (slot: number) => (slot - lo) * px;
   const track = (hi - lo) * px;
   const ticks: number[] = [];
@@ -106,6 +162,12 @@ export const DayTimeline: React.FC<{
     if (!drag) return;
     const d = drag;
     setDrag(null);
+    const other = d.overId && d.overId !== shift.id ? rows.find((r) => r.id === d.overId) : undefined;
+    if (other && onSwap) {
+      if (!shift.templateId || !other.templateId) return setError('One of these shifts is not tied to a shift type, so it cannot be swapped.');
+      setError(''); setPending({ kind: 'swap', shift, other, what: `shift being swapped with ${other.employeeName}'s` }); setReason('');
+      return;
+    }
     if (d.delta === 0) return;
     const newStart = Math.min(Math.max(d.origStart + d.delta, 0), 96 - shift.lengthSlots);
     if (newStart === shift.startSlot) return;
@@ -129,88 +191,106 @@ export const DayTimeline: React.FC<{
     setBusy(true); setError('');
     try {
       if (pending.kind === 'acts') await onSaveActivities(pending.shift, pending.acts, reason.trim());
+      else if (pending.kind === 'swap') await onSwap!(pending.shift, pending.other, reason.trim());
       else await onMoveShift(pending.shift, pending.newStart, reason.trim());
       setPending(null); setReason('');
     }
     catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
+  // stretches where fewer people are scheduled than needed, merged into windows: each one is a place a shift could be added
+  const gaps = gapWindows(coverage, lo, hi);
+
+  // only the rows in view are drawn: a day with hundreds of people stays quick to scroll
+  type Flat = { kind: 'group'; key: string; team: string; count: number; top: number } | { kind: 'row'; s: ScheduleShift; top: number };
+  const flatBase: ({ kind: 'group'; key: string; team: string; count: number } | { kind: 'row'; s: ScheduleShift })[] = [];
+  for (const sec of sections) {
+    if (sec.team !== null) flatBase.push({ kind: 'group', key: sec.key, team: sec.team, count: sec.items.length });
+    if (!(sec.team !== null && collapsed.has(sec.key))) for (const s of sec.items) flatBase.push({ kind: 'row', s });
+  }
+  const heights = flatBase.map((it) => (it.kind === 'group' ? 28 : ROW_H));
+  const layout = layoutRows(heights);
+  const flat: Flat[] = flatBase.map((it, i) => ({ ...it, top: layout.tops[i] }) as Flat);
+  const headerH = 28 + 26;
+  const win = windowOf(layout, heights, scrollTop - headerH, scrollTop - headerH + view.h, 8);
+
+  // a fixed scale is wider than the screen: begin at the first shift of the day (or the current time) instead of midnight, once for each day and scale
+  const anchored = useRef('');
+  useEffect(() => {
+    const el = box.current;
+    if (!el || zoom === 'fit' || !rows.length) return;
+    const k = `${day ?? ''}|${zoom}`;
+    if (anchored.current === k) return;
+    anchored.current = k;
+    const at = showNow ? nowSlot : Math.min(...rows.map((r) => r.startSlot));
+    el.scrollLeft = Math.max(0, LEFT + x(at) - LEFT - 60);
+  }, [boxEl, zoom, day, rows.length]);          // eslint-disable-line react-hooks/exhaustive-deps
+
+  // asked to show something: a person's row (opening its team if closed) or a time on the strip
+  useEffect(() => {
+    if (!focusReq) return undefined;
+    const el = box.current; if (!el) return undefined;
+    if (focusReq.now) {
+      // the actual time: the first person on shift now at the top, and the time itself in the middle when the day is wider than the screen
+      const rowItems = flat.filter((f): f is Extract<Flat, { kind: 'row' }> => f.kind === 'row');
+      const at = rowItems[nowRowIndex(rowItems.map((f) => f.s), nowSlot)];
+      el.scrollTo({ top: at ? Math.max(0, at.top) : 0, left: Math.max(0, LEFT + x(nowSlot) - el.clientWidth / 2) });
+      return undefined;
+    }
+    if (focusReq.shiftId) {
+      const target = rows.find((r) => r.id === focusReq.shiftId);
+      if (!target) return undefined;
+      if (groupBy && collapsed.has(teamOf(target))) { setCollapsed((c) => { const n = new Set(c); n.delete(teamOf(target)); return n; }); return undefined; }
+      const it = flat.find((f) => f.kind === 'row' && f.s.id === target.id);
+      if (!it) return undefined;
+      el.scrollTo({ top: Math.max(0, headerH + it.top - el.clientHeight / 2 + ROW_H / 2), left: Math.max(0, LEFT + x(focusReq.slot ?? target.startSlot) - el.clientWidth / 2), behavior: 'smooth' });
+      setFlashId(target.id);
+      const t = setTimeout(() => setFlashId(null), 3000);
+      return () => clearTimeout(t);
+    }
+    if (focusReq.slot !== undefined) {
+      el.scrollTo({ top: 0, left: Math.max(0, LEFT + x(focusReq.slot) - el.clientWidth / 2), behavior: 'smooth' });
+      setFlashGap(focusReq.slot);
+      const t = setTimeout(() => setFlashGap(null), 3000);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [focusReq?.n, flat.length, boxEl]);                   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const nowSlot = now?.slot ?? 0;
+  const showNow = !!now && day === now.day && nowSlot >= lo && nowSlot <= hi;
+
   const cellTone = (d: number) => (d <= -6 ? 'bg-[#EFA9A9]' : d < 0 ? 'bg-[#F8D4D4]' : d >= 3 ? 'bg-[#F6E3B4]' : 'bg-[#D7EEDF]');
 
-  return (
-    <div className="space-y-2" onMouseMove={(e) => setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}>
-      {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
-      {pending && (
-        <div className="border border-[#E9D9B4] rounded-lg p-3 bg-[#FFF5DD] flex flex-wrap items-center gap-2">
-          <div className="text-[13px] flex-1 min-w-[260px]">Why is {pending.shift.employeeName}'s {pending.what}?</div>
-          <Input autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required)" className="max-w-xs" />
-          <Btn variant="primary" disabled={busy || reason.trim().length < 3} onClick={save}>Confirm</Btn>
-          <Btn onClick={() => setPending(null)}>Cancel</Btn>
-        </div>
-      )}
+  const legend = (
+    <>
+      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.shift }} />Shift</span>
+      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.manual }} />By hand</span>
+      {(Object.keys(ACT) as Act['type'][]).map((t) => <span key={t} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ACT[t].bg }} />{ACT[t].label}</span>)}
+      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.violation }} />Breaks a rule</span>
+      <span className="ml-auto flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#D7EEDF]" />On target</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F6E3B4]" />Over</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F8D4D4]" />Short</span></span>
+    </>
+  );
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-1 text-[11px] text-[#525252]">
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.shift }} />Shift</span>
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.manual }} />By hand</span>
-        {(Object.keys(ACT) as Act['type'][]).map((t) => <span key={t} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ACT[t].bg }} />{ACT[t].label}</span>)}
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.violation }} />Breaks a rule</span>
-        <span className="ml-auto flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#D7EEDF]" />On target</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F6E3B4]" />Over</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F8D4D4]" />Short</span></span>
-      </div>
-      {rows.length === 0 ? (
-        <div className="border border-[#E5E5E0] rounded-lg p-6 text-[13px] text-[#6B6B6B]">
-          {problem !== 'ALL' || focus ? 'Nobody matches this filter on this day.' : 'Nobody is scheduled on this day.'}
-        </div>
-      ) : (
-        <div className="border border-[#E5E5E0] rounded-lg bg-white overflow-auto max-h-[70vh]">
-          <div style={{ minWidth: LEFT + track }}>
-            <div className="flex sticky top-0 z-20 bg-[#FAFAF8] border-b border-[#E5E5E0] h-7">
-              <div className="sticky left-0 z-30 bg-[#FAFAF8] shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex items-center text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]" style={{ width: LEFT }}>Time (local)</div>
-              <div className="relative h-full" style={{ width: track }}>
-                {ticks.map((q) => <span key={q} className="absolute top-1.5 text-[11px] font-mono text-[#525252] -translate-x-1/2" style={{ left: x(q) }}>{hm(q)}</span>)}
-              </div>
-            </div>
-
-            <div className="flex sticky top-7 z-20 bg-white border-b border-[#E5E5E0]" style={{ height: 40 }}>
-              <div className="sticky left-0 z-30 bg-white shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 py-1.5 flex flex-col justify-center" style={{ width: LEFT }}
-                onMouseEnter={show('Staffing net', ['Scheduled against needed, per 15 minutes', 'Green: on target · amber: over · red: short'])} onMouseLeave={hide}>
-                <div className="text-[12px] font-semibold text-[#171717]">Staffing net</div>
-                <div className="text-[11px] text-[#6B6B6B]">scheduled / needed</div>
-              </div>
-              <div className="relative h-full" style={{ width: track }}>
-                {Array.from({ length: hi - lo }, (_, i) => lo + i).map((q) => {
-                  const c = coverage[q];
-                  if (!c) return null;
-                  const d = c.scheduled - c.required;
-                  return (
-                    <div key={q} className={`absolute top-2 h-6 rounded-[2px] flex items-center justify-center text-[9px] font-mono font-semibold ${cellTone(d)}`}
-                      style={{ left: x(q), width: px - 1 }}
-                      onMouseEnter={show(c.time, [`Needed ${c.required}`, `Scheduled ${c.scheduled}`, d < 0 ? `Short by ${-d}` : d > 0 ? `Over by ${d}` : 'On target'])}
-                      onMouseLeave={hide}>
-                      
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {rows.map((s, idx) => {
+  const renderRow = (s: ScheduleShift, top: number) => {
               const flagged = bad.has(`${s.employeeId}|${s.day}`);
               const person = people.get(s.employeeId);
               const paid = hoursOf(s);
               const isSel = selected === s.id;
               const acts = s.activities.map((a) => ({ type: a.type, startSlot: a.startSlot, slots: a.slots }));
               return (
-                <div key={s.id} className={`flex border-b border-[#F0F0EC] last:border-0 ${isSel ? 'bg-[#EEF3FA]' : 'bg-white'} hover:bg-[#F3F6FB]`} style={{ height: ROW_H }}>
-                  <div className="sticky left-0 z-10 bg-inherit shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex flex-col justify-center cursor-pointer min-w-0" style={{ width: LEFT }}
+                <div key={s.id} data-shift-id={s.id} data-slots={`${s.startSlot}|${s.lengthSlots}`} className={`flex border-b border-[#F0F0EC] last:border-0 ${drag?.mode === 'shift' && drag.overId === s.id && drag.shiftId !== s.id ? 'bg-[#FFF5DD] ring-1 ring-inset ring-[#E9D9B4]' : isSel ? 'bg-[#EEF3FA]' : 'bg-white'} hover:bg-[#F3F6FB] ${flashId === s.id ? 'ring-2 ring-inset ring-[#C84A4A]' : ''}`} style={{ position: 'absolute', top, left: 0, width: LEFT + track, height: ROW_H }}>
+                  <div className="sticky left-0 z-10 bg-inherit shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] pl-3 pr-8 flex flex-col justify-center cursor-pointer min-w-0" style={{ width: LEFT }}
                     onClick={() => onOpen(s.employeeId)}>
+                    {canEdit && onCheck && <input type="checkbox" aria-label={`Select ${s.employeeName}`} className="absolute right-2.5 top-1/2 -translate-y-1/2" checked={!!checked?.has(s.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => onCheck(s.id, e.target.checked)} />}
                     <div className={`text-[13px] truncate hover:underline ${flagged ? 'text-[#BC3F3F] font-semibold' : 'font-semibold text-[#171717]'}`}>{s.employeeName}</div>
-                    <div className="text-[11px] text-[#6B6B6B] truncate">{s.employeeNumber} · {s.teamName ?? person?.teamName ?? 'No team'} · {paid}h</div>
+                    {density === 'comfortable' && <div className="text-[11px] text-[#6B6B6B] truncate">{s.employeeNumber} · {s.teamName ?? person?.teamName ?? 'No team'} · {paid}h</div>}
                   </div>
 
                   <div className="relative h-full" style={{ width: track }} onClick={() => onSelect(s)}>
                     {/* the work bar */}
-                    <div className={`absolute top-2.5 h-7 rounded-md px-2 flex items-center text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden ${isSel ? 'ring-2 ring-[#171717]' : ''}`}
-                      style={{ left: x(drag && drag.shiftId === s.id && drag.mode === 'shift' ? Math.min(Math.max(s.startSlot + drag.delta, 0), 96 - s.lengthSlots) : s.startSlot), width: s.lengthSlots * px, cursor: canEdit && s.templateId ? 'grab' : 'default', touchAction: 'none', backgroundColor: flagged ? timelineColors.violation : s.source === 'MANUAL' ? timelineColors.manual : timelineColors.shift }}
+                    <div className={`absolute h-7 rounded-md px-2 flex items-center text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden ${isSel ? 'ring-2 ring-[#171717]' : ''}`}
+                      style={{ top: barTop, left: x(drag && drag.shiftId === s.id && drag.mode === 'shift' ? Math.min(Math.max(s.startSlot + drag.delta, 0), 96 - s.lengthSlots) : s.startSlot), width: s.lengthSlots * px, cursor: canEdit && s.templateId ? 'grab' : 'default', touchAction: 'none', backgroundColor: withWhiteText(flagged ? timelineColors.violation : s.source === 'MANUAL' ? timelineColors.manual : timelineColors.shift) }}
                       onPointerDown={(e) => {
                         if (!canEdit || !s.templateId) return;
                         e.currentTarget.setPointerCapture(e.pointerId);
@@ -219,7 +299,8 @@ export const DayTimeline: React.FC<{
                       onPointerMove={(e) => {
                         if (!drag || drag.shiftId !== s.id || drag.mode !== 'shift') return;
                         const delta = Math.round((e.clientX - drag.startX) / px);
-                        if (delta !== drag.delta) setDrag({ ...drag, delta });
+                        const over = onSwap ? (document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-shift-id]')?.getAttribute('data-shift-id') ?? null) : null;
+                        if (delta !== drag.delta || over !== (drag.overId ?? null)) setDrag({ ...drag, delta, overId: over });
                       }}
                       onPointerUp={() => { if (drag && drag.shiftId === s.id && drag.mode === 'shift') finishShiftDrag(s); }}
                       onMouseEnter={show(`${s.employeeName} · ${s.startTime}–${s.endTime}`, [s.templateName ?? 'Shift', s.source === 'MANUAL' ? 'Added by hand' : 'From the solver', `${paid}h paid`, flagged ? 'Breaks a rule' : ''])}
@@ -235,8 +316,8 @@ export const DayTimeline: React.FC<{
                       const st = ACT[a.type];
                       const w = slots * px;
                       return (
-                        <div key={i} className={`absolute top-2.5 h-7 rounded-sm flex items-center px-1.5 text-[11px] font-semibold overflow-hidden whitespace-nowrap select-none ${canEdit ? 'cursor-grab' : ''} ${live ? 'ring-2 ring-[#171717] opacity-90' : 'shadow-xs'}`}
-                          style={{ left: x(start), width: w, backgroundColor: st.bg, color: st.text, zIndex: 3 }}
+                        <div key={i} className={`absolute h-7 rounded-sm flex items-center px-1.5 text-[11px] font-semibold overflow-hidden whitespace-nowrap select-none ${canEdit ? 'cursor-grab' : ''} ${live ? 'ring-2 ring-[#171717] opacity-90' : 'shadow-xs'}`}
+                          style={{ top: barTop, left: x(start), width: w, backgroundColor: st.bg, color: st.text, zIndex: 3 }}
                           onClick={(e) => e.stopPropagation()}
                           onMouseEnter={show(st.label, [`${hm(start)}–${hm(start + slots)}`, `${slots * 15} minutes`, `in ${s.employeeName}'s shift`, canEdit ? 'Drag to move, right edge to resize, click to change' : ''])}
                           onMouseLeave={hide}
@@ -253,7 +334,7 @@ export const DayTimeline: React.FC<{
                             if (delta !== drag.delta) setDrag({ ...drag, delta });
                           }}
                           onPointerUp={() => { if (drag && drag.shiftId === s.id && drag.idx === i) finishDrag(s, acts); }}>
-                          {w >= 56 && <span className="truncate">{st.label} {hm(start)}</span>}
+                          {w >= 84 ? <span className="truncate">{st.label} {hm(start)}</span> : w >= 40 ? <span className="truncate">{st.label}</span> : null}
                           {canEdit && <span className="absolute right-0 top-0 h-full w-1.5 cursor-ew-resize" />}
                           {editing && editing.shiftId === s.id && editing.idx === i && (
                             <div className="absolute top-8 left-0 z-40 bg-white border border-[#E5E5E0] rounded-md shadow-lg p-2 flex flex-wrap gap-1 w-56 text-[#171717]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
@@ -271,7 +352,80 @@ export const DayTimeline: React.FC<{
                   </div>
                 </div>
               );
-            })}
+  };
+
+  return (
+    <div className={fill ? 'flex h-full min-h-0 flex-col gap-2' : 'space-y-2'} onMouseMove={(e) => setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}>
+      {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
+      {pending && (
+        <div className="border border-[#E9D9B4] rounded-lg p-3 bg-[#FFF5DD] flex flex-wrap items-center gap-2">
+          <div className="text-[13px] flex-1 min-w-[260px]">Why is {pending.shift.employeeName}'s {pending.what}{pending.kind === 'swap' ? ' shift' : ''}?</div>
+          <Input autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required)" className="max-w-xs" />
+          <Btn variant="primary" disabled={busy || reason.trim().length < 3} onClick={save}>Confirm</Btn>
+          <Btn onClick={() => setPending(null)}>Cancel</Btn>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="border border-[#E5E5E0] rounded-lg p-6 text-[13px] text-[#6B6B6B]">
+          {problem !== 'ALL' || focus ? 'Nobody matches this filter on this day.' : 'Nobody is scheduled on this day.'}
+        </div>
+      ) : (
+        <div ref={setBoxEl} data-testid="timeline-scroll" data-rows={rows.length} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)} className={`border border-[#E5E5E0] rounded-lg bg-white overflow-auto ${fill ? 'flex-1 min-h-0' : 'max-h-[70vh]'}`}>
+          <div className="relative" style={{ minWidth: LEFT + track }}>
+            {showNow && <div aria-hidden="true" data-testid="now-line" data-now-slot={Math.floor(nowSlot)} title="Now" className="absolute top-0 bottom-0 w-px bg-[#C84A4A] z-[15] pointer-events-none" style={{ left: LEFT + x(nowSlot) }}><span className="absolute -top-0 -translate-x-1/2 rounded-b bg-[#C84A4A] text-white text-[9px] px-1">now</span></div>}
+            <div className="flex sticky top-0 z-20 bg-[#FAFAF8] border-b border-[#E5E5E0] h-7">
+              <div className="sticky left-0 z-30 bg-[#FAFAF8] shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex items-center text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]" style={{ width: LEFT }}>
+                <span>Time ({clockLabel ?? 'local'})</span>
+                <button type="button" aria-expanded={keyOpen} onClick={() => setKeyOpen((o) => !o)} className="ml-auto rounded border border-[#E5E5E0] bg-white px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal text-[#525252] hover:bg-[#F3F6FB]">Key</button>
+                {keyOpen && <div role="dialog" aria-label="Key" className="absolute left-2 top-8 z-50 flex w-56 flex-col gap-1.5 rounded-lg border border-[#E5E5E0] bg-white p-3 text-[11px] font-normal normal-case tracking-normal text-[#525252] shadow-lg">{legend}</div>}
+              </div>
+              <div className="relative h-full" style={{ width: track }}>
+                {ticks.map((q) => <span key={q} className="absolute top-1.5 text-[11px] font-mono text-[#525252] -translate-x-1/2" style={{ left: x(q) }}>{hm(q)}</span>)}
+              </div>
+            </div>
+
+            <div className="flex sticky top-7 z-20 bg-white border-b border-[#E5E5E0]" style={{ height: 26 }} data-testid="staffing-strip">
+              <div className="sticky left-0 z-30 bg-white shrink-0 shadow-[4px_0_6px_-6px_rgba(23,23,23,0.25)] border-r-2 border-[#D6D6D0] px-3 flex items-center gap-1.5 whitespace-nowrap" style={{ width: LEFT }}
+                onMouseEnter={show('Staffing net', ['Scheduled against needed, per 15 minutes', 'Green: on target · amber: over · red: short', gaps.length ? `Dashed boxes are stretches that are short${canEdit && onFillGap ? ': click one to add a shift' : ''}` : ''])} onMouseLeave={hide}>
+                <span className="text-[12px] font-semibold text-[#171717]">Staffing net</span>
+                <span className="text-[11px] text-[#6B6B6B]">{gaps.length ? `${gaps.length} gap${gaps.length === 1 ? '' : 's'}` : 'no gaps'}</span>
+              </div>
+              <div className="relative h-full" style={{ width: track }}>
+                {Array.from({ length: hi - lo }, (_, i) => lo + i).map((q) => {
+                  const c = coverage[q];
+                  if (!c) return null;
+                  const d = c.scheduled - c.required;
+                  return (
+                    <div key={q} className={`absolute top-[5px] h-4 rounded-[2px] ${cellTone(d)}`}
+                      style={{ left: x(q), width: px - 1 }}
+                      onMouseEnter={show(c.time, [`Needed ${c.required}`, `Scheduled ${c.scheduled}`, d < 0 ? `Short by ${-d}` : d > 0 ? `Over by ${d}` : 'On target'])}
+                      onMouseLeave={hide} />
+                  );
+                })}
+                {flashGap !== null && gaps.filter((g) => flashGap >= g.from && flashGap < g.to).map((g) => <div key={`f${g.from}`} aria-hidden className="absolute inset-y-0 z-[5] rounded-sm ring-2 ring-[#171717] animate-pulse pointer-events-none" style={{ left: x(g.from), width: Math.max(14, (g.to - g.from) * px - 1) }} />)}
+                {gaps.map((g) => (
+                  <button key={g.from} type="button" disabled={!canEdit || !onFillGap} onClick={() => onFillGap?.(g.from, g.to - g.from, g.need)}
+                    aria-label={`Short by ${g.need} from ${hm(g.from)} to ${hm(g.to)}`}
+                    className="absolute top-0.5 z-[4] h-[22px] rounded-sm border border-dashed border-[#C9605F] bg-[#F8D4D4]/25 text-[10px] font-semibold text-[#8E2F2F] overflow-hidden whitespace-nowrap px-1 disabled:cursor-default enabled:hover:bg-[#F8D4D4]/80"
+                    style={{ left: x(g.from), width: Math.max(14, (g.to - g.from) * px - 1) }}
+                    onMouseEnter={show(`Short by up to ${g.need}`, [`${hm(g.from)}–${hm(g.to)}`, canEdit && onFillGap ? 'Click to add a shift here' : ''])} onMouseLeave={hide}>
+                    {(g.to - g.from) * px >= 34 ? `+${g.need}` : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="relative" style={{ height: layout.total }}>
+              {flat.slice(win[0], win[1]).map((it) => it.kind === 'group' ? (
+                <div key={`g-${it.key}`} className="flex border-b border-[#E5E5E0] bg-[#F5F5F1]" style={{ position: 'absolute', top: it.top, left: 0, width: LEFT + track, height: 28 }}>
+                  <button type="button" aria-expanded={!collapsed.has(it.key)} onClick={() => toggleGroup(it.key)} className="sticky left-0 z-10 bg-[#F5F5F1] shrink-0 border-r-2 border-[#D6D6D0] px-3 text-left text-[12px] font-semibold text-[#171717] truncate" style={{ width: LEFT }}>
+                    {collapsed.has(it.key) ? '▸' : '▾'} {it.team} <span className="font-normal text-[#6B6B6B]">({it.count})</span>
+                  </button>
+                  <div style={{ width: track }} />
+                </div>
+              ) : renderRow(it.s, it.top))}
+            </div>
           </div>
         </div>
       )}

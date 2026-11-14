@@ -3,6 +3,7 @@
  * person's direct reports when you open them. Pick a person to see the chain above them and their own reports. People with no line are listed so
  * they can be given one.
  */
+import { LoadState, SkeletonBlock } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { ChevronRight, Download } from 'lucide-react';
 import { api, download } from '../../services/api';
@@ -57,7 +58,8 @@ const Branch: React.FC<{ id: string; depth: number; onFocus: (id: string) => voi
           {open[n.id] && <Branch id={n.id} depth={depth + 1} onFocus={onFocus} />}
         </div>
       ))}
-      {busy && <div className="text-[12px] text-[#6B6B6B]">Loading…</div>}
+      {busy && items.length === 0 && <div role="status" className="space-y-1.5"><span className="sr-only">Loading</span><SkeletonBlock h={40} /><SkeletonBlock h={40} /></div>}
+      {busy && items.length > 0 && <div role="status" className="text-[12px] text-[#6B6B6B]">Loading more…</div>}
       {!busy && items.length < total && <Btn onClick={() => load(items.length)}>Show more ({total - items.length} more)</Btn>}
     </div>
   );
@@ -91,6 +93,8 @@ const Unassigned: React.FC<{ groupId: string; canWrite: boolean; onChanged: () =
   );
 };
 
+import { FromTeamsDialog, ImportDialog, SetupBanner } from './OrgSetup';
+
 export const OrgChartPanel: React.FC = () => {
   const { can, groups } = useForecast() as any;
   const canWrite = can('workforce:write');
@@ -98,6 +102,8 @@ export const OrgChartPanel: React.FC = () => {
   const [focus, setFocus] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [showUn, setShowUn] = useState(false);
+  const [dialog, setDialog] = useState<'teams' | 'import' | null>(null);
+  const { setNotice } = useForecast() as any;
   const roots = useApi<Roots>(`/workforce/org-chart/roots${groupId ? `?groupId=${groupId}` : ''}`, [tick]);
   const chain = useApi<Node[]>(focus ? `/workforce/org-chart/${focus}/chain` : null, [focus, tick]);
   const me = chain.data?.[chain.data.length - 1];
@@ -105,11 +111,14 @@ export const OrgChartPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      {r && <SetupBanner unassigned={r.unassigned} total={r.total} canWrite={canWrite} listOpen={showUn} onToggleList={() => setShowUn((v) => !v)} onFromTeams={() => setDialog('teams')} onImport={() => setDialog('import')} />}
+      {dialog === 'teams' && <FromTeamsDialog groupId={groupId} onCancel={() => setDialog(null)} onDone={(text) => { setDialog(null); setNotice?.({ kind: 'ok', text }); setTick((t) => t + 1); }} />}
+      {dialog === 'import' && <ImportDialog onCancel={() => setDialog(null)} onTemplate={() => download('/workforce/org-chart/export.csv', 'reporting-lines.csv').catch(() => undefined)} onDone={(text) => { setDialog(null); setNotice?.({ kind: 'ok', text }); setTick((t) => t + 1); }} />}
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-72"><div className="text-[12px] font-semibold mb-1">Find a person</div><PersonPicker ariaLabel="Find a person in the chart" value="" statuses="ONBOARDING,ACTIVE,LEAVE" placeholder="Search by name or number" onChange={(id) => id && setFocus(id)} /></div>
         {Array.isArray(groups) && groups.length > 0 && <div className="w-56"><div className="text-[12px] font-semibold mb-1">WFM group</div><Select value={groupId} onChange={(e) => { setGroupId(e.target.value); setFocus(null); }}><option value="">Everyone</option>{groups.map((g: any) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select></div>}
         <Btn onClick={() => download('/workforce/org-chart/export.csv', 'reporting-lines.csv').catch(() => undefined)}><Download className="w-3.5 h-3.5" />Export reporting lines</Btn>
-        {r && <div className="ml-auto text-[12px] text-[#6B6B6B]">{r.total.toLocaleString()} people · {r.unassigned.toLocaleString()} with no line {r.unassigned > 0 && <button className="underline text-[#171717]" onClick={() => setShowUn((v) => !v)}>{showUn ? 'Hide' : 'Show them'}</button>}</div>}
+        {r && <div className="ml-auto text-[12px] text-[#6B6B6B]">{r.total.toLocaleString()} people · {(r.total - r.unassigned).toLocaleString()} with a line</div>}
       </div>
 
       {showUn && <Unassigned groupId={groupId} canWrite={canWrite} onChanged={() => setTick((t) => t + 1)} />}
@@ -127,8 +136,8 @@ export const OrgChartPanel: React.FC = () => {
           {chain.data.length === 1 && <p className="text-[12px] text-[#B7791F]">Nobody is above them yet.{canWrite ? ' Set "Reports to" on their employee record.' : ''}</p>}
           {me && me.directReports === 0 ? <Empty title="Nobody reports to them">Set "Reports to" on other people to build this branch.</Empty> : me && <Branch id={me.id} depth={0} onFocus={setFocus} />}
         </Card>
-      ) : roots.error ? <Banner kind="err">{roots.error}</Banner> : !r ? <p className="text-[12px] text-[#6B6B6B]">Loading…</p> : r.roots.length === 0 ? (
-        <Empty title="No reporting lines yet">Set "Reports to" on employees, or use "Put the team under its supervisor" on the Teams screen. People appear here once somebody reports to them.</Empty>
+      ) : !r ? <LoadState state={roots} what="the org chart" skeleton={<div className="space-y-2"><SkeletonBlock h={44} /><SkeletonBlock h={44} /><SkeletonBlock h={44} /></div>}>{() => null}</LoadState> : r.roots.length === 0 ? (
+        <Empty title="No reporting lines yet">{canWrite ? 'Use “Set from teams” above to put everyone under their team lead in one step, import a file, or choose one by one.' : 'Reporting lines have not been set up yet. Ask an administrator.'} People appear here once somebody reports to them.</Empty>
       ) : (
         <div className="space-y-3">
           {r.roots.map((n) => <RootBranch key={n.id} n={n} onFocus={setFocus} />)}

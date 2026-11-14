@@ -39,7 +39,7 @@ function historyCsv(queue: string, days: number) {
   return rows.join('\n');
 }
 
-async function buildBackofficeGroup(admin: string, tag: string, turnaroundHours: number | undefined) {
+async function buildBackofficeGroup(admin: string, tag: string, turnaroundHours: number | undefined, channel: 'BACKOFFICE' | 'EMAIL' = 'BACKOFFICE') {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const toMonday = (7 - ((start.getDay() + 6) % 7)) % 7;
   const from = iso(addDays(start, toMonday || 7));
@@ -48,7 +48,7 @@ async function buildBackofficeGroup(admin: string, tag: string, turnaroundHours:
   assert.equal(g.status, 201, g.text);
   const queueName = `BO Queue ${tag}`;
   const q = await call(admin, 'POST', '/config/queues', {
-    name: queueName, channel: 'BACKOFFICE', wfmGroupId: g.json.id, ahtDefault: 600, openSlot: 0, closeSlot: 32, // 8 operating hours (0-8:00) at 15-min slots
+    name: queueName, channel, wfmGroupId: g.json.id, ahtDefault: 600, openSlot: channel === 'EMAIL' ? 32 : 0, closeSlot: channel === 'EMAIL' ? 64 : 32, // 8 operating hours (0-8:00) at 15-min slots
     ...(turnaroundHours !== undefined ? { turnaroundHours } : {}),
   });
   assert.equal(q.status, 201, q.text);
@@ -73,7 +73,7 @@ async function buildBackofficeGroup(admin: string, tag: string, turnaroundHours:
   return { from, spikeDay, byDay, dayAfter: iso(addDays(new Date(spikeDay + 'T00:00:00'), 1)), dayBefore: iso(addDays(new Date(spikeDay + 'T00:00:00'), -1)) };
 }
 
-describe('back-office turnaround smoothing (end to end)', () => {
+describe('back-office turnaround smoothing and email reply-within targets (end to end)', () => {
   let admin = '';
   before(async () => {
     assert.ok(PASSWORD, 'set ADMIN_PASSWORD');
@@ -94,6 +94,16 @@ describe('back-office turnaround smoothing (end to end)', () => {
 
     const flatBefore = flat.byDay.get(flat.dayBefore) ?? 0, smoothBefore = smooth.byDay.get(smooth.dayBefore) ?? 0;
     assert.equal(smoothBefore, flatBefore, 'the day before the spike is unaffected either way: the backlog has not arrived yet');
+  });
+
+  it('an email reply-within target under a day staffs the hours the mail falls due, so the peak is higher than same-day staffing', async () => {
+    const sameDay = await buildBackofficeGroup(admin, `mail24${RUN}`, 24, 'EMAIL');
+    const quick = await buildBackofficeGroup(admin, `mail2${RUN}`, 2, 'EMAIL');          // every message answered within 2 open hours
+    const a = sameDay.byDay.get(sameDay.spikeDay) ?? 0, b = quick.byDay.get(quick.spikeDay) ?? 0;
+    assert.ok(a > 0, 'same-day email shows a requirement on the spike day');
+    assert.ok(b > a, `a 2-hour reply target needs more people at its peak (${b}) than same-day staffing (${a})`);
+    const unset = await buildBackofficeGroup(admin, `mailu${RUN}`, undefined, 'EMAIL');
+    assert.equal(unset.byDay.get(unset.spikeDay), a, 'no target behaves exactly like 24 hours');
   });
 
   it('turnaroundHours of 0 or unset behaves like same-day (the default, pre-existing behaviour)', async () => {

@@ -5,16 +5,19 @@
  */
 import type { RotationStep } from '../../services/api';
 
-export interface DayPreset {
+/** Where a preset sits in the library, a reminder about its source and, for a pattern saved by the organisation, where it came from. */
+export interface PresetMeta { category?: string; note?: string; anchorWeekday?: number; saved?: { id: string; usedBy: number } }
+
+export interface DayPreset extends PresetMeta {
   id: string; kind: 'DAY_CYCLE'; label: string; summary: string;
   /** one entry per cycle day: a letter for a worked day, null for a day off */
   shape: (string | null)[];
   letters: { letter: string; label: string }[];
   crews: { name: string; offsetDays: number }[];
 }
-export interface WeeklyPreset {
+export interface WeeklyPreset extends PresetMeta {
   id: string; kind: 'WEEKLY'; label: string; summary: string;
-  steps: { name: string; weeks: number; letter: string }[];     // each step works its letter Monday to Friday, in the order of the pay week
+  steps: { name: string; weeks: number; letter?: string; days?: (string | null)[] }[];     // a step works its letter Monday to Friday, in the order of the pay week, or names a letter for each of its seven days
   letters: { letter: string; label: string }[];
   crews: { name: string; offsetWeeks: number }[];
 }
@@ -78,6 +81,8 @@ export const weeklyCrews = (preset: WeeklyPreset) => preset.crews.map((c) => ({ 
 export function weeklySteps(preset: WeeklyPreset, pick: Record<string, string>, weekStart: number): RotationStep[] {
   return preset.steps.map((s) => ({
     name: s.name, weeks: s.weeks,
-    days: Array.from({ length: 7 }, (_, i) => { const dow = (weekStart + i) % 7; return dow <= 4 ? pick[s.letter] ?? null : null; }),
+    days: s.days
+      ? s.days.map((l) => (l ? pick[l] ?? null : null))                                                                                         // seven named days, first day = first day of the pay week
+      : Array.from({ length: 7 }, (_, i) => { const dow = (weekStart + i) % 7; return dow <= 4 && s.letter ? pick[s.letter] ?? null : null; }),
   }));
 }

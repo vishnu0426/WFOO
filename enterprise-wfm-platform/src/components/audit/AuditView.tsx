@@ -2,6 +2,7 @@
  * Audit log: the append-only record of who changed what, when and why (forecast approvals, schedule edits and publishes, imports,
  * configuration, employee changes). Read straight from the gateway; filters run on the server and the filtered list can be exported.
  */
+import { Waiting } from '../common/loading';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Download, Search } from 'lucide-react';
 import { api, download } from '../../services/api';
@@ -129,7 +130,7 @@ export const AuditView: React.FC = () => {
         </div>
       </Card>
 
-      {loading && !rows.length ? <Busy text="Loading the log…" /> : !rows.length ? (
+      {loading && !rows.length ? <Waiting what="the audit log" shape="table" /> : !rows.length ? (
         <Empty title={filtered ? 'Nothing matches these filters' : 'No activity recorded yet'}>{filtered ? 'Try widening the dates or clearing a filter.' : 'Changes to forecasts, schedules, imports and settings appear here as they happen.'}</Empty>
       ) : (
         <div className="border border-[#E5E5E0] rounded-lg overflow-hidden">

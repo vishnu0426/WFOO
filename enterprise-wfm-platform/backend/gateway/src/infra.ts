@@ -2,10 +2,12 @@
  * Redis (cache + live state), NATS (event backbone) and the Python engine (gRPC).
  * Keys and subjects are always prefixed with the tenant id.
  */
+import fs from 'node:fs';
 import { retryWhileBusy } from './busyWait.ts';
 import { reconcile, type EngineSet } from './engineSet.ts';
 import dns from 'node:dns/promises';
 import { engineStats } from './metrics.ts';
+import { engineHeaders } from './observe.ts';
 import Redis from 'ioredis';
 import {
   connect, AckPolicy, DeliverPolicy, RetentionPolicy, StorageType, StringCodec,
@@ -173,7 +175,17 @@ const wfm = (grpc.loadPackageDefinition(def) as any).wfm;
 // ENGINE_ADDR may list several engines separated by commas: work goes to the least busy one, and an engine that is down is skipped.
 // with ENGINE_DISCOVER and no ENGINE_ADDR the list starts empty and is filled by the lookup
 const engineAddrs = process.env.ENGINE_DISCOVER && !process.env.ENGINE_ADDR ? [] : config.engineAddr.split(',').map((x) => x.trim()).filter(Boolean);
-const makeClient = (addr: string) => new wfm.Engine(addr, grpc.credentials.createInsecure(), { 'grpc.max_receive_message_length': -1, 'grpc.max_send_message_length': -1 });
+// The engine is private behind this gateway. Where the network between them is not fully trusted it speaks TLS (ENGINE_TLS_CA: the CA that signed the engine's certificate) or mutual
+// TLS (also ENGINE_TLS_CERT and ENGINE_TLS_KEY: this gateway's own certificate), with ENGINE_TLS_SERVER_NAME when the certificate is for a name other than the address used.
+// Messages are limited to ENGINE_MAX_MESSAGE_MB (256, the engine's own default) in each direction: neither side buffers an unbounded request.
+const engineMaxBytes = Math.max(1, Number(process.env.ENGINE_MAX_MESSAGE_MB || 256)) * 1024 * 1024;
+const readPem = (name: string) => (process.env[name] ? fs.readFileSync(process.env[name]!) : undefined);
+const engineCredentials = () => (process.env.ENGINE_TLS_CA ? grpc.credentials.createSsl(readPem('ENGINE_TLS_CA'), readPem('ENGINE_TLS_KEY'), readPem('ENGINE_TLS_CERT')) : grpc.credentials.createInsecure());
+const engineOptions = (): Record<string, string | number> => ({
+  'grpc.max_receive_message_length': engineMaxBytes, 'grpc.max_send_message_length': engineMaxBytes, 'grpc.keepalive_time_ms': 60_000, 'grpc.keepalive_timeout_ms': 20_000,
+  ...(process.env.ENGINE_TLS_SERVER_NAME ? { 'grpc.ssl_target_name_override': process.env.ENGINE_TLS_SERVER_NAME, 'grpc.default_authority': process.env.ENGINE_TLS_SERVER_NAME } : {}),
+});
+const makeClient = (addr: string) => new wfm.Engine(addr, engineCredentials(), engineOptions());
 const clients = engineAddrs.map(makeClient);
 const inFlight = clients.map(() => 0);
 const downUntil = clients.map(() => 0);
@@ -206,7 +218,10 @@ const timedOut = (ms: number) => Object.assign(new Error(`The engine did not fin
 const waitReady = (ms: number) => Promise.all(live().map((i) => clients[i]).map((c) => new Promise<boolean>((resolve) => c.waitForReady(Date.now() + ms, (e: Error | undefined) => resolve(!e))))).then((all) => all.some(Boolean));
 /** The engine's own admission limit says this; a problem too big for the solver says something else with the same status code. */
 const isBusy = (e: grpc.ServiceError) => /concurrent rpcs|ENGINE_BUSY/i.test(e.details ?? '');
+/** The request id and trace context of the work that is calling, as call metadata: the engine writes them into its own log lines. */
+const traceMetadata = () => { const md = new grpc.Metadata(); for (const [k, v] of Object.entries(engineHeaders())) md.set(k, v); return md; };
 const mapError = (e: grpc.ServiceError) => {
+  if (e.code === grpc.status.INVALID_ARGUMENT) return Object.assign(new Error(`The solver was given something it cannot use: ${e.details || 'invalid request'}`), { status: 400, code: 'INVALID_SOLVER_INPUT' });
   if (e.code === grpc.status.DEADLINE_EXCEEDED) return Object.assign(new Error('The engine did not answer in time.'), { status: 504, code: 'ENGINE_TIMEOUT' });
   if (e.code === grpc.status.RESOURCE_EXHAUSTED && isBusy(e)) return busy();
   if (e.code === grpc.status.RESOURCE_EXHAUSTED) return Object.assign(new Error(e.details || 'The problem is too large for the solver.'), { status: 400, code: 'TOO_LARGE' });
@@ -233,7 +248,7 @@ const callOnce = async <Q, R>(method: string, req: Q, timeoutMs: number): Promis
     inFlight[i]++;
     try {
       return await new Promise<R>((resolve, reject) => {
-        clients[i][method](req, { deadline: Date.now() + timeoutMs }, (e: grpc.ServiceError | null, r: R) => (e ? reject(e) : resolve(r)));
+        clients[i][method](req, traceMetadata(), { deadline: Date.now() + timeoutMs }, (e: grpc.ServiceError | null, r: R) => (e ? reject(e) : resolve(r)));
       });
     } catch (e: any) {
       if (e.code === grpc.status.UNAVAILABLE) { downUntil[i] = Date.now() + 15_000; last = unreachable(); continue; }   // try the next engine
@@ -263,7 +278,7 @@ const streamOnce = async (req: any, o: { timeoutMs: number; onEvent?: (ev: any) 
     inFlight[i]++;
     try {
       return await new Promise<any>((resolve, reject) => {
-        const stream = clients[i].ScheduleStream(req, { deadline: Date.now() + o.timeoutMs });
+        const stream = clients[i].ScheduleStream(req, traceMetadata(), { deadline: Date.now() + o.timeoutMs });
         let result: any = null, started = false;
         const stop = () => stream.cancel();
         o.signal?.addEventListener('abort', stop, { once: true });
@@ -293,6 +308,7 @@ export const engine = {
   intraday: call<any, any>('Intraday'),
   schedule: call<any, any>('Schedule'),
   simulate: call<any, any>('Simulate'),
+  validate: call<any, any>('Validate'),
   scheduleStream,
   /** How many engines are configured and how many answer right now. */
   get count() { return live().length || engineAddrs.length; },

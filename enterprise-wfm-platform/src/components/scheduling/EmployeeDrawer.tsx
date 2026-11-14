@@ -2,6 +2,7 @@
  * The panel that opens when a name is clicked on the Schedule Timeline: contract and this week's hours, skills with
  * proficiency, and the weekly schedule distribution (any week, past or future).
  */
+import { Waiting } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { addDays, DOW, Employee, weekFloor } from '../../services/api';
 import { useApi, usePayWeek } from '../forecasting/hooks';
@@ -99,7 +100,7 @@ export const EmployeeDrawer: React.FC<{
             );
           })}
         </div>
-        {history.loading && <div className="text-[12px] text-[#6B6B6B]">Loading…</div>}
+        {history.loading && !history.data && <Waiting what="this week" shape="lines" reload={history.reload} />}
       </section>
     </aside>
   );

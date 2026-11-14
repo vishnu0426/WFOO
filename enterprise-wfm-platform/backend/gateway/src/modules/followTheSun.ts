@@ -7,7 +7,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { withTenant } from '../db.ts';
 import { me, requires } from '../auth.ts';
-import { bad, isoDay, parse } from '../http.ts';
+import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
+import { audit } from '../audit.ts';
 import { addDays, dayRange, loadGroup } from './forecast/service.ts';
 import { liveStats, loadVersion } from './scheduleRoutes.ts';
 import { analyse, localMidnightSlot, type GroupSeries } from './sunMath.ts';
@@ -15,6 +16,51 @@ import { analyse, localMidnightSlot, type GroupSeries } from './sunMath.ts';
 export const followTheSun = Router();
 const SPD = 96;
 const uuid = z.string().uuid();
+
+/** The groups that can be picked, with their site and whether each has a published schedule over the dates (a group without one adds nothing to the view). */
+followTheSun.get('/choices', requires('schedule:read'), async (req, res) => {
+  const p = me(req);
+  const q = parse(z.object({ from: z.string().regex(isoDay), days: z.coerce.number().int().min(1).max(14).default(7) }), req.query);
+  const to = addDays(q.from, q.days - 1);
+  const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
+    `SELECT g.id, g.name, g.timezone, s.name AS site_name,
+            EXISTS (SELECT 1 FROM schedule_versions v WHERE v.tenant_id = :t AND v.wfm_group_id = g.id AND v.kind = 'DEMAND' AND v.status = 'PUBLISHED' AND v.period_start <= $2::date AND v.period_end >= $1::date) AS has_schedule
+     FROM wfm_groups g LEFT JOIN sites s ON s.id = g.site_id AND s.tenant_id = g.tenant_id
+     WHERE g.tenant_id = :t AND g.status = 'ACTIVE' ORDER BY g.name`, [q.from, to]));
+  res.json(rows.map((r) => ({ id: r.id, name: r.name, timezone: r.timezone, siteName: r.siteName ?? null, hasSchedule: !!r.hasSchedule })));
+});
+
+// ---------------------------------------------------------------- saved views, shared by everyone in the organisation
+const ViewBody = z.object({ name: z.string().trim().min(1).max(80), groupIds: z.array(uuid).min(2).max(12), displayTz: z.string().trim().min(1).max(60).default('UTC'), weekChoice: z.enum(['THIS', 'NEXT']).nullable().default(null) });
+const viewDto = (r: any) => ({ id: r.id, name: r.name, groupIds: r.groupIds as string[], displayTz: r.displayTz ?? 'UTC', weekChoice: r.weekChoice ?? null, createdBy: r.createdBy ?? null });
+
+followTheSun.get('/views', requires('schedule:read'), async (req, res) => {
+  res.json((await withTenant(me(req).tenantId, (tx) => tx.q<any>('SELECT * FROM sun_views WHERE tenant_id = :t ORDER BY lower(name)'))).map(viewDto));
+});
+
+followTheSun.post('/views', requires('workforce:write'), async (req, res) => {
+  const p = me(req), b = parse(ViewBody, req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const known = await tx.q<any>('SELECT id FROM wfm_groups WHERE tenant_id = :t AND id = ANY($1::uuid[])', [b.groupIds]);
+    if (known.length !== new Set(b.groupIds).size) throw bad('One of those groups does not exist.');
+    if (await tx.one('SELECT 1 FROM sun_views WHERE tenant_id = :t AND lower(name) = lower($1)', [b.name])) throw conflict(`There is already a saved view called "${b.name}".`);
+    const r = await tx.one<any>('INSERT INTO sun_views (tenant_id, name, group_ids, created_by, display_tz, week_choice) VALUES (:t, $1, $2::uuid[], $3, $4, $5) RETURNING *', [b.name, [...new Set(b.groupIds)], p.name, b.displayTz, b.weekChoice]);
+    await audit(tx, p, req, { action: 'CREATE', entityType: 'FOLLOW_THE_SUN_VIEW', entityId: r!.id, entityName: b.name, after: b });
+    return viewDto(r);
+  });
+  res.status(201).json(out);
+});
+
+followTheSun.delete('/views/:id', requires('workforce:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  await withTenant(p.tenantId, async (tx) => {
+    const r = await tx.one<any>('SELECT name FROM sun_views WHERE tenant_id = :t AND id = $1', [id]);
+    if (!r) throw notFound('Saved view');
+    await tx.exec('DELETE FROM sun_views WHERE tenant_id = :t AND id = $1', [id]);
+    await audit(tx, p, req, { action: 'DELETE', entityType: 'FOLLOW_THE_SUN_VIEW', entityId: id, entityName: r.name });
+  });
+  res.json({ ok: true });
+});
 
 followTheSun.get('/', requires('schedule:read'), async (req, res) => {
   const p = me(req);

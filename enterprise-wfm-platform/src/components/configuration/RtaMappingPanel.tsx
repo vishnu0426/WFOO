@@ -3,6 +3,7 @@
  * so a person's actual state can be compared with their scheduled activity (the same idea as "Map ACD events to activities"
  * in NICE, Verint/Calabrio and Genesys). A state can be matched with a reason code, or on its own for any reason.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Activity, api, ACTIVITY_CATEGORY_LABEL, StateMapping } from '../../services/api';
@@ -60,7 +61,7 @@ export const RtaMappingPanel: React.FC = () => {
         </div>
       )}
       {map.error && <Banner kind="err">{map.error}</Banner>}
-      {map.data?.length === 0 && !f ? <Empty title="No state mappings yet">Add one for each state your phone system reports (Available, On call, Not Ready with each reason code, Logged Out). Until a state is mapped it shows as Unknown on the adherence screen.</Empty> : (
+      {map.data === null ? (map.error ? <LoadFailed what="the state mappings" error={map.error} reload={map.reload} /> : <Waiting what="the state mappings" shape="table" reload={map.reload} />) : map.data.length === 0 && !f ? <Empty title="No state mappings yet">Add one for each state your phone system reports (Available, On call, Not Ready with each reason code, Logged Out). Until a state is mapped it shows as Unknown on the adherence screen.</Empty> : (
         <Table head={['State', 'Reason code', 'Counts as', '']}>
           {map.data?.map((m) => (
             <tr key={m.id}>

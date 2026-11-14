@@ -133,10 +133,10 @@ describe('rules (through the API)', () => {
   it('monthly accrual limits what can be booked early in the year; carry-over adds last year’s unused days', async () => {
     const pol = await setPolicy({ accrualMode: 'MONTHLY', entitlements: { VACATION: 12, SICK: 12 }, carryOverDays: {} });
     assert.equal(pol.accrualMode, 'MONTHLY');
-    const nextJan = `${new Date().getFullYear() + 1}-01-10`;
+    const nextJan = `${new Date().getFullYear() + 3}-01-10`;
     const jan = await call(agent, 'POST', '/me/time-off/check', { type: 'VACATION', startDate: nextJan, endDate: addIsoDays(nextJan, 2) });
-    assert.match(jan.json.reasonsForReview.join(' '), /available by then/, 'one twelfth of 12 days is 1 day by January');
-    const dec = `${new Date().getFullYear() + 1}-12-01`;
+    assert.match(jan.json.reasonsForReview.join(' '), /available by then/, `one twelfth of 12 days is 1 day by January (got ${JSON.stringify(jan.json)})`);
+    const dec = `${new Date().getFullYear() + 3}-12-01`;
     const late = await call(agent, 'POST', '/me/time-off/check', { type: 'VACATION', startDate: dec, endDate: addIsoDays(dec, 2) });
     assert.ok(!/available by then|left and this asks/.test(late.json.reasonsForReview.join(' ')), 'by December the whole year is available');
     const bal = (await call(agent, 'GET', '/me/time-off')).json.balances.find((b: any) => b.type === 'VACATION');

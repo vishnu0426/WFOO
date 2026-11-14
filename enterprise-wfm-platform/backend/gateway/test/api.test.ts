@@ -148,6 +148,17 @@ describe('forecasting workflow', () => {
     const lb = await call(planner, 'GET', `/forecast/versions/${ctx.v1.id}/leaderboard`);
     assert.equal(lb.status, 200, lb.text); assert.equal(lb.json.rows[0].rank, 1); assert.ok(lb.json.rows.some((r: any) => r.isRecommended));
     assert.ok(lb.json.rows.every((r: any) => ['HIGH', 'MEDIUM', 'VARIABLE'].includes(r.stabilityScore) && r.rmse >= r.mae));
+    assert.ok(lb.json.bands && ['EMPIRICAL', 'NORMAL'].includes(lb.json.bands.method), 'the forecast says how its band was made');
+    assert.ok(lb.json.bands.points > 0 && lb.json.bands.p10Coverage <= 1 && lb.json.bands.p90Coverage <= 1);
+    const reg = await call(planner, 'GET', `/forecast/versions/${ctx.v1.id}/registry`);
+    assert.equal(reg.status, 200, reg.text);
+    assert.ok(reg.json.length >= 2 && reg.json.some((r: any) => r.queueName === 'Group total') && reg.json.some((r: any) => r.queueId), 'a record for every queue and for the group total');
+    for (const r of reg.json) {
+      assert.match(r.modelVersion, /^[a-z]+-[0-9a-f]{12}$/); assert.equal(r.training.dataHash.length, 64); assert.ok(r.training.rows > 0 && r.training.from < r.training.to);
+      assert.equal(r.config.backtest.walkForward ?? r.config.backtest.walk_forward, true); assert.ok(r.libraries.statsmodels); assert.ok(Array.isArray(r.backtest) && r.backtest.length > 0); assert.ok(r.forecast.p10 <= r.forecast.p50 && r.forecast.p50 <= r.forecast.p90 + 1e-6);
+    }
+    const list = await call(planner, 'GET', `/forecast/registry?groupId=${ctx.group.id}`);
+    assert.ok(list.status === 200 && list.json.length >= reg.json.length && list.json[0].versionId);
     const sel = lb.json.rows.find((r: any) => r.isRecommended);
     const naive = lb.json.rows.find((r: any) => r.modelId === 'snaive');
     assert.ok(sel.modelId === 'snaive' || sel.wapePercent < naive.wapePercent, 'the chosen model must beat seasonal naive');

@@ -1,10 +1,16 @@
-grpcio>=1.60
-grpcio-tools>=1.60
-numpy>=2.0
-pandas>=2.2
-scipy>=1.13
-statsmodels>=0.14
-scikit-learn>=1.5
-ortools>=9.10
-# backup solvers are open source and ship inside these two: HiGHS (scipy) and SCIP (ortools); see docs/SOLVER_BACKENDS.md
-pytest>=8
+# protobuf is held at 6.33.x because OR-Tools 9.15 requires protobuf below 6.34; grpcio and grpcio-tools are the newest pair that accepts it (pip refuses the older combination: ResolutionImpossible).
+# Exact versions: the engine is tested against these, and a solver library upgrade can change the schedules it produces (or its limits and memory use).
+# To upgrade one, follow UPGRADING.md: change the pin, run `python -m pytest`, compare a schedule build before and after, then commit the pin with the result.
+grpcio==1.80.1
+grpcio-tools==1.80.1
+protobuf==6.33.6
+numpy==2.5.3
+pandas==3.0.5
+scipy==1.18.1
+statsmodels==0.15.0
+scikit-learn==1.9.1
+# CP-SAT is in ortools, and so is the SCIP backup solver; the HiGHS backup solver ships inside scipy (see docs/SOLVER_BACKENDS.md)
+ortools==9.15.6755
+pytest==8.4.2
+setuptools==84.1.0          # needed by grpcio-tools; pinned above its default because 84.0.0 has a published vulnerability (GHSA-xmj3-9gf7-h52w)
+cryptography==50.0.1       # tests only: makes the certificates for the TLS and mutual TLS tests

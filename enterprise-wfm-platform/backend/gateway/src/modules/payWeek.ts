@@ -17,6 +17,19 @@ export async function payWeekFor(tx: Tx, groupId: string | null | undefined): Pr
   return { start: companyStart, source: pol && Number.isInteger(raw) ? 'COMPANY' : 'DEFAULT', companyStart };
 }
 
+/** The weekdays that count as the weekend (Monday = 0 ... Sunday = 6). The company default in the scheduling policy; Saturday and Sunday when it was never set. */
+export const DEFAULT_WEEKEND = [5, 6];
+export const cleanWeekend = (v: unknown): number[] => {
+  const days = Array.isArray(v) ? [...new Set(v.filter((x): x is number => Number.isInteger(x) && x >= 0 && x <= 6))].sort((a, b) => a - b) : [];
+  return days.length >= 1 && days.length <= 3 ? days : DEFAULT_WEEKEND;
+};
+export async function weekendDaysFor(tx: Tx): Promise<number[]> {
+  const pol = await tx.one<any>('SELECT defaults FROM scheduling_policy WHERE tenant_id = :t');
+  return cleanWeekend(pol?.defaults?.weekendDays);
+}
+/** Bit n set when weekday n (Monday = 0) is a weekend day. Sent to the scheduling engine. */
+export const weekendMask = (days: number[]): number => days.reduce((m, d) => m | (1 << d), 0);
+
 /** Weekday of a calendar day, Monday = 0 ... Sunday = 6. */
 export function weekdayOf(day: string): number {
   const [y, m, d] = day.split('-').map(Number);

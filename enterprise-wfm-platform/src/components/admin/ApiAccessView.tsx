@@ -2,12 +2,14 @@
  * Administration › API & Webhooks. Let another system read from the platform with an API key, and be told when something happens with a signed webhook.
  * A key's secret and a webhook's signing secret are shown once, when they are made.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useState } from 'react';
 import { api } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Busy, Card, Field, Input, Pill, Select } from '../forecasting/ui';
 import { addScopes, claimChoices, customScopes, removeScope, toggleScope } from './ssoLogic';
+import { HelpTip } from '../common/HelpTip';
 
 type Key = { id: string; name: string; prefix: string; scopes: string[]; status: 'ACTIVE' | 'REVOKED'; rateLimit: number; expiresAt: string | null; lastUsedAt: string | null; createdBy: string | null; createdAt: string };
 type Hook = { id: string; name: string; url: string; events: string[]; active: boolean; consecutiveFailures: number; disabledReason: string | null; pending: number; failedLastWeek: number; lastDeliveredAt: string | null };
@@ -105,7 +107,7 @@ const SsoCard: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
     return () => clearTimeout(h);
   }, [valuesKey]);
 
-  if (!d || !cat.data) return res.error || cat.error ? <Banner kind="err">{res.error || cat.error}</Banner> : <Busy text="Loading…" />;
+  if (!d || !cat.data) return res.error || cat.error ? <LoadFailed what="the sign-in settings" error={res.error || cat.error} reload={res.error ? res.reload : cat.reload} /> : <Waiting what="the sign-in settings" shape="panel" />;
   const pr = cat.data.find((x) => x.id === d.preset) ?? cat.data[cat.data.length - 1];
   const formKey = keyOf(d, secret);
   const changed = (p: Partial<Sso>) => { setD({ ...d, ...p }); setMsg(null); };
@@ -206,10 +208,10 @@ const SsoCard: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
           {result?.status === 'done' && (
             <div className="rounded border border-[#E5E5E0] p-3 space-y-2 text-[12px]">
               <Banner kind={result.outcome?.ok ? 'ok' : 'warn'}>{result.outcome?.text}</Banner>
-              {result.employee && <div className={result.employee.ok ? 'text-[#2f7d4f]' : 'text-[#8a5a00]'}>{result.employee.ok ? '✓' : '•'} {result.employee.text}</div>}
+              {result.employee && <div className={result.employee.ok ? 'text-[#2f7d4f]' : 'text-[#8a5a00]'}>{result.employee.ok ? 'OK' : '-'} {result.employee.text}</div>}
               {result.hints?.map((h, i) => <div key={i} className="text-[#8a5a00]">• {h}</div>)}
               <div className="flex flex-wrap items-center gap-1"><span className="font-medium mr-1">Groups found{result.groups?.length ? ' (click to add a role)' : ': none'}:</span>{result.groups?.slice(0, 25).map((g) => (
-                <button key={g} disabled={rows.some((r) => r.group === g)} onClick={() => addGroup(g)} className="border border-[#E5E5E0] rounded px-2 py-0.5 disabled:opacity-50 break-all">{rows.some((r) => r.group === g) ? '✓ ' : '+ '}{g}</button>
+                <button key={g} disabled={rows.some((r) => r.group === g)} onClick={() => addGroup(g)} className="border border-[#E5E5E0] rounded px-2 py-0.5 disabled:opacity-50 break-all">{rows.some((r) => r.group === g) ? 'Added: ' : '+ '}{g}</button>
               ))}{(result.groups?.length ?? 0) > 25 && <span className="text-[#6B6B6B]">…and {(result.groups?.length ?? 0) - 25} more</span>}</div>
               <details>
                 <summary className="cursor-pointer font-medium">Everything the provider sent ({result.claims?.length})</summary>
@@ -280,7 +282,7 @@ const SecretsCard: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const d = st.data;
-  if (!d) return st.error ? <Banner kind="err">{st.error}</Banner> : <Busy text="Checking stored secrets…" />;
+  if (!d) return st.error ? <LoadFailed what="the stored-secrets check" error={st.error} reload={st.reload} /> : <Waiting what="the stored-secrets check" shape="lines" />;
   const redo = async () => { setBusy(true); setMsg(null); try { await api('/security/secrets/reencrypt', { method: 'POST', body: {} }); setTick((n) => n + 1); setMsg({ kind: 'ok', text: 'Done. Every readable secret is now encrypted under the current key.' }); } catch (e: any) { setMsg({ kind: 'err', text: e.message }); } finally { setBusy(false); } };
   return (
     <Card title="Stored secrets" sub="Passwords, API keys and signing secrets saved in this system (mail and SMS credentials, webhook secrets, the sign-in client secret, connector credentials) are encrypted in the database with AES-256. They are decrypted only at the moment they are used, and are never shown again after saving.">
@@ -342,7 +344,7 @@ export const ApiAccessView: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-white p-6 space-y-6">
-      <div><h1 className="text-[22px] font-bold text-[#171717]">API & Single Sign-On</h1><p className="text-[13px] text-[#6B6B6B]">Sign people in through your company login, provision accounts automatically, let another system read your schedules and people, and tell it when something changes.</p></div>
+      <div><h1 className="text-[22px] font-bold text-[#171717]">API & Single Sign-On<HelpTip title="API and single sign-on" text="Sign people in through your company login, provision accounts automatically, let another system read your schedules and people, and tell it when something changes." /></h1></div>
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
       {secret && <Secret {...secret} onDone={() => setSecret(null)} />}
 
@@ -351,7 +353,7 @@ export const ApiAccessView: React.FC = () => {
       <ScimCard canWrite={canWrite} onSecret={(title, value) => setSecret({ title, value })} />
 
       <Card title="API keys" sub="A key lets another system read data, never change it. Give it only the parts it needs. Send it as “Authorization: Bearer wfm_…” to the same addresses the app uses; the list of addresses is at /api/v1/developer/openapi.json.">
-        {keys.loading && !keys.data ? <Busy text="Loading…" /> : (keys.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No keys yet.</p> : (
+        {keys.loading && !keys.data ? <Waiting what="API keys" shape="table" reload={keys.reload} /> : keys.error && !keys.data ? <LoadFailed what="API keys" error={keys.error} reload={keys.reload} /> : (keys.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No keys yet.</p> : (
           <table className="w-full text-[12px]">
             <thead className="text-left text-[#6B6B6B]"><tr><th className="py-1">Name</th><th>Key</th><th>Can read</th><th>Last used</th><th>Expires</th><th /></tr></thead>
             <tbody>{keys.data!.map((k) => (
@@ -376,7 +378,7 @@ export const ApiAccessView: React.FC = () => {
       </Card>
 
       <Card title="Webhooks" sub="When one of the events you pick happens, the platform sends a message to your address. Each message is signed so you can check it came from here; failed ones are tried again with longer and longer waits, and an address that keeps failing is switched off.">
-        {hooks.loading && !hooks.data ? <Busy text="Loading…" /> : (hooks.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No webhooks yet.</p> : (
+        {hooks.loading && !hooks.data ? <Waiting what="webhooks" shape="table" reload={hooks.reload} /> : hooks.error && !hooks.data ? <LoadFailed what="webhooks" error={hooks.error} reload={hooks.reload} /> : (hooks.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No webhooks yet.</p> : (
           <div className="space-y-3">{hooks.data!.map((h) => (
             <div key={h.id} className="border border-[#E5E5E0] rounded-lg p-3 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">

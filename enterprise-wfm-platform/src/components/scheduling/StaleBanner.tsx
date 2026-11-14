@@ -11,7 +11,7 @@ import { Banner, Btn } from '../forecasting/ui';
 type Change = { available: boolean; forecastName?: string; builtHours?: number | null; nowHours?: number; changePercent?: number | null; coverageBefore?: number | null; coverageNow?: number; material?: boolean };
 type Result = { kind: 'VERSION'; version: ScheduleVersion; note: string | null } | { kind: 'JOB'; job: { id: string }; note: string | null };
 
-export const StaleBanner: React.FC<{ version: ScheduleVersion; reload: (selectId?: string) => Promise<void> | void; go: (sub: string) => void; showQualityLink?: boolean }> = ({ version, reload, go, showQualityLink }) => {
+export const StaleBanner: React.FC<{ version: ScheduleVersion; reload: (selectId?: string) => Promise<void> | void; go: (sub: string) => void; showQualityLink?: boolean; /** one slim line with the detail behind "Why" */ compact?: boolean }> = ({ version, reload, go, showQualityLink, compact }) => {
   const { can, setNotice } = useForecast();
   const stale = !!version.stale && version.stale.length > 0;
   const change = useApi<Change>(stale ? `/scheduling/versions/${version.id}/forecast-change` : null, [version.id, version.rev]);
@@ -28,6 +28,26 @@ export const StaleBanner: React.FC<{ version: ScheduleVersion; reload: (selectId
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
   const up = (c?.changePercent ?? 0) > 0;
+  if (compact) {
+    const short = c?.available && c.changePercent != null ? (Math.abs(c.changePercent) < 0.1 ? 'Demand is about the same as when it was built.' : `Demand is ${Math.abs(c.changePercent)}% ${up ? 'higher' : 'lower'} than when it was built${c.coverageNow != null ? `; these shifts cover ${c.coverageNow}% of it` : ''}.`) : (version.stale![0] ?? '');
+    return (
+      <div role="status" data-testid="stale-banner" className="relative flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[#EBDDB6] bg-[#FBF3DF] px-3 py-1.5 text-[12px] text-[#6B4B00]">
+        <span className="font-semibold">May be out of date</span>
+        <span className="min-w-0 flex-1 truncate" title={short}>{short}</span>
+        {can('schedule:generate') && <Btn variant="primary" disabled={busy} onClick={regenerate}>{busy ? 'Building…' : 'Regenerate'}</Btn>}
+        <details className="group">
+          <summary className="cursor-pointer list-none underline">Why</summary>
+          <div className="absolute right-2 top-full z-40 mt-1 w-[420px] rounded-lg border border-[#E5E5E0] bg-white p-3 text-[12px] text-[#171717] shadow-lg">
+            <div>{version.stale!.join(' ')}</div>
+            {c?.available && c.builtHours != null && <div className="mt-1 text-[#525252]">{Math.round(c.builtHours).toLocaleString('en-US')} h then, {Math.round(c.nowHours ?? 0).toLocaleString('en-US')} h now{c.forecastName ? ` on ${c.forecastName}` : ''}.{!c.material && ' A small change: you may not need to rebuild.'}</div>}
+            <div className="mt-1 text-[#525252]">Regenerate builds a new draft with the same settings. This schedule is kept; manual changes in it are not carried over.</div>
+            {showQualityLink && <button className="mt-1 underline" onClick={() => go('schedule-quality')}>See schedule quality</button>}
+            {err && <div className="mt-1 text-[#BC3F3F]">{err}</div>}
+          </div>
+        </details>
+      </div>
+    );
+  }
   return (
     <Banner kind="warn">
       <div><span className="font-semibold">This schedule may be out of date.</span> {version.stale!.join(' ')}</div>

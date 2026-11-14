@@ -241,6 +241,18 @@ describe('connector pulls and run history', { skip: !process.env.ADMIN_PASSWORD 
     ctx.rest = c.id;
   });
 
+  it('tests a REST connection without saving anything, and says plainly what is wrong', async () => {
+    const before = (await call(admin, 'GET', '/data/coverage')).json.find((x: any) => x.name === queue).intervals;
+    await call(admin, 'PUT', `/integrations/${ctx.rest}`, { config: { apiKey: 'wrong', baseUrl: `http://127.0.0.1:${restPort}`, volumeEndpoint: '/stats' } });
+    const bad = await call(admin, 'POST', `/integrations/${ctx.rest}/test-pull`);
+    assert.equal(bad.status, 400, 'a rejected key is a plain failure, not a crash'); assert.match(bad.json.error.message, /401/);
+    await call(admin, 'PUT', `/integrations/${ctx.rest}`, { config: { apiKey: 'rest-key-1', baseUrl: `http://127.0.0.1:${restPort}`, volumeEndpoint: '/stats?from={from}&to={to}' } });
+    restRows = { data: [{ queueId, day: today, time: '09:00', offered: 5 }] };
+    const good = await call(admin, 'POST', `/integrations/${ctx.rest}/test-pull`);
+    assert.equal(good.status, 200, good.text); assert.equal(good.json.rowCount, 1); assert.ok(good.json.columns.includes('offered'));
+    assert.equal((await call(admin, 'GET', '/data/coverage')).json.find((x: any) => x.name === queue).intervals, before, 'nothing was saved');
+  });
+
   it('turns a rejected key into a failed run, not a crash', async () => {
     await call(admin, 'PUT', `/integrations/${ctx.rest}`, { config: { apiKey: 'wrong', baseUrl: `http://127.0.0.1:${restPort}`, volumeEndpoint: '/stats' } });
     const r = await call(admin, 'POST', `/integrations/${ctx.rest}/run`);

@@ -26,9 +26,10 @@ CMD ["sh", "/app/gateway-entry.sh"]
 FROM python:3.12-slim AS engine
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app/backend/engine
-COPY backend/engine/requirements.txt ./
-# pytest is only needed for the test suites.
-RUN grep -v '^pytest' requirements.txt > req.prod.txt && pip install -r req.prod.txt
+# The locked set: every package, direct and indirect, at an exact version, checked against the SHA-256 of its published files (backend/engine/tools/lock.py makes it; the test tools
+# are not in it). --require-hashes refuses anything not listed or not matching, so the image is the same image every build.
+COPY backend/engine/requirements.lock ./
+RUN pip install --require-hashes --no-deps -r requirements.lock
 COPY backend/engine/*.py ./
 RUN rm -f test_*.py && useradd -r -u 10001 wfm
 USER wfm

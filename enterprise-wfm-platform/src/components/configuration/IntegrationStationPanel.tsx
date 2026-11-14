@@ -5,9 +5,10 @@
  * custom or proprietary system -- either its own REST API (configure the mapping, no code from us) or a closed
  * system (we issue an API key; the customer's own team's connector posts to our documented ingest endpoint).
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
-import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, IntegrationCatalog, IntegrationField, IntegrationFieldMap, MapTestResult, when } from "../../services/api";
+import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, IntegrationCatalog, IntegrationField, IntegrationFieldMap, IntegrationPreset, MapTestResult, when } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi } from "../forecasting/hooks";
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from "../forecasting/ui";
@@ -20,12 +21,54 @@ const CATEGORIES = [
 ] as const;
 
 const statusTone = (s: string) => (s === "ACTIVE" ? "good" : s === "ERROR" ? "bad" : s === "PAUSED" ? "warn" : "neutral") as "good" | "bad" | "warn" | "neutral";
-const freshness = (lastReceivedAt: string | null) => {
-  if (!lastReceivedAt) return { label: "Never received data", tone: "neutral" as const };
-  const mins = (Date.now() - new Date(lastReceivedAt).getTime()) / 60000;
-  if (mins < 60) return { label: `Fresh, ${Math.round(mins)} min ago`, tone: "good" as const };
-  if (mins < 24 * 60) return { label: `${Math.round(mins / 60)}h ago`, tone: "warn" as const };
-  return { label: `Stale, ${Math.round(mins / 1440)}d ago`, tone: "bad" as const };
+
+/** What the setup screen says about a provider: a short guide where there is one, otherwise the original note. */
+const ProviderIntro: React.FC<{ preset: IntegrationPreset }> = ({ preset }) => {
+  const g = preset.guide;
+  return (
+    <div className="border border-[#E5E5E0] rounded bg-[#FAFAF8] p-3 space-y-2 text-[12px] text-[#525252]">
+      {preset.readiness && (preset.readiness.level === "NOT_READY" || preset.readiness.level === "FROM_DOCS") && <p className="text-[#6B6B6B]">{preset.readiness.note}</p>}
+      {g ? (
+        <>
+          <p className="text-[#171717]">{g.what}</p>
+          <div><div className="font-semibold text-[#171717]">Before you start</div><ul className="list-disc pl-5 space-y-0.5">{g.needs.map((n) => <li key={n}>{n}</li>)}</ul></div>
+          {g.limits.length > 0 && <div className="rounded border border-[#B7791F]/20 bg-[#FFF5DD] text-[#8F6200] px-2.5 py-1.5"><div className="font-semibold">What it does not do yet</div><ul className="list-disc pl-5 space-y-0.5">{g.limits.map((n) => <li key={n}>{n}</li>)}</ul></div>}
+        </>
+      ) : preset.note ? <p>{preset.note}</p> : null}
+    </div>
+  );
+};
+
+/** The commands and steps to run right after a connector is created, with its id and key already filled in. Shown once, with the key. */
+const NextSteps: React.FC<{ created: ConnectorCreated; preset?: IntegrationPreset }> = ({ created, preset }) => {
+  const gateway = location.origin.replace(/:\d+$/, ":4000");
+  const [copied, setCopied] = useState("");
+  const copy = (id: string, text: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(id); setTimeout(() => setCopied(""), 1500); }).catch(() => {}); };
+  const block = (id: string, title: string, text: string) => (
+    <div key={id}>
+      <div className="flex items-center justify-between"><span className="font-semibold">{title}</span><button className="text-[11px] underline" onClick={() => copy(id, text)}>{copied === id ? "Copied" : "Copy"}</button></div>
+      <pre className="font-mono text-[11.5px] bg-white/60 rounded px-2 py-1 whitespace-pre-wrap break-all select-all">{text}</pre>
+    </div>
+  );
+  const key = created.apiKey ?? "<api key>";
+  let body: React.ReactNode = null;
+  if (created.preset === "AVAYA_AACC") {
+    const conn = `--server <database host> --database <database name> --user <read-only user>`;
+    const send = `--gateway ${gateway} --connector ${created.id} --key ${key}`;
+    body = <>
+      {block("a1", "1. On a machine inside your network", `cd integrations/avaya-aacc-connector && npm install
+export AACC_SQL_PASSWORD=<read-only password>`)}
+      {block("a2", "2. See the real column names in your table", `node index.mjs ${conn} --check-columns`)}
+      {block("a3", "3. Load history (it waits for your review in Staged Ingestion)", `node index.mjs ${conn} ${send} --backfill-weeks 8`)}
+      {block("a4", "4. Keep it up to date", `node index.mjs ${conn} ${send}`)}
+    </>;
+  } else if (preset?.method === "ONPREM_RELAY" || preset?.id === "GENERIC_DATABASE") {
+    body = block("g1", "Send rows from your own connector", `curl -X POST ${gateway}/api/v1/integrations/${created.id}/live -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"rows":[{"queue":"Support","day":"2026-11-05","time":"09:00","volume":120}]}'`);
+  } else if (preset?.method === "STREAM_SUBSCRIBE") {
+    body = <ol className="list-decimal pl-5 space-y-0.5"><li>Set the connector to Active so it connects.</li><li>Open the connector and check the field mapping and event types once messages arrive.</li><li>Match each agent to an employee.</li></ol>;
+  }
+  if (!body) return null;
+  return <div className="space-y-2 pt-2 border-t border-black/10 text-[12px]"><div className="font-semibold">What to do next</div>{body}</div>;
 };
 
 export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: () => void; feeds?: boolean }> = ({ focusId, onChange, feeds }) => {
@@ -50,6 +93,7 @@ export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: ()
           <div className="space-y-1">
             <div className="font-semibold">"{justCreated.name}" created. {justCreated.apiKey ? "Save this API key now -- it will not be shown again." : "Save this webhook secret now -- it will not be shown again."}</div>
             {justCreated.apiKey && <div className="font-mono text-[12px] bg-white/60 rounded px-2 py-1 select-all">{justCreated.apiKey}</div>}
+            <NextSteps created={justCreated} preset={catalog.data ? Object.values(catalog.data).flat().find((p) => p.id === justCreated.preset) : undefined} />
             {justCreated.webhookSecret && <>
               <div className="font-mono text-[12px] bg-white/60 rounded px-2 py-1 select-all">Secret: {justCreated.webhookSecret}</div>
               <div className="font-mono text-[12px] bg-white/60 rounded px-2 py-1 select-all">URL: {location.origin.replace(/:\d+$/, ":4000")}{justCreated.webhookUrl}</div>
@@ -59,22 +103,23 @@ export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: ()
       )}
 
       <Card title="Connectors" sub="Real, vendor-specific integrations -- ACD, CRM, HRMS, a database, an on-prem system or a scheduled file. Historical data lands in Staged Ingestion for review, exactly like a manual CSV upload; live data feeds interval history or RTA state directly."
-        actions={canWrite && <Btn variant="primary" onClick={() => { setCreating((c) => !c); setSelected(""); }}><Plus className="w-3.5 h-3.5" />{creating ? "Cancel" : "New connector"}</Btn>}>
+        actions={canWrite && <Btn variant="primary" onClick={() => { setCreating((c) => !c); setSelected(""); }}><Plus className="w-3.5 h-3.5" />{creating ? "Close" : "New connector"}</Btn>}>
         {creating && catalog.data && <NewConnectorForm feeds={feeds} catalog={catalog.data} groups={groups} onCreated={(c) => { setCreating(false); setJustCreated(c); setSelected(c.id); setTick((t) => t + 1); }} onError={setError} />}
 
-        {connectors.loading && !connectors.data ? <Busy text="Loading connectors…" /> : !connectors.data?.length ? (
+        {connectors.loading && !connectors.data ? <Waiting what="connectors" shape="table" reload={connectors.reload} /> : connectors.error && !connectors.data ? <LoadFailed what="connectors" error={connectors.error} reload={connectors.reload} /> : !connectors.data?.length ? (
           <Empty title="No connectors yet">Add one for the ACD, CRM or HRMS system you actually use, or a direct database read.</Empty>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {connectors.data.map((c) => {
-              const f = freshness(c.lastReceivedAt);
+              const pr = catalog.data ? Object.values(catalog.data).flat().find((p) => p.id === c.preset) : undefined;
+              const needs = c.status === "ACTIVE" && !!c.lastError;
               return (
                 <button key={c.id} onClick={() => setSelected(selected === c.id ? "" : c.id)} className={`text-left p-3 rounded-lg border ${selected === c.id ? "border-[#171717] bg-[#FAFAF8]" : "border-[#E5E5E0] hover:bg-[#FAFAF8]"}`}>
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-start justify-between gap-2">
                     <span className="font-semibold text-[13px]">{c.name}</span>
-                    <div className="flex gap-1.5"><Pill tone={statusTone(c.status)}>{c.status}</Pill><Pill tone={f.tone}>{f.label}</Pill></div>
+                    <Pill tone={needs ? "bad" : statusTone(c.status)}>{needs ? "Needs attention" : c.status.charAt(0) + c.status.slice(1).toLowerCase()}</Pill>
                   </div>
-                  <div className="text-[11px] text-[#6B6B6B] mt-1">{c.category} · {c.preset} · {c.method.replace(/_/g, " ").toLowerCase()}</div>
+                  <div className="text-[11px] text-[#6B6B6B] mt-1">{pr && pr.label !== c.name ? `${pr.label} · ` : ""}{c.lastReceivedAt ? `Last data ${when(c.lastReceivedAt)}` : "No data yet"}{typeof c.rows24h === "number" ? ` · ${c.rows24h.toLocaleString()} row${c.rows24h === 1 ? "" : "s"} in 24 h` : ""}</div>
                   {c.lastError && <div className="text-[11px] text-[#BC3F3F] mt-1">{c.lastError}</div>}
                 </button>
               );
@@ -130,7 +175,7 @@ const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog;
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={preset ? `${preset.label} connector` : ""} /></Field>
         <Field label="WFM group" hint="blank = tenant-wide (HRMS/CRM)"><Select value={groupId} onChange={(e) => setGroupId(e.target.value)}><option value="">All groups</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select></Field>
       </div>
-      {preset?.note && <p className="text-[12px] text-[#525252] bg-[#FAFAF8] border border-[#E5E5E0] rounded p-2">{preset.note}</p>}
+      {preset && <ProviderIntro preset={preset} />}
       {preset && preset.fields.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {preset.fields.map((f) => (
@@ -230,7 +275,7 @@ const RunsPanel: React.FC<{ connector: Connector; canWrite: boolean; onChanged: 
         <div className="text-[13px] font-semibold">Schedule and runs</div>
         {connector.canPull && (
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
-            {isDb && <Btn disabled={!canWrite || testing} onClick={runTest}>{testing ? "Testing…" : "Test the query"}</Btn>}
+            {(isDb || connector.method === "API_PULL") && <Btn disabled={!canWrite || testing} onClick={runTest}>{testing ? "Testing…" : isDb ? "Test the query" : "Test connection"}</Btn>}
             {isDb && <Btn disabled={!canWrite || busy || connector.status !== "ACTIVE"} onClick={() => runNow("backfill")}>Load history</Btn>}
             <Btn variant="primary" disabled={!canWrite || busy || connector.status !== "ACTIVE"} onClick={() => runNow()}>{busy ? "Running…" : isDb ? "Run now (last 2 days)" : "Run now"}</Btn>
           </div>
@@ -300,6 +345,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
   const preset = useMemo(() => catalog && Object.values(catalog).flat().find((p) => p.id === connector.preset), [catalog, connector.preset]);
   const targetFields = TARGET_FIELDS[preset?.writesTo ?? ''] ?? [];
   const sampleFields = useMemo(() => flattenSample(connector.lastSample), [connector.lastSample]);
+  const [menu, setMenu] = useState(false);
 
   const dropOnTarget = (targetField: string) => (e: React.DragEvent) => {
     e.preventDefault();
@@ -325,7 +371,14 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
     <Card title={connector.name} sub={`${connector.category} · ${connector.preset}`}
       actions={canWrite && <>
         <Select value={connector.status} onChange={(e) => setStatus(e.target.value)} className="!w-auto"><option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></Select>
-        <Btn onClick={remove}><Trash2 className="w-3.5 h-3.5" />Delete</Btn>
+        <div className="relative">
+          <Btn aria-label="More actions" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}><MoreHorizontal className="w-4 h-4" /></Btn>
+          {menu && (
+            <div role="menu" className="absolute right-0 mt-1 w-44 rounded border border-[#E5E5E0] bg-white shadow-md z-10">
+              <button role="menuitem" className="w-full text-left px-3 py-2 text-[12px] text-[#BC3F3F] hover:bg-[#FAFAF8] flex items-center gap-2" onClick={() => { setMenu(false); remove(); }}><Trash2 className="w-3.5 h-3.5" />Delete connector…</button>
+            </div>
+          )}
+        </div>
       </>}>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
         {preset?.method === "STREAM_SUBSCRIBE" && (
@@ -334,7 +387,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
             <div className={`font-semibold ${connector.connectedAt ? "text-[#2A7553]" : "text-[#6B6B6B]"}`}>{connector.connectedAt ? `Connected since ${when(connector.connectedAt)}` : "Not yet connected"}</div>
           </div>
         )}
-        <div><div className="text-[#6B6B6B]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>
+        {preset?.method !== "STREAM_SUBSCRIBE" && <div><div className="text-[#6B6B6B]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>}
         <div><div className="text-[#6B6B6B]">Last received</div><div className="font-semibold">{connector.lastReceivedAt ? when(connector.lastReceivedAt) : "never"}</div></div>
         <div><div className="text-[#6B6B6B]">Created</div><div className="font-semibold">{when(connector.createdAt)} by {connector.createdBy}</div></div>
         <div><div className="text-[#6B6B6B]">Config</div><div className="font-semibold">{Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
@@ -368,6 +421,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
           </div>
         </div>
       )}
+
 
       <div className="space-y-2">
         <div className="text-[13px] font-semibold">Field mapping{sampleFields.length > 0 && targetFields.length > 0 ? ", by hand" : ""}</div>
@@ -416,6 +470,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
           </div>
         )}
       </div>
+
 
       {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} />}
 

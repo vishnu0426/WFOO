@@ -22,10 +22,11 @@ const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y), m = s.
 const r4 = (v: number) => Math.round(v * 10000) / 10000;
 
 /** Published forecasts against real volume over the last four weeks (today excluded: it is not finished). */
-export async function evaluate(tenantId: string, groupId: string): Promise<Evaluation> {
+/** How the published forecasts did over the last LEARNING.windowDays days, counted back from `endDay` (default today in the group's own time zone). */
+export async function evaluate(tenantId: string, groupId: string, endDay?: string): Promise<Evaluation> {
   return withTenant(tenantId, async (tx) => {
     const group = await loadGroup(tx, groupId);
-    const to = todayIn(group.timezone), from = addDays(to, -LEARNING.windowDays);
+    const to = endDay ?? todayIn(group.timezone), from = addDays(to, -LEARNING.windowDays);
     const rows = await tx.q<any>(
       `SELECT f.queue_id, f.day::text AS day, f.forecast, f.applied, a.actual
        FROM (SELECT DISTINCT ON (fi.queue_id, fi.day) fi.queue_id, fi.day, fi.volume::float8 AS forecast, fv.summary #> ARRAY['learning', 'applied', fi.queue_id::text] AS applied

@@ -15,6 +15,7 @@ const describe = (subject: string, p: any): Omit<LiveEvent, 'id' | 'at'> | null 
     case 'forecast.approve': return { title: 'Forecast approved', description: `${p.name}${who}`, module: 'forecasting', subSection: 'forecast-dashboard', tone: 'info' };
     case 'forecast.reject': return { title: 'Forecast returned to draft', description: `${p.name}${who}`, module: 'forecasting', subSection: 'forecast-dashboard', tone: 'warn' };
     case 'forecast.publish': return { title: 'Forecast published', description: `${p.name}${who}`, module: 'forecasting', subSection: 'forecast-dashboard', tone: 'success' };
+    case 'forecast.refresh': return { title: p.title ?? 'Forecast refresh', description: String(p.body ?? '').slice(0, 220), module: 'forecasting', subSection: 'all-forecasts', tone: p.status === 'CREATED' ? 'success' : 'warn' };
     case 'data.imported': return { title: 'History import committed', description: `Interval history was updated${who}`, module: 'data-management', subSection: 'staged-imports', tone: 'success' };
     case 'integration.error': return { title: 'Integration error', description: `${p.name}: ${p.message}`, module: 'configuration', subSection: 'integration-station', tone: 'warn' };
     case 'integration.recovered': return { title: 'Integration recovered', description: `${p.name} is receiving data again`, module: 'configuration', subSection: 'integration-station', tone: 'success' };

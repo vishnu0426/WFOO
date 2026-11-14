@@ -30,7 +30,7 @@ declare global {
   }
 }
 
-export function signPlatformToken(admin: { id: string; email: string }): string {
+export function signPlatformToken(admin: { id: string; email: string }, hours = 8): string {
   return jwt.sign(
     {
       email: admin.email,
@@ -39,10 +39,24 @@ export function signPlatformToken(admin: { id: string; email: string }): string 
     {
       subject: admin.id,
       audience: 'platform',
-      expiresIn: '8h',
+      expiresIn: `${hours}h`,
       jwtid: randomUUID(),
     }
   );
+}
+
+/** A five-minute pass between the password step and the one-time code step of sign-in. It cannot be used for anything else. */
+export function signMfaToken(adminId: string): string {
+  return jwt.sign({ purpose: 'mfa' }, PLATFORM_JWT_SECRET, { subject: adminId, audience: 'platform-mfa', expiresIn: '5m' });
+}
+export function adminFromMfaToken(token: string): string {
+  try {
+    const d = jwt.verify(token, PLATFORM_JWT_SECRET, { audience: 'platform-mfa' }) as jwt.JwtPayload;
+    if (d.purpose !== 'mfa' || !d.sub) throw new Error('bad');
+    return String(d.sub);
+  } catch {
+    throw new HttpError(401, 'UNAUTHENTICATED', 'The sign-in step expired. Start again.');
+  }
 }
 
 export async function principalFromPlatformToken(token: string): Promise<PlatformPrincipal> {
@@ -57,6 +71,15 @@ export async function principalFromPlatformToken(token: string): Promise<Platfor
     );
     if (!rows.length) {
       throw new HttpError(401, 'UNAUTHENTICATED', 'Platform admin account not found or disabled');
+    }
+    // A session that was ended (sign-out, "sign out other devices", password change) is refused even though the token has not expired.
+    const sess = await raw<{ revoked: boolean }>(
+      `SELECT (revoked_at IS NOT NULL) AS revoked FROM wfm.platform_sessions WHERE jti = $1`,
+      [d.jti]
+    );
+    if (sess.length) {
+      if (sess[0].revoked) throw new HttpError(401, 'UNAUTHENTICATED', 'This session has ended');
+      await raw(`UPDATE wfm.platform_sessions SET last_seen_at = now() WHERE jti = $1 AND last_seen_at < now() - interval '1 minute'`, [d.jti]);
     }
     return {
       id: String(d.sub),

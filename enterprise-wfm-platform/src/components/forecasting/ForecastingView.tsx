@@ -3,17 +3,17 @@
  *   1 Forecast Dashboard · 2 Model Leaderboard · 3 Forecast Builder · 4 Adjustments · 5 Scenarios · 6 Accuracy Heatmap · 7 Capacity Plan
  * Everything shown is read from the gateway; nothing is seeded.
  */
+import { Waiting } from '../common/loading';
 import React from 'react';
 import { Layers } from 'lucide-react';
 import { useForecast } from '../../services/forecastStore';
 import { Busy, Empty, Pill, PageHeader, Select } from './ui';
 import { NoticeBanner, VersionBar } from './VersionBar';
 import { DashboardSection } from './DashboardSection';
-import { LeaderboardSection } from './LeaderboardSection';
 import { BuilderSection } from './BuilderSection';
 import { AdjustmentsSection } from './AdjustmentsSection';
 import { ScenariosSection } from './ScenariosSection';
-import { AccuracySection } from './AccuracySection';
+import { QualityPage } from './QualityPage';
 import { CapacitySection } from './CapacitySection';
 import { ForecastsSection } from './ForecastsSection';
 
@@ -24,8 +24,8 @@ const TITLES: Record<string, { n: number; title: string; sub: string }> = {
   adjustments: { n: 0, title: 'Adjustments', sub: 'Change a draft forecast with a recorded reason.' },
   scenarios: { n: 0, title: 'Scenarios', sub: 'Compare “what if” cases against the forecast.' },
   'capacity-plan': { n: 0, title: 'Staffing', sub: 'People needed over weeks and months.' },
-  'accuracy-heatmap': { n: 0, title: 'Accuracy', sub: 'How close the forecast was to what really happened.' },
-  'model-leaderboard': { n: 0, title: 'Models', sub: 'Which forecasting method was most accurate on your own history.' },
+  'accuracy-heatmap': { n: 0, title: 'Forecast quality', sub: 'How close the forecast was to what really happened.' },
+  'model-leaderboard': { n: 0, title: 'Forecast quality', sub: 'Which forecasting method was most accurate on your own history.' },
 };
 
 export const ForecastingView: React.FC<{ activeSubSection?: string; onOpenTraceability?: unknown }> = ({ activeSubSection: requested = 'forecast-dashboard' }) => {
@@ -38,22 +38,22 @@ export const ForecastingView: React.FC<{ activeSubSection?: string; onOpenTracea
   const body = () => {
     switch (activeSubSection) {
       case 'all-forecasts': return <ForecastsSection />;
-      case 'model-leaderboard': return <LeaderboardSection />;
+      case 'model-leaderboard': return <QualityPage tab="models" />;
       case 'forecast-builder': return <BuilderSection />;
       case 'adjustments': return <AdjustmentsSection />;
       case 'scenarios': return <ScenariosSection />;
-      case 'accuracy-heatmap': return <AccuracySection />;
+      case 'accuracy-heatmap': return <QualityPage tab="accuracy" />;
       case 'capacity-plan': return <CapacitySection />;
       default: return <DashboardSection />;
     }
   };
 
   // these screens draw their own header and run edge to edge, like the reference design
-  if (['forecast-dashboard', 'forecast-builder', 'all-forecasts', 'adjustments', 'scenarios', 'model-leaderboard', 'capacity-plan'].includes(activeSubSection)) {
+  if (['forecast-dashboard', 'forecast-builder', 'all-forecasts', 'adjustments', 'scenarios', 'model-leaderboard', 'capacity-plan', 'accuracy-heatmap'].includes(activeSubSection)) {
     return (
-      <div className="ref-ui flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-background">
+      <div className="ref-ui relative flex-none flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-background">   {/* flex-none: with flex-1 the page grew with its content and the whole document scrolled, so nothing inside could stick */}
         <div className="px-6 pt-3 empty:hidden"><NoticeBanner /></div>
-        {!ready ? <div className="p-6"><Busy text="Loading…" /></div> : groups.length === 0 ? (
+        {!ready ? <div className="p-6"><Waiting what="forecasting" shape="table" /></div> : groups.length === 0 ? (
           <div className="p-6"><Empty title="No WFM group yet">
             A WFM group is a set of queues that share one pool of agents. <button className="underline" onClick={() => go('wfm-groups', 'configuration')}>Create one in Configuration</button>, then import interval history.
           </Empty></div>
@@ -78,7 +78,7 @@ export const ForecastingView: React.FC<{ activeSubSection?: string; onOpenTracea
         )}
       />
       <NoticeBanner />
-      {!ready ? <Busy text="Loading…" /> : groups.length === 0 ? (
+      {!ready ? <Waiting what="forecasting" shape="table" /> : groups.length === 0 ? (
         <Empty title="No WFM group yet">
           A WFM group is a set of queues that share one pool of agents. <button className="underline" onClick={() => go('wfm-groups', 'configuration')}>Create one in Configuration</button>, then import interval history.
         </Empty>

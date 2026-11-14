@@ -20,6 +20,7 @@ it is up to your source system.
 | `database-reader/` | **Real, working, tested** against a throwaway Postgres table (`test/integrations.databaseReader.test.ts`). Postgres today; the query shape is the same for Oracle/SQL Server/Informix, only the driver and connection string change — see the comment at the top of `index.mjs`. |
 | `sftp-poller/` | **Real, working, tested.** Watches a local directory for CSV files (already-synced from SFTP by your own transfer tooling, or an actual SFTP client you point at this same folder) and posts each row through. |
 | `avaya-cms-connector/` | A working reference for the *relay-out* half (config, retry, posting to our API) plus a placeholder for CMS's own wire protocol, which needs Avaya's own CMS SDK/developer materials to implement — see the honesty note in the plan. Not runnable against a real CMS as shipped. |
+| `avaya-aacc-connector/` | **History reader for Avaya Aura Contact Center** (SQL Server). Reads skillset interval statistics, checks them (rejects unusable rows, caps abandoned above offered, merges duplicates, reports gaps) and sends them out. Unit-tested against a fake database and gateway (`npm test`). **Not run against a real AACC:** the table is Avaya's documented `iSkillsetStat`, but the column names are assumptions; run `--check-columns` and set `--col-*` first. No live agent state (needs Avaya's real-time SDK). |
 | `cisco-uccx-connector/` | Same shape: real relay-out half, a placeholder for Finesse/AW-HDS-DDS parsing pending Cisco's own developer resources. |
 
 Run any of these with:

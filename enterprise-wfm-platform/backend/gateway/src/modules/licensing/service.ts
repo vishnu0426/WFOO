@@ -53,6 +53,12 @@ export interface LicenseUsageReport {
       remaining: number;
       percentage: number;
     };
+    sites: {
+      current: number;
+      max: number;
+      remaining: number;
+      percentage: number;
+    };
     workspaces: {
       current: number;
       max: number;
@@ -157,12 +163,20 @@ export async function getTenantLicenseUsage(tx: Tx, tenantId: string): Promise<L
     `SELECT count(*)::int AS count FROM wfm.workspaces WHERE tenant_id = :t AND status = 'ACTIVE'`
   );
 
+  const [{ count: siteCount }] = await tx.q<{ count: number }>(`SELECT count(*)::int AS count FROM wfm.sites WHERE tenant_id = :t`);
+
   const lifecycle = computeLifecycle(license);
 
   return {
     license,
     modules,
     capacity: {
+      sites: {
+        current: siteCount,
+        max: license.maxSites,
+        remaining: Math.max(0, license.maxSites - siteCount),
+        percentage: license.maxSites > 0 ? Math.round((siteCount / license.maxSites) * 1000) / 10 : 0,
+      },
       employees: {
         current: empCount,
         max: license.maxEmployees,
@@ -195,7 +209,7 @@ export async function getTenantLicenseUsage(tx: Tx, tenantId: string): Promise<L
 export async function assertCapacity(
   tx: Tx,
   tenantId: string,
-  resource: 'EMPLOYEES' | 'USERS',
+  resource: 'EMPLOYEES' | 'USERS' | 'SITES' | 'WORKSPACES',
   delta: number = 1
 ): Promise<void> {
   const license = await getTenantLicense(tx, tenantId);
@@ -225,6 +239,21 @@ export async function assertCapacity(
           requestedDelta: delta,
           resource: 'EMPLOYEES',
         }
+      );
+    }
+  } else if (resource === 'SITES' || resource === 'WORKSPACES') {
+    // a hard stop, like seats: the plan's limit is the limit
+    const sites = resource === 'SITES';
+    const [{ count: current }] = await tx.q<{ count: number }>(
+      sites ? `SELECT count(*)::int AS count FROM wfm.sites WHERE tenant_id = :t AND status = 'ACTIVE'` : `SELECT count(*)::int AS count FROM wfm.workspaces WHERE tenant_id = :t AND status = 'ACTIVE'`
+    );
+    const max = sites ? license.maxSites : license.maxWorkspaces;
+    if (current + delta > max) {
+      throw new HttpError(
+        409,
+        sites ? 'SITE_CAPACITY_EXCEEDED' : 'WORKSPACE_CAPACITY_EXCEEDED',
+        `${sites ? 'Site' : 'Workspace'} limit reached. Your subscription allows up to ${max} ${sites ? 'sites' : 'workspaces'} (current: ${current}). Ask for a plan upgrade to add more.`,
+        { current, max, remaining: Math.max(0, max - current), requestedDelta: delta, resource }
       );
     }
   } else if (resource === 'USERS') {

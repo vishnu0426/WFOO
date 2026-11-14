@@ -4,6 +4,7 @@
  *   -> one person's timeline in a drawer when opened, plus history over days, supervisor alerts and saved views.
  * Everything is cut from one shared, seconds-old judgement of the group on the server, so ten supervisors cost the same as one.
  */
+import { Waiting, LoadFailed, StaleNote } from '../common/loading';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ColDef, ICellRendererParams, IDatasource, IGetRowsParams, GridApi } from 'ag-grid-community';
 import { Download, RefreshCw, X } from 'lucide-react';
@@ -103,8 +104,8 @@ export const AdherenceScreen: React.FC<{ groupId: string; day: string }> = ({ gr
   };
   const [pickedView, setPickedView] = useState('');
 
-  if (sum.loading && !d) return <Busy text="Loading adherence…" />;
-  if (sum.error && !d) return <Banner kind="err">{sum.error}</Banner>;
+  if (sum.loading && !d) return <Waiting what="adherence" shape="cards" reload={sum.reload} />;
+  if (sum.error && !d) return <LoadFailed what="adherence" error={sum.error} reload={sum.reload} />;
   if (!d) return null;
   const s = d.summary;
   const attention = s.outOfAdherence + s.unscheduled;
@@ -113,6 +114,7 @@ export const AdherenceScreen: React.FC<{ groupId: string; day: string }> = ({ gr
 
   return (
     <div className="space-y-6">
+      <StaleNote state={sum} what="adherence" />
       {d.unmappedStates.length > 0 && (
         <Banner kind="warn">
           The phone system reported states that are not mapped to an activity: {d.unmappedStates.map((u) => `${u.state}${u.reason ? ` / ${u.reason}` : ''} (${u.agents})`).join(', ')}. Those people show as Unknown.{' '}
@@ -284,7 +286,7 @@ const TimelineView: React.FC<{ qsBase: string; resetKey: string; order: string; 
         </label>
       </div>
       {res.error && <Banner kind="err">{res.error}</Banner>}
-      {res.loading && !d ? <Busy text="Loading timelines…" /> : people.length === 0 ? <Empty title="Nobody matches these filters" /> : (
+      {res.loading && !d ? <Waiting what="timelines" shape="table" reload={res.reload} /> : people.length === 0 ? <Empty title="Nobody matches these filters" /> : (
         <div className="overflow-x-auto">
           <div className="min-w-[640px]">
             <div className="flex items-end gap-3 mb-1">
@@ -358,7 +360,7 @@ const AgentDrawer: React.FC<{ groupId: string; day: string; employeeId: string; 
         <button className="text-[#737373] hover:text-[#171717]" onClick={onClose} aria-label="Close"><X className="w-4 h-4" /></button>
       </div>
       <div className="p-4 space-y-5">
-        {res.loading && !a && <Busy text="Loading…" />}
+        {res.loading && !a && <Waiting what="this person's day" shape="lines" reload={res.reload} />}
         {res.error && <Banner kind="err">{res.error}</Banner>}
         {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
         {a && (

@@ -103,7 +103,7 @@ policy.delete('/groups/:gid/activities/:aid', requires('config:write'), async (r
 
 // ---------------------------------------------------------------- scheduling policy
 
-export const DEFAULT_WEIGHTS = { understaffing: 90, overstaffing: 30, contractHours: 50, preferences: 20, fairness: 30 };
+export const DEFAULT_WEIGHTS = { understaffing: 90, overstaffing: 30, contractHours: 100, preferences: 20, fairness: 30 };
 const W = z.number().int().min(0).max(100);
 const Weights = z.object({ understaffing: W, overstaffing: W, contractHours: W, preferences: W, fairness: W });
 const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -115,6 +115,11 @@ export const DEFAULT_SCHEDULING = {
   enforcePublishChecks: false,   // when true, publishing below target coverage or on a stale forecast needs an acknowledged reason
   breakSlackMin: 60,             // how far a meal or break may move from its default place to improve coverage
   payWeekStart: 0,               // weekday a pay week begins on, Monday 0 ... Sunday 6. A WFM group can override it
+  weekendDays: [5, 6] as number[],   // weekdays that count as the weekend (Monday 0 ... Sunday 6): weekend pay, weekend fairness, leave that skips them
+  overtime: 'FREE' as 'FREE' | 'WHEN_SHORT' | 'NEVER',     // planned overtime (hours past the contract): used freely up to the person's maximum / only to fill a shortage, at a price / never
+  requireApproval: false as boolean,                      // a schedule must be submitted and approved before it can be published
+  changeNoticeHours: 48 as number,                        // a published shift that changes with less notice than this is flagged to the planner and to the person
+  holidays: 'ALLOW' as 'ALLOW' | 'AVOID' | 'CLOSED',      // public holidays: staffed like any day / staffed only where the cover is really needed / not staffed at all
   partTimeToleranceHours: 1 as number | null,   // part-time, contract and temporary staff may be scheduled at most this many hours past their contract (null: only their own weekly maximum applies)
 };
 const Tol = z.number().int().min(0).max(240);
@@ -122,7 +127,12 @@ const SchedDefaults = z.object({
   consistentTimes: z.object({ mode: z.enum(['OFF', 'PREFER', 'REQUIRE']), startToleranceMin: Tol, endToleranceMin: Tol }),
   targetCoverage: z.number().int().min(50).max(100), enforcePublishChecks: z.boolean(), breakSlackMin: z.number().int().min(0).max(240),
   payWeekStart: z.number().int().min(0).max(6).optional(),   // omitted by older clients: the saved value stays
+  weekendDays: z.array(z.number().int().min(0).max(6)).min(1, 'Choose at least one weekend day').max(3, 'A weekend is at most three days').refine((a) => new Set(a).size === a.length, 'Each weekend day once').optional(),
   partTimeToleranceHours: z.number().min(0).max(24).nullable().optional(),
+  overtime: z.enum(['FREE', 'WHEN_SHORT', 'NEVER']).optional(),
+  requireApproval: z.boolean().optional(),
+  changeNoticeHours: z.number().int().min(0).max(720).optional(),
+  holidays: z.enum(['ALLOW', 'AVOID', 'CLOSED']).optional(),
 });
 const PolBody = z.object({
   minRestHours: z.number().min(0).max(24).nullable(), maxWeeklyHours: z.number().min(1).max(100).nullable(),

@@ -1,4 +1,7 @@
 import { metricsText, requestFinished, requestStarted, sizing } from './metrics.ts';
+import { installLogging, newTrace, runWithTrace } from './observe.ts';
+
+installLogging();            // LOG_FORMAT=json: one JSON object per log line
 import { autosizeDatabasePool } from './autosize.ts';
 import v8 from 'node:v8';
 import os from 'node:os';
@@ -20,6 +23,7 @@ import { organization as organizationRoutes, workspaces as workspaceRoutes } fro
 import { config as configRoutes } from './modules/configRoutes.ts';
 import { groupAdmin } from './modules/groupAdminRoutes.ts';
 import { policy as policyRoutes } from './modules/policyRoutes.ts';
+import { holidayCalendar } from './modules/holidays.ts';
 import { compliance as complianceRoutes } from './modules/compliance/routes.ts';
 import { selfService as selfServiceRoutes, selfAdmin as selfAdminRoutes } from './modules/selfService.ts';
 import { swapsMe, swapsAdmin } from './modules/swaps.ts';
@@ -27,9 +31,12 @@ import { poolingRoutes, rollupRoutes, sitesRoutes } from './modules/sites.ts';
 import { bidsAdmin, bidsMe, startBidTicker } from './modules/bids/routes.ts';
 import { offersAdmin, offersMe, offerPolicyRoutes, startOfferTicker } from './modules/offers/routes.ts';
 import { intraday } from './modules/intradayRoutes.ts';
+import { overview } from './modules/overviewToday.ts';
+import { glance } from './modules/employeeGlance.ts';
 import './modules/intradayGapRoutes.ts';   // adds the gap-fix routes to the intraday router
 import { rotations } from './modules/rotations.ts';
 import { attendance } from './modules/attendance.ts';
+import { attendanceDigest, startAttendanceDigest } from './modules/attendanceDigest.ts';
 import { integrationsAdmin, integrationsPublic } from './modules/integrations/routes.ts';
 import { startAllSubscriptions, stopAllSubscriptions } from './modules/integrations/natsSubscriber.ts';
 import { ingestion, ingestLive, LiveRows, recordFeedRejection } from './modules/ingestionRoutes.ts';
@@ -38,9 +45,11 @@ import './modules/adherenceRoutes.ts';        // adds the paged adherence routes
 import { startAdherenceWatch, stopAdherenceWatch } from './modules/adherenceWatch.ts';
 import { savedViews } from './modules/savedViews.ts';
 import { workforce } from './modules/workforceRoutes.ts';
+import { timeOffImpact } from './modules/timeOffImpact.ts';
 import { approvalRoutes, startApprovalTicker } from './modules/approvals.ts';
 import { orgChart } from './modules/orgChart.ts';
 import { scheduling, invalidateLive } from './modules/scheduleRoutes.ts';
+import { scheduleApprovalRoutes } from './modules/scheduleApproval.ts';
 import { planRoutes, startScheduleWorker, stopScheduleWorker } from './modules/scheduleJobs.ts';
 import { developer, startWebhooks, stopWebhooks } from './modules/developer.ts';
 import { ssoPublic, ssoAdmin } from './modules/sso.ts';
@@ -48,9 +57,12 @@ import { scim } from './modules/scim.ts';
 import { payroll } from './modules/payroll.ts';
 import { encryptExisting, security } from './modules/secretsAdmin.ts';
 import { followTheSun } from './modules/followTheSun.ts';
+import { loans } from './modules/loans.ts';
 import { channels, startChannelSender, stopChannelSender } from './modules/channels.ts';
 import { reports, startReportTimer, stopReportTimer } from './modules/reports.ts';
 import { forecast } from './modules/forecast/routes.ts';
+import { forecastRefresh } from './modules/forecast/refreshRoutes.ts';
+import { startForecastRefresh } from './modules/forecast/refresh.ts';
 import { startLearningTicker } from './modules/forecast/learning.ts';
 import { auditRoutes } from './modules/auditRoutes.ts';
 import { license as licenseRoutes } from './modules/licensing/routes.ts';
@@ -99,16 +111,20 @@ app.use(helmet());
 // anything changed through the API makes the short-lived schedule calculations out of date: clear them, so a read after a change always sees the change
 app.use((req, res, next) => { if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') res.on('finish', () => { if (res.statusCode < 400) invalidateLive(); }); next(); });
 app.use(compression());                    // a 6,000-person schedule is ~15 MB of JSON; it crosses the wire at a tenth of that
-app.use(cors({ origin: config.corsOrigin, exposedHeaders: ['X-Total-Count', 'X-Page-Limit'] }));       // a browser on another origin can only read a header listed here
+app.use(cors({ origin: config.corsOrigin, exposedHeaders: ['X-Total-Count', 'X-Page-Limit', 'X-Request-Id', 'traceparent'] }));       // a browser on another origin can only read a header listed here
 app.use(express.json({ limit: '14mb' }));   // CSV imports are posted as text (up to 10MB)
 app.use((req, res, next) => {
-  req.requestId = String(req.headers['x-request-id'] || randomUUID());
+  // a caller's request id is kept only when it is a plain token (it ends up in log lines); the trace continues the caller's when it sent a valid traceparent
+  const given = String(req.headers['x-request-id'] || '');
+  req.requestId = /^[A-Za-z0-9._:-]{1,64}$/.test(given) ? given : randomUUID();
+  const trace = newTrace(req.requestId, String(req.headers['traceparent'] || ''));
   res.setHeader('X-Request-Id', req.requestId);
+  res.setHeader('traceparent', trace.traceparent);
   const t = Date.now();
   requestStarted();
   res.on('close', () => requestFinished(res.statusCode, Date.now() - t));
-  res.on('finish', () => { if (req.path !== '/health') console.log(`${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode} ${Date.now() - t}ms ${req.principal?.username ?? '-'}`); });
-  next();
+  res.on('finish', () => { if (req.path !== '/health') runWithTrace(trace, () => console.log(`${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode} ${Date.now() - t}ms ${req.principal?.username ?? '-'}`)); });
+  runWithTrace(trace, () => next());
 });
 
 /** Prometheus metrics. With METRICS_TOKEN set it needs `Authorization: Bearer <token>`; without one it answers only callers on this machine or a private network (and the web proxy does not publish it). */
@@ -144,6 +160,7 @@ api.use('/workspaces', workspaceRoutes);   // workspaces and their members
 api.use('/config', configRoutes);          // WFM groups, queues
 api.use('/config', sitesRoutes);            // sites, required skills per group, the pool they define
 api.use('/config', policyRoutes);          // activity definitions, scheduling policy
+api.use('/holidays', holidayCalendar);      // public holidays by country, added to the holiday calendar
 api.use('/compliance', complianceRoutes);   // labour-law packs and where they apply
 api.use('/me/bids', bidsMe);                 // shift bidding, the person's side
 api.use('/me/offers', offersMe);             // voluntary time off and overtime offers, the person's side
@@ -153,10 +170,15 @@ api.use('/self-service/offer-policy', offerPolicyRoutes);   // how offers are or
 api.use('/self-service', selfAdminRoutes);  // rules for what can be approved automatically, and logins for employees
 api.use('/data', ingestion);               // staged imports, coverage, quality, live feed
 api.use('/forecast/pooling', poolingRoutes); // shared pool against separate pools
+api.use('/forecast/refresh', forecastRefresh);   // scheduled refresh: settings, run now, run history with the accuracy report
 api.use('/forecast', forecast);            // versions, leaderboard, adjustments, lifecycle, scenarios, accuracy, capacity
+api.use('/workforce/loans', loans);       // lending a person to a group at another site, for dates
 api.use('/workforce', approvalRoutes);       // cover while a supervisor is away
 api.use('/workforce', orgChart);             // reporting lines as a chart
+api.use('/workforce', timeOffImpact);      // time-off approval with cover impact, bulk decide (before /workforce so /time-off/bulk-decide is not read as an id)
 api.use('/workforce', workforce);          // employees, teams, skills, availability, time off
+api.use('/workforce', glance);            // an employee's week, today's status, adherence and leave balances (GET /workforce/employees/:id/glance)
+api.use('/overview', overview);           // the Today page: attention, KPIs, intraday chart in one call
 api.use('/intraday', intraday);            // RTA state map + events, adherence, live coverage
 api.use('/views', savedViews);             // a person's own saved filter sets
 api.use('/scheduling/rollup', rollupRoutes); // every published schedule side by side, by site
@@ -167,12 +189,14 @@ api.use('/scheduling/rotations', rotations); // rotating rosters (4-on-4-off, Du
 api.use('/sso', ssoAdmin);                 // single sign-on settings
 api.use('/developer', developer);         // API keys and webhooks
 api.use('/scheduling/follow-the-sun', followTheSun); // several sites on one clock
+api.use('/scheduling', scheduleApprovalRoutes);    // submit, approve and send back a draft; what publishing changes for each person
 api.use('/scheduling', planRoutes);        // long plans: background jobs, windowed publish, year view, rotation lines
 api.use('/scheduling', scheduling);        // shift templates, schedule versions (CP-SAT), coverage, publish, compare
 api.use('/channels', channels);            // email and SMS: settings, alert rules, what each person receives
 api.use('/reports', reports);              // reports to run now or on a timetable, sent by email
 api.use('/security', security);          // proof that stored secrets are encrypted, and re-encryption under a new key
 api.use('/payroll', payroll);              // pay periods turned into pay codes, approved and exported
+api.use('/attendance', attendanceDigest);   // the daily note about attendance problems nobody has excused
 api.use('/attendance', attendance);        // time punches and the payroll export
 api.use('/integrations', integrationsAdmin); // connector CRUD, mapping, entity matching (the ingest half is mounted above, before auth)
 api.use(auditRoutes);                      // audit ledger
@@ -196,7 +220,7 @@ await consume('ingest-worker', 'wfm.*.ingest.interval', async (payload, tokens) 
   await ingestLive(tenantId, parsed.data.rows, { source: 'NATS' });
 });
 
-server.listen(config.port, () => { console.log(`[gateway] http://localhost:${config.port}  (health: /health, api: /api/v1)`); if (config.role === 'web') { console.log('[gateway] role web: background jobs run in the jobs process'); return; } startOfferTicker(); startApprovalTicker(); startBidTicker(); startLearningTicker(); startScheduleWorker(); startWebhooks().catch((e) => console.error('[webhooks]', e.message)); startChannelSender(); startReportTimer(); startConnectorScheduler(); startAdherenceWatch(); });
+server.listen(config.port, () => { console.log(`[gateway] http://localhost:${config.port}  (health: /health, api: /api/v1)`); if (config.role === 'web') { console.log('[gateway] role web: background jobs run in the jobs process'); return; } startOfferTicker(); startApprovalTicker(); startAttendanceDigest(); startBidTicker(); startLearningTicker(); startForecastRefresh(); startScheduleWorker(); startWebhooks().catch((e) => console.error('[webhooks]', e.message)); startChannelSender(); startReportTimer(); startConnectorScheduler(); startAdherenceWatch(); });
 
 let stopping = false;
 const shutdown = async (why = 'shutdown') => { if (stopping) return; stopping = true; console.log(`[gateway] shutting down (${why})`); setTimeout(() => { console.error('[gateway] shutdown took over 15 s; exiting'); process.exit(1); }, 15000).unref(); stopScheduleWorker(); stopWebhooks(); stopChannelSender(); stopReportTimer(); stopConnectorScheduler(); stopAdherenceWatch(); server.close(); await stopAllSubscriptions(); await closeAll(); await pool.end(); process.exit(0); };

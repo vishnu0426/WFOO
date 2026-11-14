@@ -1,6 +1,7 @@
 /**
  * Scheduling: Schedule Timeline, Generate Schedule, Shift Templates, Compare Versions and Schedule Replay, all live.
  */
+import { Waiting } from '../common/loading';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Layers } from 'lucide-react';
 import { api, dec, ScheduleVersion } from '../../services/api';
@@ -17,21 +18,21 @@ import { QualityPanel } from './QualityPanel';
 import { SwapsPanel } from './SwapsPanel';
 import { OffersPanel } from './OffersPanel';
 import { BidsPanel } from './BidsPanel';
-import { RollupPanel } from './RollupPanel';
+import { MultiSitePanel } from './MultiSitePanel';
 import { RotationsPanel } from './RotationsPanel';
 import { SchedulesSection } from './SchedulesSection';
 import { YearPlanPanel } from './YearPlanPanel';
-import { SunPanel } from './SunPanel';
+import { schedulingHelp } from './pageHelp';
 
 const TITLES: Record<string, { title: string; sub: string }> = {
   'schedule-timeline': { title: 'Schedule Timeline', sub: 'Who works when, and how well it covers the forecast.' },
   'generate-schedule': { title: 'Generate Schedule', sub: 'Build a draft roster from the published forecast.' },
-  'follow-the-sun': { title: 'Follow the Sun', sub: 'Several sites in different time zones on one clock: where the need is not met and how the day is shared.' },
+  'follow-the-sun': { title: 'Multi-Site Coverage', sub: 'How your sites and groups are covered: day by day, and across the 24 hours.' },
   'year-plan': { title: 'Year Plan', sub: 'A long schedule week by week: how well each week is covered, what is locked, and what is still planned.' },
   'schedule-quality': { title: 'Schedule Quality', sub: 'How good a schedule is, where it falls short and why, and what happened when it was generated.' },
   'shift-templates': { title: 'Shift Templates', sub: 'The shift shapes the generator can use.' },
   'schedule-compare': { title: 'Compare Versions', sub: 'See what changed between two schedules.' },
-  'multi-site': { title: 'Multi-Site View', sub: 'Every published schedule side by side, by site and group, on one clock.' },
+  'multi-site': { title: 'Multi-Site Coverage', sub: 'How your sites and groups are covered: day by day, and across the 24 hours.' },
   'all-schedules': { title: 'All Schedules', sub: 'Every schedule version across every WFM group, current and past.' },
   rotations: { title: 'Rotation Patterns', sub: 'Fixed repeating cycles (4-on-4-off, DuPont...) rather than schedules matched to a forecast.' },
   'shift-bidding': { title: 'Shift Bidding', sub: 'Let people rank weekly patterns, then decide the result fairly and build a draft schedule from it.' },
@@ -60,24 +61,24 @@ export const SchedulingHub: React.FC<{ activeSubSection?: string; onNavigateSubS
   };
 
   const meta = TITLES[activeSubSection] ?? TITLES['schedule-timeline'];
+  const usesGroup = activeSubSection !== 'rotations' && activeSubSection !== 'shift-templates' && activeSubSection !== 'shift-swaps' && activeSubSection !== 'multi-site' && activeSubSection !== 'all-schedules' && activeSubSection !== 'follow-the-sun';
   const version = versions.find((v) => v.id === id) ?? null;
-  const usesGroup = activeSubSection !== 'shift-templates' && activeSubSection !== 'shift-swaps' && activeSubSection !== 'multi-site' && activeSubSection !== 'all-schedules' && activeSubSection !== 'follow-the-sun';
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-[#FFFFFF] p-6 space-y-6">
-      <PageHeader title={meta.title} sub={meta.sub}
+    <div className={`flex-none relative flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-[#FFFFFF] ${activeSubSection === 'schedule-timeline' ? 'px-6 pb-4 pt-0 space-y-3' : 'p-6 space-y-6'}`}>   {/* flex-none: with flex-1 the page grew with its content and the document scrolled, so nothing here could stick or fill the screen */}
+      <div className={activeSubSection === 'schedule-timeline' ? 'pt-3' : ''}><PageHeader compact={activeSubSection === 'schedule-timeline'} title={meta.title} sub={meta.sub} help={schedulingHelp(activeSubSection)}
         actions={usesGroup && groups.length > 0 && (
           <div className="flex items-center gap-2 text-[12px] text-[#525252]"><Layers className="w-3.5 h-3.5 text-[#6B6B6B]" />
             <Select value={group?.id ?? ''} onChange={(e) => setGroupId(e.target.value)} className="!w-auto" aria-label="WFM group">{groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</Select>
           </div>
-        )} />
+        )} /></div>
       <NoticeBanner />
-      {!ready ? <Busy text="Loading…" /> : activeSubSection === 'shift-templates' ? <TemplatesPanel />
+      {!ready ? <Waiting what="scheduling" shape="table" /> : activeSubSection === 'shift-templates' ? <TemplatesPanel />
         : activeSubSection === 'shift-swaps' ? <SwapsPanel />
         : activeSubSection === 'vto-overtime' ? <OffersPanel />
         : activeSubSection === 'shift-bidding' ? <BidsPanel />
-        : activeSubSection === 'multi-site' ? <RollupPanel />
-        : activeSubSection === 'follow-the-sun' ? <SunPanel />
+        : activeSubSection === 'multi-site' ? <MultiSitePanel tab="DAY" go={onNavigateSubSection} />
+        : activeSubSection === 'follow-the-sun' ? <MultiSitePanel tab="SUN" go={onNavigateSubSection} />
         : activeSubSection === 'all-schedules' ? <SchedulesSection open={openSchedule} onChanged={() => reload()} />
         : groups.length === 0 ? <Empty title="No WFM group yet">Create a WFM group in Configuration, add people and shift templates, then generate a schedule.</Empty>
         : activeSubSection === 'rotations' ? <RotationsPanel go={onNavigateSubSection} />

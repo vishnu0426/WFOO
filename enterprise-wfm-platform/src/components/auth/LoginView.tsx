@@ -27,6 +27,7 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
   const [finder, setFinder] = useState(false);
   const [email, setEmail] = useState('');
   const [choices, setChoices] = useState<Org[] | null>(null);
+  const [needCode, setNeedCode] = useState(false);          // the code box shows only when the organisation could not be worked out
   const [codeError, setCodeError] = useState('');
   // single sign-on: offered when the organisation has switched it on; a failed attempt comes back with the reason
   const [sso, setSso] = useState<{ enabled: boolean; name: string | null; passwordLogin: boolean } | null>(null);
@@ -68,7 +69,7 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
     return () => clearTimeout(id);
   }, [orgCode, resolving]);
 
-  const change = () => { localStorage.removeItem(ORG_KEY); setKnown(null); setTenant(''); setSso(null); setCodeError(''); setError(''); };
+  const change = () => { localStorage.removeItem(ORG_KEY); setNeedCode(true); setKnown(null); setTenant(''); setSso(null); setCodeError(''); setError(''); };
   const checkTyped = async () => {
     const c = tenant.trim();
     if (!c) { setCodeError(''); return; }
@@ -89,14 +90,24 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
     setBusy(true);
     setError('');
     try {
-      const r = await api<{ token: string } & Session>('/auth/login', { method: 'POST', body: { username, password, tenant: orgCode || undefined } });
+      // The administrator screen does not ask for an organisation code (that is for the employee portal): it finds the organisation from the username, and only asks which one when the
+      // same name exists in more than one, or falls back to the code field when finding it by name is switched off.
+      let code = orgCode;
+      if (!code) {
+        try {
+          const d = await api<{ organisations: Org[] }>('/auth/discover', { method: 'POST', body: { identifier: username.trim() } });
+          if (d.organisations.length === 1) code = d.organisations[0].code;
+          else if (d.organisations.length > 1) { setChoices(d.organisations); setFinder(true); setError('Choose your organisation, then sign in.'); setBusy(false); return; }
+        } catch { /* finding by name is off or limited: try without it, the server says if a code is needed */ }
+      }
+      const r = await api<{ token: string } & Session>('/auth/login', { method: 'POST', body: { username, password, tenant: code || undefined } });
       const { token, ...session } = r;
       storeSession(token, session);
       localStorage.setItem(ORG_KEY, session.tenant.code);
       onLogin(session);
     } catch (err: any) {
       setError(err.message);
-      if (err instanceof ApiError && (err.code === 'ORG_REQUIRED' || err.code === 'ORG_UNKNOWN')) { setKnown(null); setFinder(!!opts?.discovery); }
+      if (err instanceof ApiError && (err.code === 'ORG_REQUIRED' || err.code === 'ORG_UNKNOWN')) { setKnown(null); setError('We could not tell which organisation this username belongs to. Ask your administrator, or use the link you were sent.'); }
     } finally {
       setBusy(false);
     }
@@ -119,29 +130,28 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
             <div className="text-[11px] text-[#6B6B6B]">Signing in to</div>
             <div className="flex items-center justify-between gap-2">
               <span className="font-semibold text-[14px] text-[#171717]">{known.name}</span>
-              {known.source !== 'only' && <button type="button" onClick={change} className="text-[12px] text-[#6B6B6B] hover:text-[#171717] underline">Not your organisation?</button>}
+              {<button type="button" onClick={change} className="text-[12px] text-[#6B6B6B] hover:text-[#171717] underline">Not your organisation?</button>}
             </div>
           </div>
         ) : !known && (
           <div className="space-y-2">
             <label className="block text-[12px] font-semibold text-[#171717]">
               Organisation code
-              <input value={tenant} onChange={(e) => { setTenant(e.target.value); setCodeError(''); }} onBlur={checkTyped} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void checkTyped(); } }} className={field} autoCapitalize="none" />
-              <span className="block text-[12px] font-normal text-[#6B6B6B] mt-0.5">It is on your welcome message, or in the link you were sent.</span>
+              <input value={tenant} onChange={(e) => { setTenant(e.target.value); setCodeError(''); }} onBlur={checkTyped} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void checkTyped(); } }} autoCapitalize="none" autoFocus className={field} />
             </label>
             {codeError && <div className="text-[12px] text-[#BC3F3F]">{codeError}</div>}
-            {opts?.discovery ? <button type="button" onClick={() => setFinder((v) => !v)} className="text-[12px] text-[#6B6B6B] hover:text-[#171717] underline">{finder ? 'Hide' : "Don't know it? Find my organisation"}</button> : <div className="text-[12px] text-[#6B6B6B]">Don't have it? Ask your manager.</div>}
+            {opts?.discovery && <button type="button" onClick={() => setFinder((v) => !v)} className="text-[12px] text-[#6B6B6B] hover:text-[#171717] underline">{finder ? 'Hide' : "Don't know it? Find my organisation"}</button>}
             {finder && (
               <div className="rounded border border-[#E5E5E0] bg-[#FAFAF8] p-3 space-y-2">
                 <label className="block text-[12px] font-semibold text-[#171717]">Your work email or username
-                  <input value={email} onChange={(e) => { setEmail(e.target.value); setChoices(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (email.trim().length >= 3) void find(); } }} className={field} autoCapitalize="none" />
+                  <input value={email} onChange={(e) => { setEmail(e.target.value); setChoices(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (email.trim().length >= 3) void find(); } }} autoCapitalize="none" className={field} />
                 </label>
-                <button type="button" disabled={busy || email.trim().length < 3} onClick={find} className="w-full px-3 py-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[12px] font-semibold disabled:opacity-60">{busy ? 'Looking…' : 'Find my organisation'}</button>
-                {choices && choices.length === 0 && <div className="text-[12px] text-[#525252]">We couldn't find an account for that. Check the spelling, or ask your manager for the organisation code.</div>}
+                <button type="button" disabled={busy || email.trim().length < 3} onClick={find} className="w-full px-3 py-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[12px] font-semibold disabled:opacity-50">{busy ? 'Looking…' : 'Find my organisation'}</button>
+                {choices && choices.length === 0 && <div className="text-[12px] text-[#525252]">We couldn't find an account for that. Check the spelling.</div>}
                 {choices && choices.length > 1 && (
                   <div className="space-y-1.5">
                     <div className="text-[12px] text-[#525252]">You have an account in more than one organisation. Which one?</div>
-                    {choices.map((o) => <button key={o.code} type="button" onClick={() => pick(o)} className="w-full text-left rounded border border-[#E5E5E0] bg-white px-3 py-2 text-[13px] hover:bg-[#F5F5F0]">{o.name}</button>)}
+                    {choices.map((o) => <button key={o.code} type="button" onClick={() => pick(o)} className="w-full text-left rounded border border-[#E5E5E0] bg-white px-3 py-2 text-[13px] hover:bg-[#FAFAF8]">{o.name}</button>)}
                   </div>
                 )}
               </div>

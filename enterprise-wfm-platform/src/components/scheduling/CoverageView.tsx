@@ -6,11 +6,12 @@
  * Click any interval, in either view, to see who is working it and why the people who are not are not.
  * Short and over are told apart by pattern as well as colour.
  */
+import { LoadFailed, Waiting } from '../common/loading';
 import React, { useMemo, useState } from 'react';
 import { Bar, BarChart, Cell, CartesianGrid, ComposedChart, Area, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { dayName, dec, ScheduleVersion, slotHHMM } from '../../services/api';
 import { useApi } from '../forecasting/hooks';
-import { Kpi, KpiRow, Pill, Seg, Select } from '../forecasting/ui';
+import { Banner, Btn, Kpi, KpiRow, Pill, Seg, Select } from '../forecasting/ui';
 
 type Slot = { day: string; slot: number; time: string; required: number; scheduled: number; delta: number };
 type Cov = {
@@ -115,7 +116,9 @@ export const CoverageView: React.FC<{ version: ScheduleVersion; versions: Schedu
             )}
           </div>
 
-          {tab === 'DAY' && (
+          {cov.data === null && open && (cov.error ? <LoadFailed what="the coverage" error={cov.error} reload={cov.reload} /> : <Waiting what="the coverage" shape="panel" reload={cov.reload} />)}
+          {cov.data !== null && cov.error && <Banner kind="warn"><span>Could not refresh the coverage: {cov.error} The last picture is shown.</span> <Btn onClick={cov.reload}>Try again</Btn></Banner>}
+          {tab === 'DAY' && cov.data !== null && (
             <div>
               <div className="flex flex-wrap items-center gap-4 pb-2 text-[11px] text-[#525252]">
                 <Legend swatch={<span className="w-3 h-3 rounded-sm bg-[#DDF0E4] border border-[#2F7D5A]/30" />}>Covered</Legend>

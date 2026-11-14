@@ -4,16 +4,14 @@
  * Uses dedicated platform token authentication (PLATFORM_JWT_SECRET, audience 'platform').
  * Isolated from tenant sessions and tenant RLS.
  * Visual theme matches the Enterprise WFM white theme (#FAFAF8, #FFFFFF, #E5E5E0, #171717, #2F7D5A).
- * Features Interactive Hierarchical Tree View (Platform → Organisations → Workspaces & Admins).
+ * Features Interactive Hierarchical Tree View (Platform to Organisations to Workspaces & Admins).
  */
 import React, { useEffect, useState } from 'react';
-import {
-  ShieldAlert, Building2, Plus, Users, Globe, Check, AlertCircle,
-  LogOut, RefreshCw, Key, Copy, CheckCircle2, ArrowLeft, Edit2, Settings, ExternalLink,
-  FolderTree, List, ChevronDown, ChevronRight, Layers, Server, Shield,
-  BarChart3, Activity, TrendingUp, Database, HardDrive, Cpu, Radio, Clock, Sparkles, Filter, Search, ArrowUpRight, BarChart2,
-  ShieldCheck, FileText, KeyRound, Lock, Unlock, AlertOctagon, Terminal, ScrollText, UserCheck, UserX
-} from 'lucide-react';
+import { NewOrganisationForm } from './NewOrganisationForm';
+import { AccountPage } from './AccountPage';
+import { SettingsPage } from './SettingsPage';
+import { MODULE_LABELS, type CountryTemplate, type Plan } from './PlansSettings';
+import { RefreshCw, ChevronDown, ChevronRight, X, Eye, EyeOff } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend
 } from 'recharts';
@@ -22,6 +20,9 @@ interface PlatformAdmin {
   id: string;
   email: string;
   status: string;
+  displayName?: string;
+  mfaEnabled?: boolean;
+  mfaSetupRequired?: boolean;
 }
 
 interface TenantTelemetry {
@@ -84,8 +85,6 @@ interface PlatformAnalyticsData {
     totalIntervals: number;
     totalConnectors: number;
     totalAuditLogs: number;
-    telemetryUptime: string;
-    telemetryStatus: string;
   };
   tenants: TenantTelemetry[];
   storageDistribution: StorageDistributionItem[];
@@ -282,10 +281,10 @@ const BASE = '/api/v1/platform';
 const COMMON_TIMEZONES = [
   'UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
   'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Dubai', 'Asia/Kolkata',
-  'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney'
+  'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Asia/Riyadh', 'Asia/Manila', 'America/Toronto'
 ];
 
-const CURRENCIES = ['USD', 'EUR', 'GBP', 'INR', 'AUD', 'CAD', 'SGD', 'JPY'];
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'INR', 'AUD', 'CAD', 'SGD', 'JPY', 'AED', 'SAR', 'PHP'];
 
 async function platformApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem(PLATFORM_TOKEN_KEY);
@@ -305,7 +304,9 @@ async function platformApi<T>(path: string, options: RequestInit = {}): Promise<
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = data.error?.message || (typeof data.error === 'string' ? data.error : null) || data.message || `Request failed with status ${res.status}`;
-    throw new Error(msg);
+    const e: any = new Error(msg);
+    e.code = data.error?.code;
+    throw e;
   }
   return data as T;
 }
@@ -338,6 +339,48 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
+const TONE: Record<string, string> = {
+  good: 'bg-[#EAF5EF] text-[#2A7553] border-[#2F7D5A]/20',
+  warn: 'bg-[#FFF5DD] text-[#8F6200] border-[#B7791F]/20',
+  bad: 'bg-[#FCEBEC] text-[#BC3F3F] border-[#C84A4A]/20',
+  neutral: 'bg-[#FAFAF8] text-[#525252] border-[#E5E5E0]',
+};
+const StatusPill: React.FC<{ tone: keyof typeof TONE; children: React.ReactNode }> = ({ tone, children }) => (
+  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border whitespace-nowrap ${TONE[tone]}`}>{children}</span>
+);
+
+const MODULE_CODES = ['FORECASTING', 'SCHEDULING', 'INTRADAY', 'ADHERENCE', 'TIME_OFF', 'SHIFT_BIDDING', 'EMPLOYEE_SELF_SERVICE', 'REPORTING', 'AI_COPILOT'];
+
+const TENANT_APP_URL = (import.meta as any).env?.VITE_TENANT_APP_URL || `${window.location.protocol}//${window.location.hostname}:3000`;
+
+type PortalTab = 'DASHBOARD' | 'SETTINGS' | 'ACCOUNT' | 'NEW_ORG' | 'TREE' | 'DIRECTORY' | 'ANALYTICS' | 'SECURITY' | 'LICENSING';
+
+// One address per section, so refresh, back/forward and bookmarks all work
+const TAB_PATHS: Record<PortalTab, string> = {
+  DASHBOARD: '/dashboard',
+  DIRECTORY: '/organisations',
+  NEW_ORG: '/organisations/new',
+  ACCOUNT: '/account',
+  SETTINGS: '/settings',
+  TREE: '/hierarchy',
+  LICENSING: '/licensing',
+  ANALYTICS: '/usage-analytics',
+  SECURITY: '/audit-security',
+};
+const TAB_TITLES: Record<PortalTab, string> = {
+  DASHBOARD: 'Dashboard',
+  DIRECTORY: 'Organisations',
+  NEW_ORG: 'New organisation',
+  ACCOUNT: 'Account',
+  SETTINGS: 'Settings',
+  TREE: 'Hierarchy',
+  LICENSING: 'Licensing',
+  ANALYTICS: 'Usage analytics',
+  SECURITY: 'Audit and security',
+};
+const tabFromPath = (path: string): PortalTab =>
+  ((Object.keys(TAB_PATHS) as PortalTab[]).find((t) => TAB_PATHS[t] === path.replace(/\/+$/, '')) || 'DASHBOARD');
+
 export const PlatformAdminPortal: React.FC = () => {
   const [admin, setAdmin] = useState<PlatformAdmin | null>(null);
   const [loading, setLoading] = useState(true);
@@ -346,10 +389,11 @@ export const PlatformAdminPortal: React.FC = () => {
   const [notice, setNotice] = useState('');
 
   // View tab: Tree vs Directory vs Analytics vs Security vs Licensing
-  const [tab, setTab] = useState<'TREE' | 'DIRECTORY' | 'ANALYTICS' | 'SECURITY' | 'LICENSING'>('TREE');
+  const [tab, setTab] = useState<PortalTab>(() => tabFromPath(window.location.pathname));
   const [analyticsData, setAnalyticsData] = useState<PlatformAnalyticsData | null>(null);
   const [analyticsFilter, setAnalyticsFilter] = useState<'ALL' | 'HIGH_ACTIVITY' | 'MODERATE' | 'IDLE'>('ALL');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [health, setHealth] = useState<Record<string, any> | null>(null);
 
   // Licensing Subsystem & Quota Governance
   const [licenses, setLicenses] = useState<any[]>([]);
@@ -364,6 +408,7 @@ export const PlatformAdminPortal: React.FC = () => {
     maxWorkspaces: 5,
     endDate: '',
     gracePeriodDays: 14,
+    customReason: '',
     modules: {},
   });
   const [showEditLicenseModal, setShowEditLicenseModal] = useState(false);
@@ -384,6 +429,15 @@ export const PlatformAdminPortal: React.FC = () => {
   // Login form
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [mfaToken, setMfaToken] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [tenantUrl, setTenantUrl] = useState(TENANT_APP_URL);
+  const [catalogue, setCatalogue] = useState<Plan[]>([]);
+  const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({});
+  const [grants, setGrants] = useState<Record<string, string>>({});
+  const [countryTemplates, setCountryTemplates] = useState<CountryTemplate[]>([]);
+  const [packList, setPackList] = useState<{ code: string; name: string; region: string }[]>([]);
 
   // Organisations list & Hierarchy Tree data
   const [organizations, setOrganizations] = useState<PlatformOrg[]>([]);
@@ -391,19 +445,6 @@ export const PlatformAdminPortal: React.FC = () => {
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
 
-  // Modal: Organisation Provisioning
-  const [showNewOrg, setShowNewOrg] = useState(false);
-  const [newOrgForm, setNewOrgForm] = useState({
-    name: '',
-    code: '',
-    legalName: '',
-    timezone: 'UTC',
-    currency: 'USD',
-    adminUser: 'admin',
-    adminPassword: '',
-    adminEmail: '',
-  });
-  const [createdOrgSummary, setCreatedOrgSummary] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
 
   // Modal: Commercial License Provisioning
@@ -417,6 +458,7 @@ export const PlatformAdminPortal: React.FC = () => {
     maxWorkspaces: 5,
     gracePeriodDays: 14,
     endDate: '',
+    customReason: '',
     modules: {
       FORECASTING: true,
       SCHEDULING: true,
@@ -463,6 +505,10 @@ export const PlatformAdminPortal: React.FC = () => {
     contactEmail: '',
     timezone: 'UTC',
     currency: 'USD',
+    country: '', industry: '', companySize: '', registrationId: '', website: '', contactPhone: '',
+    billingContactName: '', billingContactEmail: '', securityContactName: '', securityContactEmail: '',
+    addr1: '', addr2: '', city: '', state: '', postalCode: '', billingSame: true, bAddr1: '', bAddr2: '', bCity: '', bState: '', bPostalCode: '',
+    contractRef: '', accountOwner: '', internalNotes: '',
   });
 
   // Initial authentication check
@@ -475,7 +521,7 @@ export const PlatformAdminPortal: React.FC = () => {
     platformApi<{ admin: PlatformAdmin }>('/auth/me')
       .then((data) => {
         setAdmin(data.admin);
-        return loadData();
+        return data.admin.mfaSetupRequired ? undefined : loadData();
       })
       .catch(() => {
         localStorage.removeItem(PLATFORM_TOKEN_KEY);
@@ -483,6 +529,22 @@ export const PlatformAdminPortal: React.FC = () => {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Keep the address bar in step with the section, and the section in step with back/forward
+  useEffect(() => {
+    const onPop = () => setTab(tabFromPath(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  useEffect(() => {
+    if (loading) return;
+    const want = admin ? TAB_PATHS[tab] : '/sign-in';
+    document.title = `${admin ? TAB_TITLES[tab] : 'Sign in'} | Enterprise WFM Platform`;
+    const here = window.location.pathname.replace(/\/+$/, '');
+    if (here === want) return;
+    const known = Object.values(TAB_PATHS).includes(here);
+    window.history[known && admin ? 'pushState' : 'replaceState'](null, '', want);
+  }, [tab, admin, loading]);
 
   const loadData = async () => {
     try {
@@ -512,6 +574,8 @@ export const PlatformAdminPortal: React.FC = () => {
         });
       }
       if (analyticsRes) setAnalyticsData(analyticsRes);
+      fetch('/health').then((r) => r.json()).then(setHealth).catch(() => setHealth(null));
+      platformApi<{ effective: { tenantApp: string } }>('/settings/urls').then((u) => setTenantUrl(u.effective.tenantApp)).catch(() => {});
       if (auditRes) setAuditData(auditRes);
       if (resetsRes) setEmergencyResetsLedger(resetsRes);
     } catch (err: any) {
@@ -572,25 +636,81 @@ export const PlatformAdminPortal: React.FC = () => {
     return () => clearInterval(interval);
   }, [admin, autoRefresh, tab, auditActionFilter, auditTenantFilter, search]);
 
+  // After the token is stored: read the account (it says whether two-factor setup is still owed) and load the data unless that blocks everything.
+  const afterSignIn = async (token: string) => {
+    localStorage.setItem(PLATFORM_TOKEN_KEY, token);
+    const me = await platformApi<{ admin: PlatformAdmin }>('/auth/me');
+    setAdmin(me.admin);
+    setLoginPassword('');
+    setMfaToken('');
+    setMfaCode('');
+    if (me.admin.mfaSetupRequired) setTab('ACCOUNT');
+    else await loadData();
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError('');
     try {
-      const res = await platformApi<{ token: string; admin: PlatformAdmin }>('/auth/login', {
+      const res = await platformApi<{ token?: string; mfaRequired?: boolean; mfaToken?: string; admin?: PlatformAdmin }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
       });
-      localStorage.setItem(PLATFORM_TOKEN_KEY, res.token);
-      setAdmin(res.admin);
-      setLoginPassword('');
-      await loadData();
+      if (res.mfaRequired && res.mfaToken) {
+        setMfaToken(res.mfaToken);
+        setLoginPassword('');
+        return;
+      }
+      await afterSignIn(res.token!);
     } catch (err: any) {
-      setError(err.message || 'Invalid super admin credentials');
+      setError(err.message || 'Sign-in failed. Check your credentials and try again.');
     } finally {
       setBusy(false);
     }
   };
+
+  const handleMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const res = await platformApi<{ token: string }>('/auth/login/mfa', { method: 'POST', body: JSON.stringify({ mfaToken, code: mfaCode }) });
+      await afterSignIn(res.token);
+    } catch (err: any) {
+      setError(err.message || 'That code did not work.');
+      if (/expired|start again/i.test(err.message || '')) { setMfaToken(''); setMfaCode(''); }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const mfaForced = !!admin?.mfaSetupRequired;
+  useEffect(() => { if (mfaForced && tab !== 'ACCOUNT') setTab('ACCOUNT'); }, [mfaForced, tab]);
+
+  // the plan catalogue and country templates feed the New organisation form (and are refreshed whenever it opens)
+  useEffect(() => {
+    if (!admin || (tab !== 'NEW_ORG' && tab !== 'LICENSING')) return;
+    platformApi<Plan[]>('/plans').then(setCatalogue).catch(() => {});
+    platformApi<CountryTemplate[]>('/country-templates').then(setCountryTemplates).catch(() => {});
+    platformApi<{ code: string; name: string; region: string }[]>('/builtin-packs').then(setPackList).catch(() => {});
+  }, [admin, tab]);
+
+  // the plan a licence form currently points at, and whether the numbers typed differ from it (an exception needs a reason)
+  const planFor = (code: string) => catalogue.find((x) => x.code === code);
+  const planDiffers = (form: any) => {
+    const pl = planFor(form.planTier);
+    if (!pl || pl.isCustom) return false;
+    const on = Object.keys(form.modules || {}).filter((k) => form.modules[k]).sort().join();
+    return Number(form.maxEmployees) !== pl.seatsMax || Number(form.maxUsers) !== pl.maxUsers || Number(form.maxSites) !== pl.maxSites || Number(form.maxWorkspaces) !== pl.maxWorkspaces || on !== [...pl.modules].sort().join();
+  };
+  const REQUEST_UNITS: Record<string, string> = { EMPLOYEES: 'employee seats', USERS: 'user accounts', SITES: 'sites', WORKSPACES: 'workspaces' };
+  const moduleName = (code: string) => MODULE_LABELS.find(([k]) => k === code)?.[1] ?? code;
+  const describeRequest = (r: any) =>
+    r.resourceType === 'PLAN' ? `to move to the ${planFor(r.requestedPlan)?.name || r.requestedPlan} plan`
+    : r.resourceType === 'MODULES' ? `for ${(r.requestedModules || []).map(moduleName).join(', ')}`
+    : `for ${r.additionalNeeded} more ${REQUEST_UNITS[r.resourceType] ?? r.resourceType}`;
+  const modulesOf = (codes: string[]) => Object.fromEntries(MODULE_CODES.map((m) => [m, codes.includes(m)])) as Record<string, boolean>;
 
   const handleSignOut = () => {
     localStorage.removeItem(PLATFORM_TOKEN_KEY);
@@ -602,60 +722,7 @@ export const PlatformAdminPortal: React.FC = () => {
     setEmergencyResetsLedger([]);
   };
 
-  const openProvisionModal = () => {
-    setCreatedOrgSummary(null);
-    setNewOrgForm({
-      name: '',
-      code: '',
-      legalName: '',
-      timezone: 'UTC',
-      currency: 'USD',
-      adminUser: 'admin',
-      adminPassword: '',
-      adminEmail: '',
-    });
-    setShowNewOrg(true);
-  };
-
-  const handleCreateOrg = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newOrgForm.name.trim() || !newOrgForm.code.trim()) return;
-    setBusy(true);
-    setError('');
-    try {
-      const payload: any = {
-        name: newOrgForm.name.trim(),
-        code: newOrgForm.code.trim().toUpperCase(),
-        legalName: newOrgForm.legalName.trim() || undefined,
-        timezone: newOrgForm.timezone,
-        currency: newOrgForm.currency,
-      };
-      if (newOrgForm.adminUser && newOrgForm.adminPassword) {
-        payload.adminUser = newOrgForm.adminUser.trim();
-        payload.adminPassword = newOrgForm.adminPassword;
-        if (newOrgForm.adminEmail) payload.adminEmail = newOrgForm.adminEmail.trim();
-      }
-
-      const res = await platformApi<any>('/organizations', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-
-      setCreatedOrgSummary({
-        org: res.organization,
-        workspace: res.workspace,
-        adminUser: newOrgForm.adminUser,
-        adminPassword: newOrgForm.adminPassword,
-      });
-
-      setNotice(`Organisation "${res.organization.name}" provisioned successfully.`);
-      await loadData();
-    } catch (err: any) {
-      setError(err.message || 'Failed to provision organisation');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const openProvisionModal = () => setTab('NEW_ORG');
 
   const unlicensedOrgs = organizations.filter(
     (org) => !licenses.some((lic) => lic.tenantId === org.id && lic.status !== 'CANCELLED')
@@ -682,16 +749,19 @@ export const PlatformAdminPortal: React.FC = () => {
       AI_COPILOT: false,
     };
 
+    // start from a plan in the catalogue, so the numbers match it and no exception has to be explained
+    const pl = planFor('ENTERPRISE') ?? catalogue.find((x) => x.status === 'ACTIVE');
     setIssueLicenseForm({
       tenantId: targetId,
-      planTier: 'ENTERPRISE',
-      maxEmployees: 355,
-      maxUsers: 75,
-      maxSites: 10,
-      maxWorkspaces: 5,
-      gracePeriodDays: 14,
+      planTier: pl?.code ?? 'ENTERPRISE',
+      maxEmployees: pl ? pl.seatsMax : 355,
+      maxUsers: pl?.maxUsers ?? 75,
+      maxSites: pl?.maxSites ?? 10,
+      maxWorkspaces: pl?.maxWorkspaces ?? 5,
+      gracePeriodDays: pl?.gracePeriodDays ?? 14,
       endDate: oneYearAhead.toISOString().slice(0, 10),
-      modules: modMap,
+      customReason: '',
+      modules: pl ? modulesOf(pl.modules) : modMap,
     });
     setShowIssueLicenseModal(true);
   };
@@ -718,6 +788,7 @@ export const PlatformAdminPortal: React.FC = () => {
           gracePeriodDays: Number(issueLicenseForm.gracePeriodDays),
           endDate: issueLicenseForm.endDate ? new Date(issueLicenseForm.endDate).toISOString() : undefined,
           modules: enabledModules,
+          customReason: issueLicenseForm.customReason || undefined,
         }),
       });
 
@@ -818,16 +889,47 @@ export const PlatformAdminPortal: React.FC = () => {
     }
   };
 
-  const openEditOrgModal = (org: PlatformOrg | TreeOrg) => {
+  const openEditOrgModal = async (org: PlatformOrg | TreeOrg) => {
     setSelectedOrgForEdit(org as PlatformOrg);
-    setEditOrgForm({
+    const base = {
       displayName: org.displayName || org.display_name || org.name,
       legalName: org.legalName || org.legal_name || org.name,
       contactName: org.contactName || org.contact_name || '',
       contactEmail: org.contactEmail || org.contact_email || '',
       timezone: org.timezone || 'UTC',
       currency: org.currency || 'USD',
-    });
+    };
+    setEditOrgForm((f) => ({ ...f, ...base }));
+    try {
+      const d = await platformApi<{ organization: any }>(`/organizations/${org.id}`);
+      const o = d.organization;
+      const ra = o.registeredAddress || {};
+      const ba = o.billingAddress || {};
+      setEditOrgForm((f) => ({
+        ...f,
+        country: o.country || '', industry: o.industry || '', companySize: o.companySize || '', registrationId: o.registrationId || '', website: o.website || '',
+        contactPhone: o.contactPhone || '', billingContactName: o.billingContactName || '', billingContactEmail: o.billingContactEmail || '',
+        securityContactName: o.securityContactName || '', securityContactEmail: o.securityContactEmail || '',
+        addr1: ra.line1 || '', addr2: ra.line2 || '', city: ra.city || '', state: ra.state || '', postalCode: ra.postalCode || '',
+        billingSame: o.billingSameAsRegistered !== false, bAddr1: ba.line1 || '', bAddr2: ba.line2 || '', bCity: ba.city || '', bState: ba.state || '', bPostalCode: ba.postalCode || '',
+        contractRef: o.contractRef || '', accountOwner: o.accountOwner || '', internalNotes: o.internalNotes || '',
+      }));
+    } catch {
+      /* the basic fields are already filled in; the extra ones stay blank */
+    }
+  };
+
+  const editOrgPayload = () => {
+    const f = editOrgForm;
+    const registered = { line1: f.addr1, line2: f.addr2, city: f.city, state: f.state, postalCode: f.postalCode, country: f.country };
+    const billing = f.billingSame ? registered : { line1: f.bAddr1, line2: f.bAddr2, city: f.bCity, state: f.bState, postalCode: f.bPostalCode, country: f.country };
+    return {
+      displayName: f.displayName, legalName: f.legalName, contactName: f.contactName, contactEmail: f.contactEmail || null, timezone: f.timezone, currency: f.currency,
+      country: f.country, industry: f.industry, companySize: f.companySize, registrationId: f.registrationId, website: f.website, contactPhone: f.contactPhone,
+      billingContactName: f.billingContactName, billingContactEmail: f.billingContactEmail, securityContactName: f.securityContactName, securityContactEmail: f.securityContactEmail,
+      registeredAddress: registered, billingAddress: billing, billingSameAsRegistered: f.billingSame,
+      contractRef: f.contractRef, accountOwner: f.accountOwner, internalNotes: f.internalNotes,
+    };
   };
 
   const handleSaveOrgEdit = async (e: React.FormEvent) => {
@@ -838,7 +940,7 @@ export const PlatformAdminPortal: React.FC = () => {
     try {
       await platformApi(`/organizations/${selectedOrgForEdit.id}`, {
         method: 'PATCH',
-        body: JSON.stringify(editOrgForm),
+        body: JSON.stringify(editOrgPayload()),
       });
       setSelectedOrgForEdit(null);
       setNotice(`Organisation "${selectedOrgForEdit.name}" updated successfully.`);
@@ -877,6 +979,7 @@ export const PlatformAdminPortal: React.FC = () => {
       maxWorkspaces: lic.maxWorkspaces || 5,
       endDate: lic.endDate ? lic.endDate.slice(0, 10) : '',
       gracePeriodDays: lic.gracePeriodDays ?? 14,
+      customReason: lic.customReason || '',
       modules: modMap,
     });
     setShowEditLicenseModal(true);
@@ -900,6 +1003,7 @@ export const PlatformAdminPortal: React.FC = () => {
           gracePeriodDays: Number(editLicenseForm.gracePeriodDays),
           endDate: editLicenseForm.endDate ? new Date(editLicenseForm.endDate).toISOString() : undefined,
           modules: editLicenseForm.modules,
+          customReason: editLicenseForm.customReason || undefined,
         }),
       });
       setShowEditLicenseModal(false);
@@ -919,9 +1023,9 @@ export const PlatformAdminPortal: React.FC = () => {
     try {
       await platformApi(`/capacity-requests/${requestId}/decide`, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, notes: decisionNotes[requestId] || undefined, grant: grants[requestId] ? Number(grants[requestId]) : undefined }),
       });
-      setNotice(`Capacity request ${action === 'APPROVE' ? 'approved and license capacity updated' : 'rejected'}.`);
+      setNotice(`Request ${action === 'APPROVE' ? 'approved and the licence updated' : 'rejected'}. The customer can see your note.`);
       await loadData();
     } catch (err: any) {
       setError(err.message || 'Failed to decide request');
@@ -963,68 +1067,110 @@ export const PlatformAdminPortal: React.FC = () => {
     );
   }
 
-  // Login Screen (Clean White Theme)
+  // Sign-in screen
   if (!admin) {
+    const inputCls = 'w-full h-10 px-3 border border-[#D4D4CF] rounded text-[13px] bg-white text-[#171717] placeholder-[#A3A3A3] focus:outline-none focus:border-[#171717] focus:ring-1 focus:ring-[#171717]';
     return (
-      <div className="min-h-screen bg-[#FAFAF8] text-[#171717] flex flex-col items-center justify-center p-4 font-sans antialiased">
-        <div className="w-full max-w-sm bg-white border border-[#E5E5E0] rounded-lg shadow-xs p-6 space-y-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded bg-[#171717] flex items-center justify-center text-white font-bold text-sm tracking-wider">
-              <ShieldAlert className="w-5 h-5 text-white" />
+      <div className="min-h-screen bg-[#FAFAF8] text-[#171717] flex flex-col font-sans antialiased">
+        <main className="flex-1 flex items-center justify-center p-4">
+          <div className="w-full max-w-[400px]">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded bg-[#171717] flex items-center justify-center text-white font-bold text-[12px] tracking-wider">WFM</div>
+              <div>
+                <div className="text-[15px] font-bold tracking-tight leading-tight">Enterprise WFM</div>
+                <div className="text-[12px] text-[#737373]">Platform Administration Console</div>
+              </div>
             </div>
-            <div>
-              <h1 className="text-[16px] font-semibold text-[#171717] leading-tight">Platform Super Admin</h1>
-              <p className="text-[12px] text-[#737373]">Root multi-tenant portal · Token isolation</p>
+
+            <div className="bg-white border border-[#E5E5E0] rounded-lg shadow-xs p-6">
+              <h1 className="text-[18px] font-semibold text-[#171717]">Sign in</h1>
+              <p className="text-[13px] text-[#737373] mt-1 mb-5">
+                Restricted to authorised platform operators.
+              </p>
+
+              {error && (
+                <div role="alert" className="mb-4 text-[12px] text-[#C84A4A] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2 flex items-start gap-2">
+                  
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {mfaToken && (
+                <form onSubmit={handleMfa} className="space-y-4" autoComplete="off">
+                  <p className="text-[13px] text-[#525252]">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+                  <div>
+                    <label htmlFor="pa-code" className="block text-[12px] font-semibold text-[#171717] mb-1.5">Code</label>
+                    <input id="pa-code" inputMode="text" autoComplete="one-time-code" autoFocus value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} placeholder="123456" required className={inputCls} />
+                  </div>
+                  <button type="submit" disabled={busy || mfaCode.trim().length < 6} className="w-full h-10 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold disabled:opacity-60 transition-colors">{busy ? 'Checking...' : 'Verify'}</button>
+                  <button type="button" onClick={() => { setMfaToken(''); setMfaCode(''); setError(''); }} className="w-full text-[12px] text-[#525252] hover:underline">Back to sign in</button>
+                </form>
+              )}
+              <form onSubmit={handleLogin} className={`space-y-4 ${mfaToken ? 'hidden' : ''}`} autoComplete="on">
+                <div>
+                  <label htmlFor="pa-email" className="block text-[12px] font-semibold text-[#171717] mb-1.5">
+                    Work email
+                  </label>
+                  <input
+                    id="pa-email"
+                    name="email"
+                    type="email"
+                    autoComplete="username"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="name@company.com"
+                    required
+                    autoFocus
+                    className={inputCls}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="pa-password" className="block text-[12px] font-semibold text-[#171717] mb-1.5">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="pa-password"
+                      name="password"
+                      type={showLoginPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="Enter your password"
+                      required
+                      className={`${inputCls} pr-10`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowLoginPassword((v) => !v)}
+                      aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-0 top-0 h-10 w-10 flex items-center justify-center text-[#737373] hover:text-[#171717]"
+                    >
+                      {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="w-full h-10 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold disabled:opacity-60 transition-colors"
+                >
+                  {busy ? 'Signing in...' : 'Sign in'}
+                </button>
+              </form>
             </div>
+
+            <p className="text-[11px] text-[#737373] mt-4 leading-relaxed">
+              This system is for authorised use only. All sign-in attempts and administrative actions are logged
+              with IP address and device information, and are subject to security review.
+            </p>
           </div>
-
-          {error && (
-            <div className="text-[12px] text-[#C84A4A] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-[#C84A4A]" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-3">
-            <div>
-              <label className="block text-[12px] font-semibold text-[#171717] mb-1">
-                Admin Email
-              </label>
-              <input
-                type="email"
-                value={loginEmail}
-                onChange={(e) => setLoginEmail(e.target.value)}
-                placeholder="superadmin@wfm.local"
-                required
-                autoFocus
-                className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] placeholder-[#737373] focus:outline-none focus:border-[#171717]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[12px] font-semibold text-[#171717] mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••••••"
-                required
-                className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] placeholder-[#737373] focus:outline-none focus:border-[#171717]"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full px-4 py-2 rounded bg-[#171717] hover:bg-[#333333] text-white text-[13px] font-semibold flex items-center justify-center gap-2 disabled:opacity-60 transition-colors shadow-xs"
-            >
-              <Key className="w-4 h-4" />
-              {busy ? 'Authenticating...' : 'Sign In as Super Admin'}
-            </button>
-          </form>
-        </div>
+        </main>
+        <footer className="px-4 py-4 text-center text-[11px] text-[#A3A3A3]">
+          Enterprise WFM Platform
+        </footer>
       </div>
     );
   }
@@ -1070,161 +1216,95 @@ export const PlatformAdminPortal: React.FC = () => {
   const treeTotalWorkspaces = treeData?.platform.totalWorkspaces ?? totalWorkspaces;
   const treeTotalAdmins = treeData?.platform.totalAdmins ?? 0;
 
+  // Dashboard figures, all derived from data already loaded
+  const daysLeft = (iso?: string | null) => (iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000) : null);
+  const seatPct = (l: any) => (l.maxEmployees ? Math.round(((l.activeEmployees || 0) / l.maxEmployees) * 100) : 0);
+  const liveLicences = licenses.filter((l) => l.status !== 'CANCELLED');
+  const seatsUsed = liveLicences.reduce((n, l) => n + (l.activeEmployees || 0), 0);
+  const seatsMax = liveLicences.reduce((n, l) => n + (l.maxEmployees || 0), 0);
+  const expiringSoon = liveLicences.filter((l) => { const d = daysLeft(l.endDate); return d !== null && d >= 0 && d <= 30; });
+  const expiredLicences = liveLicences.filter((l) => { const d = daysLeft(l.endDate); return d !== null && d < 0; });
+  const nearLimit = liveLicences.filter((l) => seatPct(l) >= 90);
+  const pendingRequests = capacityRequests.filter((r: any) => r.status === 'PENDING');
+  const recentAudit = (auditData?.items || []).slice(0, 8);
+  const failedSignIns = (auditData?.items || []).filter((i) => i.action === 'SIGN_IN_FAILED').length;
+  const attention: { level: 'bad' | 'warn'; text: string; to: PortalTab }[] = [
+    ...expiredLicences.map((l) => ({ level: 'bad' as const, text: `${l.tenantName}: licence expired ${Math.abs(daysLeft(l.endDate) || 0)} day(s) ago`, to: 'LICENSING' as PortalTab })),
+    ...expiringSoon.map((l) => ({ level: 'warn' as const, text: `${l.tenantName}: licence expires in ${daysLeft(l.endDate)} day(s)`, to: 'LICENSING' as PortalTab })),
+    ...nearLimit.map((l) => ({ level: 'warn' as const, text: `${l.tenantName}: ${seatPct(l)}% of employee seats in use`, to: 'LICENSING' as PortalTab })),
+    ...pendingRequests.map((r: any) => ({ level: 'warn' as const, text: `${r.tenantName}: asks ${describeRequest(r)}`, to: 'LICENSING' as PortalTab })),
+    ...unlicensedOrgs.map((o) => ({ level: 'warn' as const, text: `${o.name}: no active licence`, to: 'LICENSING' as PortalTab })),
+    ...(failedSignIns >= 3 ? [{ level: 'warn' as const, text: `${failedSignIns} failed platform sign-ins in the latest events`, to: 'SECURITY' as PortalTab }] : []),
+  ];
+  const healthRows: [string, string][] = [
+    ['Database', 'db'], ['Cache', 'redis'], ['Messaging', 'nats'], ['Job streams', 'jetstream'], ['Forecast engine', 'engine'], ['Tenant data isolation', 'rowLevelSecurity'],
+  ];
+
   return (
     <div className="h-screen bg-[#FAFAF8] text-[#171717] flex flex-col font-sans antialiased overflow-hidden">
-      {/* Platform Navigation Header (Clean White Theme & Fixed at top) */}
+      {/* Platform header */}
       <header className="h-14 border-b border-[#E5E5E0] bg-[#FFFFFF] px-6 flex items-center justify-between shrink-0 select-none z-30">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded bg-[#171717] flex items-center justify-center text-white">
-            <ShieldAlert className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-[#171717] text-[15px] tracking-tight">Enterprise WFM</span>
-              <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-[#EAF5EF] text-[#2F7D5A] border-[#2F7D5A]/20">
-                Platform Super Admin
-              </span>
-            </div>
-            <div className="text-[12px] text-[#737373]">Multi-tenant provisioning & infrastructure root</div>
+          <div className="w-9 h-9 rounded bg-[#171717] flex items-center justify-center text-white font-bold text-[11px] tracking-wider">WFM</div>
+          <div className="leading-tight">
+            <div className="font-bold text-[#171717] text-[15px] tracking-tight">Enterprise WFM</div>
+            <div className="text-[12px] text-[#737373]">Platform administration</div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <div className="text-[12px] font-medium text-[#171717]">{admin.email}</div>
-            <div className="text-[10px] text-[#2F7D5A] font-mono font-semibold">STATUS: {admin.status}</div>
-          </div>
-          <button
-            onClick={() => {
-              window.open('http://localhost:3000', '_blank');
-            }}
-            title="Open tenant web application on localhost:3000"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] text-[12px] font-semibold transition-colors"
+        <div className="flex items-center gap-4">
+          <a
+            href={tenantUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[13px] font-medium text-[#525252] hover:text-[#171717] hover:underline"
           >
-            <ExternalLink className="w-3.5 h-3.5" /> Tenant App (:3000)
-          </button>
+            Open tenant app
+          </a>
+          <div className="h-5 w-px bg-[#E5E5E0]" />
+          <button onClick={() => setTab('ACCOUNT')} title="Account settings" className="text-[13px] text-[#171717] hover:underline">{admin.displayName || admin.email}</button>
           <button
             onClick={handleSignOut}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#C84A4A]/20 bg-[#FCEBEC] hover:bg-[#F8D7DA] text-[#C84A4A] text-[12px] font-semibold transition-colors"
+            className="px-3 py-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] text-[12px] font-semibold transition-colors"
           >
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
+            Sign out
           </button>
         </div>
       </header>
 
       {/* 2-Column Shell: Left Side Menu Bar + Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Side Menu Bar: Completely Stable & Locked */}
-        <aside className="w-60 border-r border-[#E5E5E0] bg-[#FAFAF8] flex flex-col justify-between select-none shrink-0 h-full overflow-y-auto">
-          <div className="p-3 space-y-1">
-            <div className="px-2 py-1.5 text-[11px] font-semibold text-[#737373] uppercase tracking-wider">
-              Platform Modules
-            </div>
-
-            <button
-              onClick={() => setTab('TREE')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded text-[13px] font-medium transition-colors ${
-                tab === 'TREE'
-                  ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
-                  : 'text-[#525252] hover:bg-[#F5F5F2] hover:text-[#171717]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <FolderTree className={`w-4 h-4 ${tab === 'TREE' ? 'text-[#171717]' : 'text-[#737373]'}`} />
-                <span>Hierarchy Tree</span>
-              </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAFAF8] border border-[#E5E5E0] text-[#737373]">
-                {filteredTreeOrgs.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setTab('DIRECTORY')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded text-[13px] font-medium transition-colors ${
-                tab === 'DIRECTORY'
-                  ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
-                  : 'text-[#525252] hover:bg-[#F5F5F2] hover:text-[#171717]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Building2 className={`w-4 h-4 ${tab === 'DIRECTORY' ? 'text-[#171717]' : 'text-[#737373]'}`} />
-                <span>Organisations</span>
-              </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAFAF8] border border-[#E5E5E0] text-[#737373]">
-                {filteredOrgs.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setTab('ANALYTICS')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded text-[13px] font-medium transition-colors ${
-                tab === 'ANALYTICS'
-                  ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
-                  : 'text-[#525252] hover:bg-[#F5F5F2] hover:text-[#171717]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <BarChart3 className={`w-4 h-4 ${tab === 'ANALYTICS' ? 'text-[#171717]' : 'text-[#737373]'}`} />
-                <span>Analytics & Telemetry</span>
-              </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#EAF5EF] border border-[#2F7D5A]/20 text-[#2F7D5A] font-semibold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#2F7D5A] animate-pulse" />
-                Live
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                setTab('SECURITY');
-                fetchAuditLogs();
-              }}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded text-[13px] font-medium transition-colors ${
-                tab === 'SECURITY'
-                  ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
-                  : 'text-[#525252] hover:bg-[#F5F5F2] hover:text-[#171717]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <ShieldCheck className={`w-4 h-4 ${tab === 'SECURITY' ? 'text-[#171717]' : 'text-[#737373]'}`} />
-                <span>Audit & Security</span>
-              </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAFAF8] border border-[#E5E5E0] text-[#737373]">
-                {auditData?.stats.totalEvents ?? 0}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                setTab('LICENSING');
-                loadData();
-              }}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded text-[13px] font-medium transition-colors ${
-                tab === 'LICENSING'
-                  ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
-                  : 'text-[#525252] hover:bg-[#F5F5F2] hover:text-[#171717]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <KeyRound className={`w-4 h-4 ${tab === 'LICENSING' ? 'text-[#171717]' : 'text-[#737373]'}`} />
-                <span>Licensing & Provisioning</span>
-              </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#FAFAF8] border border-[#E5E5E0] text-[#737373]">
-                {licenses.length}
-              </span>
-            </button>
-          </div>
-
-          {/* Sidebar Footer Status */}
-          <div className="p-3 border-t border-[#E5E5E0] bg-white m-3 rounded-lg border text-[11px] space-y-1.5 text-[#737373]">
-            <div className="font-semibold text-[#171717] flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5 text-[#2F7D5A]" />
-              <span>Platform Guard</span>
-            </div>
-            <div>Audience isolation enforced with platform secret.</div>
-            <div className="font-mono text-[10px] text-[#2F7D5A] pt-1 border-t border-[#E5E5E0]">
-              STATUS: {admin.status}
-            </div>
-          </div>
+        <aside className="w-56 border-r border-[#E5E5E0] bg-[#FAFAF8] select-none shrink-0 h-full overflow-y-auto">
+          <nav className="p-3 space-y-0.5" aria-label="Platform sections">
+            {([
+              ['DASHBOARD', 'Dashboard'],
+              ['DIRECTORY', 'Organisations'],
+              ['TREE', 'Hierarchy'],
+              ['LICENSING', 'Licensing'],
+              ['ANALYTICS', 'Usage analytics'],
+              ['SECURITY', 'Audit and security'],
+              ['SETTINGS', 'Settings'],
+            ] as [PortalTab, string][]).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => {
+                  if (mfaForced) return;
+                  setTab(id);
+                  if (id === 'SECURITY') fetchAuditLogs();
+                  if (id === 'LICENSING' || id === 'DASHBOARD') loadData();
+                }}
+                aria-current={tab === id || (id === 'DIRECTORY' && tab === 'NEW_ORG') ? 'page' : undefined}
+                disabled={mfaForced}
+                className={`w-full text-left px-3 py-2 rounded text-[13px] transition-colors ${
+                  tab === id || (id === 'DIRECTORY' && tab === 'NEW_ORG')
+                    ? 'bg-white text-[#171717] shadow-xs border border-[#E5E5E0] font-semibold'
+                    : 'border border-transparent text-[#525252] font-medium hover:bg-[#F5F5F2] hover:text-[#171717]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
         </aside>
 
         {/* Main Content Area */}
@@ -1232,32 +1312,32 @@ export const PlatformAdminPortal: React.FC = () => {
           {notice && (
             <div className="flex items-center justify-between gap-3 text-[13px] rounded px-3.5 py-2.5 border bg-[#EAF5EF] text-[#2F7D5A] border-[#2F7D5A]/20">
               <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-[#2F7D5A]" />
+                
                 <span>{notice}</span>
               </div>
-              <button onClick={() => setNotice('')} className="text-[#2F7D5A] hover:underline text-[12px]">✕</button>
+              <button onClick={() => setNotice('')} className="text-[#2F7D5A] hover:underline text-[12px]"><X className="w-4 h-4" /></button>
             </div>
           )}
 
           {error && (
             <div className="flex items-center justify-between gap-3 text-[13px] rounded px-3.5 py-2.5 border bg-[#FCEBEC] text-[#C84A4A] border-[#C84A4A]/20">
               <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-[#C84A4A]" />
+                
                 <span>{error}</span>
               </div>
-              <button onClick={() => setError('')} className="text-[#C84A4A] hover:underline text-[12px]">✕</button>
+              <button onClick={() => setError('')} className="text-[#C84A4A] hover:underline text-[12px]"><X className="w-4 h-4" /></button>
             </div>
           )}
 
           {/* Overview Stats */}
-          {tab === 'ANALYTICS' ? (
+          {tab === 'DASHBOARD' || tab === 'NEW_ORG' || tab === 'ACCOUNT' || tab === 'SETTINGS' ? null : tab === 'ANALYTICS' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Organisations</span>
-                  <Building2 className="w-3.5 h-3.5 text-[#737373]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {analyticsData?.platform.totalOrgs ?? organizations.length}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
@@ -1268,22 +1348,22 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Seat Capacity</span>
-                  <Users className="w-3.5 h-3.5 text-[#2F7D5A]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {analyticsData?.platform.totalActiveUsers ?? totalUsers} <span className="text-[14px] font-normal text-[#737373]">/ {analyticsData?.platform.totalUsers ?? totalUsers}</span>
                 </div>
                 <div className="text-[11px] text-[#2F7D5A] mt-0.5 font-medium">
-                  Active user seats · {analyticsData?.platform.totalEmployees ?? 0} employees
+                  Active user seats | {analyticsData?.platform.totalEmployees ?? 0} employees
                 </div>
               </div>
 
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Schedules & Shifts</span>
-                  <Clock className="w-3.5 h-3.5 text-[#4F6F8F]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {analyticsData?.platform.totalShifts?.toLocaleString() ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
@@ -1294,28 +1374,22 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Timeseries Intervals</span>
-                  <HardDrive className="w-3.5 h-3.5 text-[#7A62A8]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {analyticsData?.platform.totalIntervals?.toLocaleString() ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
-                  15-min intervals · {analyticsData?.platform.totalForecasts ?? 0} models
+                  15-min intervals | {analyticsData?.platform.totalForecasts ?? 0} models
                 </div>
               </div>
 
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
-                  <span>Platform Guard</span>
-                  <Activity className="w-3.5 h-3.5 text-[#2F7D5A]" />
+                  <span>Audit events</span>
                 </div>
-                <div className="text-[22px] font-bold text-[#2F7D5A] mt-1 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#2F7D5A] animate-pulse" />
-                  <span>OPTIMAL</span>
-                </div>
-                <div className="text-[11px] text-[#737373] mt-0.5">
-                  {analyticsData?.platform.totalAuditLogs ?? 0} audit events · 99.98% uptime
-                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">{analyticsData?.platform.totalAuditLogs ?? 0}</div>
+                <div className="text-[11px] text-[#737373] mt-0.5">Recorded across all organisations</div>
               </div>
             </div>
           ) : tab === 'SECURITY' ? (
@@ -1323,22 +1397,22 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Total Audit Events</span>
-                  <ScrollText className="w-3.5 h-3.5 text-[#171717]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {auditData?.stats?.totalEvents ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
-                  Immutable platform ledger
+                  All recorded events
                 </div>
               </div>
 
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Admin Sessions</span>
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#4F6F8F]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {auditData?.stats?.sessionEvents ?? 0}
                 </div>
                 <div className="text-[11px] text-[#4F6F8F] mt-0.5 font-medium">
@@ -1349,22 +1423,22 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Provisioning Events</span>
-                  <Building2 className="w-3.5 h-3.5 text-[#2F7D5A]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">
                   {auditData?.stats?.provisioningEvents ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
-                  Orgs & workspaces created
+                  Organisations and workspaces created
                 </div>
               </div>
 
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
                   <span>Emergency Resets</span>
-                  <KeyRound className="w-3.5 h-3.5 text-[#B35900]" />
+                  
                 </div>
-                <div className="text-[22px] font-bold tabular-nums font-mono text-[#B35900] mt-1">
+                <div className="text-[22px] font-bold tabular-nums text-[#B35900] mt-1">
                   {auditData?.stats?.credentialResets ?? 0}
                 </div>
                 <div className="text-[11px] text-[#737373] mt-0.5">
@@ -1374,68 +1448,62 @@ export const PlatformAdminPortal: React.FC = () => {
 
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-3.5 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider flex items-center justify-between">
-                  <span>Security State</span>
-                  <ShieldAlert className="w-3.5 h-3.5 text-[#2F7D5A]" />
+                  <span>Security alerts</span>
                 </div>
-                <div className="text-[22px] font-bold text-[#2F7D5A] mt-1 flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#2F7D5A] animate-pulse" />
-                  <span>ENFORCED</span>
-                </div>
-                <div className="text-[11px] text-[#737373] mt-0.5">
-                  Tenant RLS & Token Hashing
-                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#171717] mt-1">{auditData?.stats?.securityAlerts ?? 0}</div>
+                <div className="text-[11px] text-[#737373] mt-0.5">Flagged in the audit log</div>
               </div>
             </div>
           ) : tab === 'LICENSING' ? (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Active Licenses</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">{licenses.length}</div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Commercial contracts</div>
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{licenses.length}</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Not cancelled</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Total Licensed Employees</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">
                   {licenses.reduce((acc, l) => acc + (l.maxEmployees || 0), 0)}
                 </div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Maximum headcount limit</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Total employee seat limit</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Active Employees Managed</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">
                   {licenses.reduce((acc, l) => acc + (l.activeEmployees || 0), 0)}
                 </div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Currently scheduled agents</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Employees in use</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
-                <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Capacity Requests</div>
-                <div className={`text-[24px] font-bold tabular-nums font-mono mt-1 ${capacityRequests.filter((r: any) => r.status === 'PENDING').length > 0 ? 'text-[#DC2626]' : 'text-[#171717]'}`}>
+                <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Customer requests</div>
+                <div className={`text-[24px] font-bold tabular-nums mt-1 ${capacityRequests.filter((r: any) => r.status === 'PENDING').length > 0 ? 'text-[#DC2626]' : 'text-[#171717]'}`}>
                   {capacityRequests.filter((r: any) => r.status === 'PENDING').length} Pending
                 </div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Customer upgrade inquiries</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Seats, plan and module requests</div>
               </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Total Organisations</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">{organizations.length}</div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Isolated tenant boundaries</div>
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{organizations.length}</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Registered tenants</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Total Workspaces</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">{totalWorkspaces}</div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Operating units across orgs</div>
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{totalWorkspaces}</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Across all organisations</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
                 <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Total Tenant Users</div>
-                <div className="text-[24px] font-bold tabular-nums font-mono text-[#171717] mt-1">{totalUsers}</div>
-                <div className="text-[12px] text-[#737373] mt-0.5">Active personnel accounts</div>
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{totalUsers}</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">User accounts across tenants</div>
               </div>
               <div className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
-                <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Super Admin Access</div>
-                <div className="text-[24px] font-bold text-[#2F7D5A] mt-1">Platform Guard</div>
-                <div className="text-[12px] text-[#737373] mt-0.5">CLI provisioned credentials</div>
+                <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">Unlicensed organisations</div>
+                <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{unlicensedOrgs.length}</div>
+                <div className="text-[12px] text-[#737373] mt-0.5">Without an active licence</div>
               </div>
             </div>
           )}
@@ -1444,42 +1512,66 @@ export const PlatformAdminPortal: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E5E5E0] pb-3">
             <div>
               <h2 className="text-[18px] font-bold text-[#171717] flex items-center gap-2">
-                {tab === 'TREE' ? (
+                {tab === 'SETTINGS' ? (
                   <>
-                    <FolderTree className="w-5 h-5 text-[#171717]" /> Multi-Tenant Hierarchy Tree
+                    Settings
+                  </>
+                ) : tab === 'ACCOUNT' ? (
+                  <>
+                    Account
+                  </>
+                ) : tab === 'NEW_ORG' ? (
+                  <>
+                    New organisation
+                  </>
+                ) : tab === 'DASHBOARD' ? (
+                  <>
+                    Dashboard
+                  </>
+                ) : tab === 'TREE' ? (
+                  <>
+                     Organisation hierarchy
                   </>
                 ) : tab === 'ANALYTICS' ? (
                   <>
-                    <BarChart3 className="w-5 h-5 text-[#171717]" /> Cross-Tenant Analytics & Capacity Telemetry
+                     Usage analytics
                   </>
                 ) : tab === 'SECURITY' ? (
                   <>
-                    <ShieldCheck className="w-5 h-5 text-[#171717]" /> Global Platform Audit Trail & Security
+                     Audit and security
                   </>
                 ) : tab === 'LICENSING' ? (
                   <>
-                    <KeyRound className="w-5 h-5 text-[#171717]" /> License Subsystem & Quota Governance
+                     Licensing
                   </>
                 ) : (
                   <>
-                    <Building2 className="w-5 h-5 text-[#171717]" /> Managed Organisations Directory
+                     Organisations
                   </>
                 )}
               </h2>
               <p className="text-[12px] text-[#737373] mt-0.5">
-                {tab === 'TREE'
-                  ? 'Interactive hierarchical structural tree: Platform → Organisations → Workspaces & Admins.'
+                {tab === 'SETTINGS'
+                  ? 'Mail server and sign-in security for the whole platform.'
+                  : tab === 'ACCOUNT'
+                  ? 'Your profile, password, two-factor sign-in and signed-in devices.'
+                  : tab === 'NEW_ORG'
+                  ? 'Everything we need to set up a customer on one page. Fields marked * are required.'
+                  : tab === 'DASHBOARD'
+                  ? 'Platform status and the items that need attention.'
+                  : tab === 'TREE'
+                  ? 'Organisations with their workspaces and administrators.'
                   : tab === 'ANALYTICS'
-                  ? 'Real-time multi-tenant resource consumption, operational workload, and capacity distribution across isolated tenant boundaries.'
+                  ? 'Seats, workload and data volume for each organisation.'
                   : tab === 'SECURITY'
-                  ? 'Immutable cross-organization audit trail tracking administrative sign-ins, IP addresses, tenant provisioning, and emergency credential resets.'
+                  ? 'Platform sign-ins, provisioning and credential resets, with the source IP.'
                   : tab === 'LICENSING'
-                  ? 'First-class license contract governance: quota capacity (employees, users, sites), modular feature activation, and lifecycle grace periods.'
-                  : 'Complete tenant catalog with strict row-level isolation and per-tenant settings.'}
+                  ? 'Licences, seat limits, enabled modules and seat requests.'
+                  : 'All organisations on the platform.'}
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5 flex-wrap">
+            <div className={`flex items-center gap-2.5 flex-wrap ${tab === 'NEW_ORG' || tab === 'ACCOUNT' || tab === 'SETTINGS' ? 'hidden' : ''}`}>
               <input
                 type="text"
                 placeholder={
@@ -1498,7 +1590,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     fetchAuditLogs(e.target.value, auditActionFilter, auditTenantFilter);
                   }
                 }}
-                className="px-3 py-1.5 bg-white border border-[#E5E5E0] rounded text-[13px] text-[#171717] placeholder-[#737373] w-64 focus:outline-none focus:border-[#171717]"
+                className={`px-3 py-1.5 bg-white border border-[#E5E5E0] rounded text-[13px] text-[#171717] placeholder-[#737373] w-64 focus:outline-none focus:border-[#171717] ${tab === 'DASHBOARD' || tab === 'ACCOUNT' ? 'hidden' : ''}`}
               />
 
               {tab === 'SECURITY' && (
@@ -1515,7 +1607,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     <option value="SIGN_IN">Sign In</option>
                     <option value="SIGN_OUT">Sign Out</option>
                     <option value="SIGN_IN_FAILED">Failed Sign In</option>
-                    <option value="PROVISION_ORGANISATION">Provision Organisation</option>
+                    <option value="PROVISION_ORGANISATION">New organisation</option>
                     <option value="UPDATE_ORGANISATION">Update Organisation</option>
                     <option value="CREATE_WORKSPACE">Create Workspace</option>
                     <option value="PROVISION_ADMIN">Provision Admin</option>
@@ -1551,7 +1643,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   }`}
                   title="Toggle 30-second live telemetry polling"
                 >
-                  <Activity className="w-3.5 h-3.5" />
+                  
                   <span>Auto: {autoRefresh ? 'On (30s)' : 'Off'}</span>
                 </button>
               )}
@@ -1564,19 +1656,180 @@ export const PlatformAdminPortal: React.FC = () => {
                     loadData();
                   }
                 }}
-                className="p-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] transition-colors"
+                className="px-3 py-1.5 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] text-[12px] font-semibold transition-colors"
                 title="Refresh list"
               >
-                <RefreshCw className="w-4 h-4" />
+                Refresh
               </button>
               <button
                 onClick={openProvisionModal}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#171717] hover:bg-[#333333] text-white text-[12px] font-semibold transition-colors shadow-xs"
               >
-                <Plus className="w-3.5 h-3.5" /> Provision Organisation
+                 New organisation
               </button>
             </div>
           </div>
+
+        {/* SETTINGS */}
+        {tab === 'SETTINGS' && (
+          <SettingsPage api={platformApi} mfaEnabled={!!admin?.mfaEnabled} goAccount={() => setTab('ACCOUNT')} />
+        )}
+
+        {/* ACCOUNT */}
+        {tab === 'ACCOUNT' && (
+          <AccountPage
+            api={platformApi}
+            setupRequired={mfaForced}
+            onProfileSaved={(displayName) => setAdmin((a) => (a ? { ...a, displayName } : a))}
+            onMfaChanged={() => { platformApi<{ admin: PlatformAdmin }>('/auth/me').then((m) => { setAdmin(m.admin); if (!m.admin.mfaSetupRequired) loadData(); }).catch(() => {}); }}
+          />
+        )}
+
+        {/* NEW ORGANISATION (single page) */}
+        {tab === 'NEW_ORG' && (
+          <NewOrganisationForm
+            existingCodes={organizations.map((o) => o.code)}
+            timezones={COMMON_TIMEZONES}
+            currencies={CURRENCIES}
+            plans={catalogue.filter((x) => x.status === 'ACTIVE')}
+            templates={countryTemplates}
+            packs={packList}
+            onSubmit={async (payload) => {
+              const res = await platformApi<any>('/organizations', { method: 'POST', body: JSON.stringify(payload) });
+              await loadData();
+              return res;
+            }}
+            onCancel={() => setTab('DIRECTORY')}
+            onDone={() => setTab('DIRECTORY')}
+          />
+        )}
+
+        {/* DASHBOARD */}
+        {tab === 'DASHBOARD' && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3.5">
+              {([
+                ['Organisations', String(organizations.length), `${totalWorkspaces} workspace${totalWorkspaces !== 1 ? 's' : ''}`],
+                ['Employee seats in use', `${seatsUsed.toLocaleString()} / ${seatsMax.toLocaleString()}`, `${seatsMax ? Math.round((seatsUsed / seatsMax) * 100) : 0}% of licensed seats`],
+                ['Licences expiring', String(expiringSoon.length), `Within 30 days; ${expiredLicences.length} already expired`],
+                ['Customer requests', String(pendingRequests.length), 'Seats or plan changes waiting'],
+                ['Unlicensed organisations', String(unlicensedOrgs.length), 'No active licence'],
+                ['Failed sign-ins', String(failedSignIns), 'In the latest audit events'],
+              ] as [string, string, string][]).map(([label, value, sub]) => (
+                <div key={label} className="bg-white border border-[#E5E5E0] rounded-lg p-4 shadow-xs">
+                  <div className="text-[11px] font-semibold text-[#737373] uppercase tracking-wider">{label}</div>
+                  <div className="text-[24px] font-bold tabular-nums text-[#171717] mt-1">{value}</div>
+                  <div className="text-[12px] text-[#737373] mt-0.5">{sub}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+              <section className="xl:col-span-2 bg-white border border-[#E5E5E0] rounded-lg shadow-xs">
+                <div className="px-4 py-3 border-b border-[#E5E5E0] flex items-center justify-between">
+                  <h3 className="text-[14px] font-semibold text-[#171717]">Needs attention</h3>
+                  <span className="text-[12px] text-[#737373]">{attention.length} item{attention.length !== 1 ? 's' : ''}</span>
+                </div>
+                {attention.length === 0 ? (
+                  <div className="p-6 text-[13px] text-[#737373]">Nothing needs attention right now.</div>
+                ) : (
+                  <ul className="divide-y divide-[#E5E5E0] max-h-72 overflow-y-auto">
+                    {attention.map((a, i) => (
+                      <li key={i} className="px-4 py-2.5 flex items-center justify-between gap-3 text-[13px]">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <StatusPill tone={a.level}>{a.level === 'bad' ? 'Action' : 'Review'}</StatusPill>
+                          <span className="truncate text-[#171717]">{a.text}</span>
+                        </div>
+                        <button onClick={() => { setTab(a.to); if (a.to === 'SECURITY') fetchAuditLogs(); }} className="text-[12px] font-semibold text-[#2A7553] hover:underline shrink-0">Open</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="bg-white border border-[#E5E5E0] rounded-lg shadow-xs">
+                <div className="px-4 py-3 border-b border-[#E5E5E0]">
+                  <h3 className="text-[14px] font-semibold text-[#171717]">Platform status</h3>
+                </div>
+                <ul className="divide-y divide-[#E5E5E0]">
+                  {healthRows.map(([label, key]) => (
+                    <li key={key} className="px-4 py-2.5 flex items-center justify-between text-[13px]">
+                      <span className="text-[#171717]">{label}</span>
+                      {health ? (
+                        <StatusPill tone={health[key] ? 'good' : 'bad'}>{health[key] ? 'Operational' : 'Unavailable'}</StatusPill>
+                      ) : (
+                        <StatusPill tone="neutral">Unknown</StatusPill>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+              <section className="bg-white border border-[#E5E5E0] rounded-lg shadow-xs">
+                <div className="px-4 py-3 border-b border-[#E5E5E0] flex items-center justify-between">
+                  <h3 className="text-[14px] font-semibold text-[#171717]">Seat usage by organisation</h3>
+                  <button onClick={() => setTab('LICENSING')} className="text-[12px] font-semibold text-[#2A7553] hover:underline">Manage licences</button>
+                </div>
+                {liveLicences.length === 0 ? (
+                  <div className="p-6 text-[13px] text-[#737373]">No licences have been issued yet.</div>
+                ) : (
+                  <table className="w-full text-left text-[13px]">
+                    <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+                      <tr><th className="px-4 py-2">Organisation</th><th className="px-4 py-2">Plan</th><th className="px-4 py-2 w-48">Seats</th><th className="px-4 py-2">Expires</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5E5E0]">
+                      {[...liveLicences].sort((x, y) => seatPct(y) - seatPct(x)).slice(0, 8).map((l) => {
+                        const pct = seatPct(l);
+                        const d = daysLeft(l.endDate);
+                        return (
+                          <tr key={l.id}>
+                            <td className="px-4 py-2.5 font-medium text-[#171717]">{l.tenantName}</td>
+                            <td className="px-4 py-2.5 text-[#525252]">{l.planTier}</td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex items-center gap-2">
+                                <div className="h-1.5 flex-1 rounded bg-[#EDEDE8] overflow-hidden"><div className={`h-full ${pct >= 90 ? 'bg-[#BC3F3F]' : pct >= 75 ? 'bg-[#B7791F]' : 'bg-[#2F7D5A]'}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div>
+                                <span className="tabular-nums text-[12px] text-[#525252] w-24 text-right">{(l.activeEmployees || 0).toLocaleString()} / {(l.maxEmployees || 0).toLocaleString()}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 text-[#525252] whitespace-nowrap">{l.endDate ? new Date(l.endDate).toLocaleDateString() : 'No end date'}{d !== null && d >= 0 && d <= 30 ? ` (${d}d)` : ''}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </section>
+
+              <section className="bg-white border border-[#E5E5E0] rounded-lg shadow-xs">
+                <div className="px-4 py-3 border-b border-[#E5E5E0] flex items-center justify-between">
+                  <h3 className="text-[14px] font-semibold text-[#171717]">Recent platform activity</h3>
+                  <button onClick={() => { setTab('SECURITY'); fetchAuditLogs(); }} className="text-[12px] font-semibold text-[#2A7553] hover:underline">View audit log</button>
+                </div>
+                {recentAudit.length === 0 ? (
+                  <div className="p-6 text-[13px] text-[#737373]">No activity recorded yet.</div>
+                ) : (
+                  <table className="w-full text-left text-[13px]">
+                    <thead className="bg-[#FAFAF8] text-[#737373] text-[11px] uppercase tracking-wider border-b border-[#E5E5E0]">
+                      <tr><th className="px-4 py-2">When</th><th className="px-4 py-2">Who</th><th className="px-4 py-2">Action</th><th className="px-4 py-2">Result</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5E5E0]">
+                      {recentAudit.map((a) => (
+                        <tr key={a.id}>
+                          <td className="px-4 py-2.5 text-[#525252] whitespace-nowrap">{timeAgo(a.at)}</td>
+                          <td className="px-4 py-2.5 text-[#171717] truncate max-w-[160px]">{a.adminEmail}</td>
+                          <td className="px-4 py-2.5 text-[#171717]">{a.action.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())}{a.targetTenantName ? ` (${a.targetTenantName})` : ''}</td>
+                          <td className="px-4 py-2.5"><StatusPill tone={a.status === 'SUCCESS' ? 'good' : a.status === 'WARNING' ? 'warn' : 'bad'}>{a.status === 'SUCCESS' ? 'Success' : a.status === 'WARNING' ? 'Warning' : 'Failed'}</StatusPill></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </section>
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: Interactive Hierarchical Tree View */}
         {tab === 'TREE' && (
@@ -1601,9 +1854,9 @@ export const PlatformAdminPortal: React.FC = () => {
 
               <div className="text-[12px] text-[#737373] flex items-center gap-3">
                 <span><strong>{filteredTreeOrgs.length}</strong> Organisation{filteredTreeOrgs.length !== 1 ? 's' : ''}</span>
-                <span>·</span>
+                <span className="text-[#D4D4CF]">|</span>
                 <span><strong>{treeTotalWorkspaces}</strong> Workspaces</span>
-                <span>·</span>
+                <span className="text-[#D4D4CF]">|</span>
                 <span><strong>{treeTotalAdmins}</strong> Administrators</span>
               </div>
             </div>
@@ -1611,9 +1864,6 @@ export const PlatformAdminPortal: React.FC = () => {
             {/* Root Platform Node */}
             <div className="border border-[#E5E5E0] rounded-lg p-3.5 bg-[#FAFAF8] flex items-center justify-between shadow-xs">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded bg-[#171717] text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                  <Server className="w-4 h-4" />
-                </div>
                 <div>
                   <div className="font-bold text-[14px] text-[#171717] flex items-center gap-2">
                     <span>Platform Root: Enterprise WFM</span>
@@ -1622,7 +1872,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     </span>
                   </div>
                   <div className="text-[12px] text-[#737373]">
-                    Central infrastructure host · Isolated multi-tenant boundaries
+                    Central infrastructure host | Isolated multi-tenant boundaries
                   </div>
                 </div>
               </div>
@@ -1665,10 +1915,6 @@ export const PlatformAdminPortal: React.FC = () => {
                               )}
                             </button>
 
-                            <div className="w-7 h-7 rounded bg-[#FAFAF8] border border-[#E5E5E0] flex items-center justify-center text-[#171717]">
-                              <Building2 className="w-3.5 h-3.5" />
-                            </div>
-
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-[13px] text-[#171717]">{org.name}</span>
@@ -1676,7 +1922,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                   {org.code}
                                 </span>
                                 <span className="text-[11px] text-[#737373]">
-                                  {org.timezone} · {org.currency}
+                                  {org.timezone} | {org.currency}
                                 </span>
                               </div>
                               {org.legalName && org.legalName !== org.name && (
@@ -1701,7 +1947,7 @@ export const PlatformAdminPortal: React.FC = () => {
                               className="px-2 py-1 bg-white hover:bg-[#FAFAF8] text-[#171717] rounded border border-[#E5E5E0] text-[11px] font-medium flex items-center gap-1 transition-colors"
                               title="Add or view workspaces in this organisation"
                             >
-                              <Plus className="w-3 h-3" /> Workspace
+                               Workspace
                             </button>
                             <button
                               onClick={() => {
@@ -1711,7 +1957,7 @@ export const PlatformAdminPortal: React.FC = () => {
                               className="px-2 py-1 bg-white hover:bg-[#FAFAF8] text-[#171717] rounded border border-[#E5E5E0] text-[11px] font-medium flex items-center gap-1 transition-colors"
                               title="Provision a new administrator for this organisation"
                             >
-                              <Key className="w-3 h-3" /> Admin
+                               Admin
                             </button>
                             {(() => {
                               const existingLic = licenses.find((l) => l.tenantId === org.id && l.status !== 'CANCELLED');
@@ -1721,7 +1967,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                   className="px-2 py-1 bg-white hover:bg-[#FAFAF8] text-[#171717] rounded border border-[#E5E5E0] text-[11px] font-medium flex items-center gap-1 transition-colors"
                                   title={existingLic ? "Configure active license for this organisation" : "Issue new commercial license for this organisation"}
                                 >
-                                  <KeyRound className="w-3 h-3" /> License
+                                   License
                                 </button>
                               );
                             })()}
@@ -1730,7 +1976,7 @@ export const PlatformAdminPortal: React.FC = () => {
                               className="p-1 bg-white hover:bg-[#FAFAF8] text-[#737373] hover:text-[#171717] rounded border border-[#E5E5E0] text-[11px] transition-colors"
                               title="Edit Organisation Settings"
                             >
-                              <Edit2 className="w-3 h-3" />
+                              Edit
                             </button>
                           </div>
                         </div>
@@ -1750,7 +1996,7 @@ export const PlatformAdminPortal: React.FC = () => {
                               ) : (
                                 <ChevronRight className="w-3.5 h-3.5 text-[#737373]" />
                               )}
-                              <Layers className="w-3.5 h-3.5 text-[#2F7D5A]" />
+                              
                               <span>Operational Workspaces</span>
                               <span className="text-[10px] font-mono text-[#737373]">({org.workspaces.length})</span>
                             </div>
@@ -1776,7 +2022,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                           </span>
                                         )}
                                         <span className="font-mono text-[10px] text-[#737373]">
-                                          [{w.code}] · {w.slug}
+                                          [{w.code}] | {w.slug}
                                         </span>
                                       </div>
 
@@ -1809,7 +2055,7 @@ export const PlatformAdminPortal: React.FC = () => {
                               ) : (
                                 <ChevronRight className="w-3.5 h-3.5 text-[#737373]" />
                               )}
-                              <Key className="w-3.5 h-3.5 text-[#171717]" />
+                              
                               <span>Organisation Administrators</span>
                               <span className="text-[10px] font-mono text-[#737373]">({org.admins.length})</span>
                             </div>
@@ -1842,7 +2088,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                           <span className="text-[11px] text-[#737373]">({u.displayName})</span>
                                         )}
                                         {u.email && (
-                                          <span className="text-[11px] text-[#737373]">· {u.email}</span>
+                                          <span className="text-[11px] text-[#737373]">| {u.email}</span>
                                         )}
                                       </div>
 
@@ -1869,7 +2115,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                           className="flex items-center gap-1 px-2 py-0.5 rounded bg-white hover:bg-[#FAFAF8] text-[#B35900] hover:text-[#904700] border border-[#E5E5E0] text-[11px] font-semibold transition-colors shadow-2xs"
                                           title={`Trigger emergency credential reset for ${u.username}`}
                                         >
-                                          <KeyRound className="w-3 h-3 text-[#B35900]" />
+                                          
                                           <span>Emergency Reset</span>
                                         </button>
                                       </div>
@@ -1894,7 +2140,7 @@ export const PlatformAdminPortal: React.FC = () => {
           <div className="border border-[#E5E5E0] rounded-lg bg-white shadow-xs overflow-hidden">
             <div className="p-4 border-b border-[#E5E5E0] bg-white">
               <h2 className="text-[16px] font-semibold text-[#171717] flex items-center gap-2">
-                <Globe className="w-4 h-4 text-[#171717]" /> Managed Organisations Directory
+                 Organisations
               </h2>
               <p className="text-[12px] text-[#737373] mt-0.5">
                 Every organisation has strict data isolation and cannot view or access peer tenant resources.
@@ -1936,14 +2182,14 @@ export const PlatformAdminPortal: React.FC = () => {
                           </td>
                           <td className="p-3 font-mono font-bold text-[#171717]">{org.code}</td>
                           <td className="p-3 text-[#737373]">
-                            {org.timezone} · {org.currency}
+                            {org.timezone} | {org.currency}
                           </td>
                           <td className="p-3">
                             <button
                               onClick={() => openWorkspacesModal(org)}
                               className="font-medium text-[#2F7D5A] hover:underline flex items-center gap-1"
                             >
-                              <Building2 className="w-3.5 h-3.5" />
+                              
                               <span>{wsCount} workspace{wsCount !== 1 ? 's' : ''}</span>
                             </button>
                           </td>
@@ -1985,7 +2231,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                 className="p-1.5 bg-white hover:bg-[#FAFAF8] text-[#737373] hover:text-[#171717] rounded border border-[#E5E5E0] text-[12px] transition-colors"
                                 title="Edit settings"
                               >
-                                <Edit2 className="w-3.5 h-3.5 inline" />
+                                Edit
                               </button>
                             </div>
                           </td>
@@ -1999,7 +2245,7 @@ export const PlatformAdminPortal: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 3: Cross-Tenant Analytics & Capacity Telemetry */}
+        {/* TAB 3: Usage analytics */}
         {tab === 'ANALYTICS' && (
           <div className="space-y-6">
             {/* Telemetry Charts: Seat Allocation & Operational Footprint */}
@@ -2009,7 +2255,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-[14px] font-bold text-[#171717] flex items-center gap-2">
-                      <Users className="w-4 h-4 text-[#171717]" /> Cross-Tenant Seat & Roster Allocation
+                       Cross-Tenant Seat & Roster Allocation
                     </h3>
                     <p className="text-[12px] text-[#737373]">
                       Active user seats vs total provisioned users and employee roster counts per tenant.
@@ -2058,7 +2304,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-[14px] font-bold text-[#171717] flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-[#171717]" /> Operational Workload & Rostering Load
+                       Operational Workload & Rostering Load
                     </h3>
                     <p className="text-[12px] text-[#737373]">
                       Generated schedules, forecast versions, and audit operations across tenant spaces.
@@ -2108,7 +2354,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E5E5E0] pb-3">
                 <div>
                   <h3 className="text-[14px] font-bold text-[#171717] flex items-center gap-2">
-                    <Database className="w-4 h-4 text-[#171717]" /> Platform Database Storage & Record Volume Telemetry
+                     Platform Database Storage & Record Volume Telemetry
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
                     Active record counts across core multi-tenant schema tables.
@@ -2126,7 +2372,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   return (
                     <div key={idx} className="p-3 rounded-lg border border-[#E5E5E0] bg-[#FAFAF8] space-y-1.5">
                       <div className="text-[11px] font-semibold text-[#737373] truncate">{item.name}</div>
-                      <div className="text-[18px] font-bold tabular-nums font-mono text-[#171717]">
+                      <div className="text-[18px] font-bold tabular-nums text-[#171717]">
                         {item.records.toLocaleString()}
                       </div>
                       <div className="w-full bg-[#E5E5E0] h-1.5 rounded-full overflow-hidden">
@@ -2147,7 +2393,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="p-4 border-b border-[#E5E5E0] bg-white flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-[15px] font-bold text-[#171717] flex items-center gap-2">
-                    <BarChart2 className="w-4 h-4 text-[#171717]" /> Cross-Tenant Capacity Matrix
+                     Cross-Tenant Capacity Matrix
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
                     Real-time capacity utilization, operational workloads, and activity scoring across all tenant boundaries.
@@ -2205,9 +2451,9 @@ export const PlatformAdminPortal: React.FC = () => {
                               <div className="font-semibold text-[#171717]">{t.displayName || t.name}</div>
                               <div className="text-[11px] text-[#737373] flex items-center gap-1.5 mt-0.5">
                                 <span className="font-mono bg-[#F0F0ED] px-1 rounded text-[#525252] font-semibold">{t.code}</span>
-                                <span>·</span>
+                                <span className="text-[#D4D4CF]">|</span>
                                 <span>{t.timezone}</span>
-                                <span>·</span>
+                                <span className="text-[#D4D4CF]">|</span>
                                 <span>{t.currency}</span>
                               </div>
                             </td>
@@ -2282,7 +2528,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                 className="text-[12px] text-[#171717] hover:underline font-semibold flex items-center gap-1 ml-auto"
                               >
                                 <span>View Tree</span>
-                                <ArrowUpRight className="w-3.5 h-3.5" />
+                                
                               </button>
                             </td>
                           </tr>
@@ -2299,7 +2545,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="p-4 border-b border-[#E5E5E0] bg-white flex items-center justify-between">
                 <div>
                   <h3 className="text-[15px] font-bold text-[#171717] flex items-center gap-2">
-                    <Radio className="w-4 h-4 text-[#2F7D5A] animate-pulse" /> Live Cross-Tenant Audit & Event Ledger
+                     Live Cross-Tenant Audit & Event Ledger
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
                     Real-time feed of the latest transactions and administrator actions across all organizations.
@@ -2314,7 +2560,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     }}
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] text-[11px] font-semibold transition-colors"
                   >
-                    <RefreshCw className="w-3 h-3" /> Refresh Feed
+                    Refresh feed
                   </button>
                 </div>
               </div>
@@ -2360,7 +2606,7 @@ export const PlatformAdminPortal: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 4: Global Platform Audit Trail & Security */}
+        {/* TAB 4: Audit and security */}
         {tab === 'SECURITY' && (
           <div className="space-y-6">
             {/* Active & Recent Emergency Resets Ledger */}
@@ -2368,7 +2614,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="p-4 border-b border-[#E5E5E0] bg-[#FAFAF8] flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-[15px] font-bold text-[#171717] flex items-center gap-2">
-                    <KeyRound className="w-4 h-4 text-[#B35900]" />
+                    
                     <span>Emergency Credential Resets & Access Recovery Ledger</span>
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
@@ -2384,10 +2630,10 @@ export const PlatformAdminPortal: React.FC = () => {
 
               {emergencyResetsLedger.length === 0 ? (
                 <div className="p-8 text-center text-[#737373] text-[13px] bg-white">
-                  <ShieldCheck className="w-8 h-8 text-[#2F7D5A] mx-auto mb-2 opacity-60" />
+                  
                   <div className="font-semibold text-[#171717]">No Emergency Resets on Record</div>
                   <div className="text-[12px] text-[#737373] mt-1">
-                    Super Admins can trigger instant credential resets from the Multi-Tenant Hierarchy Tree whenever an organisation administrator is locked out.
+                    Super Admins can trigger instant credential resets from the Organisation hierarchy whenever an organisation administrator is locked out.
                   </div>
                 </div>
               ) : (
@@ -2418,7 +2664,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           <tr key={r.id} className="hover:bg-[#FAFAF8] transition-colors">
                             <td className="p-3 font-semibold text-[#171717]">
                               <div className="flex items-center gap-1.5">
-                                <Key className="w-3.5 h-3.5 text-[#171717]" />
+                                
                                 <span>{targetUser}</span>
                               </div>
                             </td>
@@ -2439,17 +2685,17 @@ export const PlatformAdminPortal: React.FC = () => {
                               </span>
                             </td>
                             <td className="p-3 text-[#737373] text-[11px] whitespace-nowrap">
-                              {createdAt ? new Date(createdAt).toLocaleString() : '—'}
+                              {createdAt ? new Date(createdAt).toLocaleString() : 'N/A'}
                             </td>
                             <td className="p-3">
                               {status === 'ACTIVE' ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#FFF8EB] border border-[#B35900]/30 text-[#B35900] font-bold text-[10px]">
                                   <span className="w-1.5 h-1.5 rounded-full bg-[#B35900] animate-pulse" />
-                                  ACTIVE · PENDING USE
+                                  ACTIVE | PENDING USE
                                 </span>
                               ) : status === 'USED' ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EAF5EF] border border-[#2F7D5A]/30 text-[#2F7D5A] font-semibold text-[10px]">
-                                  <CheckCircle2 className="w-3 h-3" />
+                                  
                                   COMPLETED / USED
                                 </span>
                               ) : (
@@ -2458,7 +2704,7 @@ export const PlatformAdminPortal: React.FC = () => {
                                 </span>
                               )}
                               <div className="text-[10px] text-[#737373] mt-0.5">
-                                Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                                Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
                               </div>
                             </td>
                           </tr>
@@ -2475,7 +2721,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="p-4 border-b border-[#E5E5E0] bg-[#FAFAF8] flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-[15px] font-bold text-[#171717] flex items-center gap-2">
-                    <ScrollText className="w-4 h-4 text-[#171717]" />
+                    
                     <span>Immutable Platform Root Audit Trail</span>
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
@@ -2499,7 +2745,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   { label: 'All Events', value: '' },
                   { label: 'Sign-Ins', value: 'SIGN_IN' },
                   { label: 'Failed Logins', value: 'SIGN_IN_FAILED' },
-                  { label: 'Org Provisioning', value: 'PROVISION_ORGANISATION' },
+                  { label: 'New organisation', value: 'PROVISION_ORGANISATION' },
                   { label: 'Workspaces', value: 'CREATE_WORKSPACE' },
                   { label: 'Admins', value: 'PROVISION_ADMIN' },
                   { label: 'Emergency Resets', value: 'EMERGENCY_CREDENTIAL_RESET' },
@@ -2523,7 +2769,7 @@ export const PlatformAdminPortal: React.FC = () => {
 
               {!(auditData?.items || (auditData as any)?.logs)?.length ? (
                 <div className="p-12 text-center text-[#737373] text-[13px] bg-white">
-                  <ShieldCheck className="w-8 h-8 text-[#737373] mx-auto mb-2 opacity-50" />
+                  
                   <div className="font-semibold text-[#171717]">No Audit Records Found</div>
                   <div className="text-[12px] text-[#737373] mt-1">
                     No platform operations match your current search and action filters.
@@ -2546,7 +2792,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     <tbody className="divide-y divide-[#E5E5E0]">
                       {(auditData?.items || (auditData as any)?.logs || []).map((log: PlatformAuditItem) => {
                         const adminEmail = log.adminEmail || (log as any).admin_email || 'System';
-                        const ipAddr = log.ipAddress || (log as any).ip_address || '—';
+                        const ipAddr = log.ipAddress || (log as any).ip_address || 'N/A';
                         const tenantName = log.targetTenantName || (log as any).target_tenant_name;
                         const tenantCode = log.targetTenantCode || (log as any).target_tenant_code;
                         const entityType = log.targetEntityType || (log as any).target_entity_type;
@@ -2582,14 +2828,14 @@ export const PlatformAdminPortal: React.FC = () => {
                           else if (action === 'CREATE_WORKSPACE') detailSummary = `Created workspace '${details.name || ''}' [${details.code || ''}]`;
                           else if (action === 'PROVISION_ORGANIZATION') detailSummary = `Created organization '${details.name || ''}' [${details.code || ''}]`;
                           else if (action === 'PROVISION_ADMIN') detailSummary = `Created administrator '${details.username || ''}'`;
-                          else detailSummary = Object.keys(details).length ? JSON.stringify(details) : '—';
+                          else detailSummary = Object.keys(details).length ? JSON.stringify(details) : 'N/A';
                         }
 
                         return (
                           <tr key={log.id} className="hover:bg-[#FAFAF8] transition-colors">
                             <td className="p-3 text-[#737373] font-mono text-[11px] whitespace-nowrap">
                               <div className="flex items-center gap-1.5">
-                                <Clock className="w-3 h-3 text-[#737373]" />
+                                
                                 <span>{new Date(log.at).toLocaleString()}</span>
                               </div>
                             </td>
@@ -2627,10 +2873,10 @@ export const PlatformAdminPortal: React.FC = () => {
                               {entityType ? (
                                 <div>
                                   <span className="font-medium text-[#737373]">{entityType}:</span>{' '}
-                                  <span className="font-semibold text-[#171717]">{entityName || '—'}</span>
+                                  <span className="font-semibold text-[#171717]">{entityName || 'N/A'}</span>
                                 </div>
                               ) : (
-                                <span className="text-[#737373]">—</span>
+                                <span className="text-[#737373]">N/A</span>
                               )}
                             </td>
 
@@ -2673,7 +2919,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
                   <div className="flex items-center gap-2">
                     <span className="flex h-2.5 w-2.5 rounded-full bg-[#DC2626] animate-pulse" />
-                    <h3 className="font-bold text-[15px] text-[#171717]">Pending Capacity Upgrade Requests</h3>
+                    <h3 className="font-bold text-[15px] text-[#171717]">Pending customer requests</h3>
                   </div>
                   <span className="text-[11px] font-semibold text-[#DC2626] bg-[#FEF2F2] border border-[#FCA5A5] px-2 py-0.5 rounded-full">
                     {capacityRequests.filter((r: any) => r.status === 'PENDING').length} Action Required
@@ -2690,12 +2936,29 @@ export const PlatformAdminPortal: React.FC = () => {
                             <span className="font-bold text-[14px] text-[#171717]">{r.tenantName}</span>
                             <span className="font-mono text-[11px] text-[#737373]">({r.tenantCode})</span>
                             <span className="text-[11px] px-2 py-0.5 rounded bg-[#FAFAF8] border border-[#E5E5E0] font-semibold">
-                              {r.resourceType}
+                              {r.resourceType === 'PLAN' ? 'Plan change' : r.resourceType === 'MODULES' ? 'Modules' : REQUEST_UNITS[r.resourceType] ?? r.resourceType}
                             </span>
                           </div>
-                          <div className="text-[12px] text-[#525252]">
-                            Requested <b>+{r.additionalNeeded} seats</b> (Current: {r.currentCapacity} → Target: {r.requestedCapacity}) by <b>{r.requesterName}</b> ({r.requesterEmail})
-                          </div>
+                          {r.resourceType === 'PLAN' ? (
+                            <div className="text-[12px] text-[#525252] space-y-0.5">
+                              <div>
+                                Wants to move from <b>{planFor(licenses.find((l: any) => l.tenantId === r.tenantId)?.planTier)?.name || licenses.find((l: any) => l.tenantId === r.tenantId)?.planTier}</b> to <b>{planFor(r.requestedPlan)?.name || r.requestedPlan}</b>, requested by <b>{r.requesterName}</b> ({r.requesterEmail}).
+                              </div>
+                              {planFor(r.requestedPlan) && (
+                                <div className="text-[11px] text-[#737373]">
+                                  {planFor(r.requestedPlan)!.name}: {planFor(r.requestedPlan)!.maxUsers.toLocaleString()} users, {planFor(r.requestedPlan)!.maxSites} sites, {planFor(r.requestedPlan)!.maxWorkspaces} workspaces, {planFor(r.requestedPlan)!.modules.length} modules. Their {r.currentCapacity.toLocaleString()} employee seats and dates stay as they are.
+                                </div>
+                              )}
+                            </div>
+                          ) : r.resourceType === 'MODULES' ? (
+                            <div className="text-[12px] text-[#525252]">
+                              Wants <b>{(r.requestedModules || []).map(moduleName).join(', ')}</b>, requested by <b>{r.requesterName}</b> ({r.requesterEmail}). Approving turns them on for this customer and records it as custom terms.
+                            </div>
+                          ) : (
+                            <div className="text-[12px] text-[#525252]">
+                              Wants <b>+{r.additionalNeeded} {REQUEST_UNITS[r.resourceType]}</b> (limit now {r.currentCapacity}, would become {r.currentCapacity + (Number(grants[r.id]) || r.additionalNeeded)}), requested by <b>{r.requesterName}</b> ({r.requesterEmail}). Approving records it as custom terms.
+                            </div>
+                          )}
                           {r.justification && (
                             <div className="text-[11px] text-[#737373] italic">
                               "{r.justification}"
@@ -2703,13 +2966,32 @@ export const PlatformAdminPortal: React.FC = () => {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            aria-label={`Note to ${r.tenantName}`}
+                            placeholder="Note to the customer (optional)"
+                            value={decisionNotes[r.id] || ''}
+                            onChange={(e) => setDecisionNotes((n) => ({ ...n, [r.id]: e.target.value }))}
+                            className="w-56 h-8 px-2 border border-[#E5E5E0] rounded text-[12px] bg-white text-[#171717] placeholder-[#A3A3A3] focus:outline-none focus:border-[#171717]"
+                          />
+                          {REQUEST_UNITS[r.resourceType] && (
+                            <input
+                              type="number"
+                              min={1}
+                              aria-label={`Amount to grant to ${r.tenantName}`}
+                              title="How many to grant. Change it to approve a different amount."
+                              value={grants[r.id] ?? String(r.additionalNeeded)}
+                              onChange={(e) => setGrants((g) => ({ ...g, [r.id]: e.target.value }))}
+                              className="w-20 h-8 px-2 border border-[#E5E5E0] rounded text-[12px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
+                            />
+                          )}
                           <button
                             onClick={() => handleDecideRequest(r.id, 'APPROVE')}
                             disabled={busy}
                             className="px-3 py-1.5 bg-[#171717] hover:bg-[#333333] text-white rounded text-xs font-semibold flex items-center gap-1.5 transition-colors"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5 text-[#2F7D5A]" /> Approve & Grant
+                            {r.resourceType === 'PLAN' ? `Approve and move to ${planFor(r.requestedPlan)?.name || 'the plan'}` : r.resourceType === 'MODULES' ? 'Approve and enable' : 'Approve'}
                           </button>
                           <button
                             onClick={() => handleDecideRequest(r.id, 'REJECT')}
@@ -2730,7 +3012,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="p-4 border-b border-[#E5E5E0] flex items-center justify-between bg-[#FAFAF8]">
                 <div>
                   <h3 className="font-bold text-[15px] text-[#171717] flex items-center gap-2">
-                    <KeyRound className="w-4 h-4 text-[#171717]" /> Commercial Tenant Licenses ({licenses.length})
+                     Commercial Tenant Licenses ({licenses.length})
                   </h3>
                   <p className="text-[12px] text-[#737373] mt-0.5">
                     First-class enforceable license objects and capacity limits across all isolated customer boundaries.
@@ -2741,7 +3023,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   onClick={() => openIssueLicenseModal()}
                   className="px-3 py-1.5 bg-[#171717] hover:bg-[#333333] text-white rounded text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Issue License to Organisation
+                   Issue License to Organisation
                 </button>
               </div>
 
@@ -2780,8 +3062,11 @@ export const PlatformAdminPortal: React.FC = () => {
                           </td>
 
                           <td className="py-3 px-4">
-                            <span className="font-semibold text-[12px] text-[#171717]">{lic.planTier}</span>
-                            <div className="text-[10px] text-[#737373]">{lic.edition}</div>
+                            <span className="font-semibold text-[12px] text-[#171717]">{planFor(lic.planTier)?.name || lic.planTier}</span>
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {lic.isTrial && <StatusPill tone="warn">Trial</StatusPill>}
+                              {(lic.customTerms || planFor(lic.planTier)?.isCustom) && <span title={lic.customReason || 'Negotiated terms'}><StatusPill tone="neutral">Custom terms</StatusPill></span>}
+                            </div>
                           </td>
 
                           <td className="py-3 px-4 min-w-44">
@@ -2829,7 +3114,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           </td>
 
                           <td className="py-3 px-4 text-[#737373] whitespace-nowrap">
-                            <div>{lic.endDate ? new Date(lic.endDate).toLocaleDateString() : '—'}</div>
+                            <div>{lic.endDate ? new Date(lic.endDate).toLocaleDateString() : 'N/A'}</div>
                             <div className="text-[10px]">{lic.gracePeriodDays}d grace period</div>
                           </td>
 
@@ -2853,189 +3138,6 @@ export const PlatformAdminPortal: React.FC = () => {
         </main>
       </div>
 
-      {/* Modal: Provision New Organisation (Clean White Theme) */}
-      {showNewOrg && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white border border-[#E5E5E0] rounded-lg shadow-2xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
-              <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-[#171717]" /> Provision New Organisation
-              </h3>
-              <button onClick={() => setShowNewOrg(false)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
-            </div>
-
-            {createdOrgSummary ? (
-              <div className="space-y-4">
-                <div className="p-4 bg-[#EAF5EF] border border-[#2F7D5A]/20 rounded-lg space-y-2">
-                  <div className="flex items-center gap-2 text-[#2F7D5A] font-bold text-sm">
-                    <CheckCircle2 className="w-4 h-4" /> Organisation Provisioned Successfully!
-                  </div>
-                  <p className="text-[12px] text-[#171717]">
-                    The tenant boundary and default workspace have been initialized. Share these initial credentials with the organisation owner:
-                  </p>
-                  <div className="bg-white p-3 rounded border border-[#E5E5E0] font-mono text-xs space-y-1 text-[#171717]">
-                    <div><strong>Organisation:</strong> {createdOrgSummary.org.name} ({createdOrgSummary.org.code})</div>
-                    <div><strong>Default Workspace:</strong> {createdOrgSummary.workspace?.name || 'Default'}</div>
-                    {createdOrgSummary.adminUser && (
-                      <>
-                        <div><strong>Admin Username:</strong> {createdOrgSummary.adminUser}</div>
-                        <div><strong>Admin Password:</strong> {createdOrgSummary.adminPassword}</div>
-                      </>
-                    )}
-                  </div>
-                  {createdOrgSummary.adminUser && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(
-                          `Organisation: ${createdOrgSummary.org.name} (${createdOrgSummary.org.code})\nUsername: ${createdOrgSummary.adminUser}\nPassword: ${createdOrgSummary.adminPassword}`
-                        );
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      }}
-                      className="px-3 py-1.5 bg-white hover:bg-[#FAFAF8] text-xs font-semibold text-[#171717] rounded border border-[#E5E5E0] flex items-center gap-1.5 shadow-xs"
-                    >
-                      <Copy className="w-3.5 h-3.5" /> {copied ? 'Copied to Clipboard!' : 'Copy Credentials'}
-                    </button>
-                  )}
-                </div>
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => {
-                      setCreatedOrgSummary(null);
-                      setShowNewOrg(false);
-                    }}
-                    className="px-4 py-2 bg-[#171717] hover:bg-[#333333] text-white font-semibold text-xs rounded transition-colors"
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleCreateOrg} className="space-y-3 text-xs">
-                <div>
-                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">
-                    Organisation Name <span className="text-[#DC2626]">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Acme Corporation"
-                    value={newOrgForm.name}
-                    onChange={(e) => setNewOrgForm({ ...newOrgForm, name: e.target.value })}
-                    className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[12px] font-semibold text-[#171717] mb-1">
-                      Code (Unique) <span className="text-[#DC2626]">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={10}
-                      placeholder="ACME"
-                      value={newOrgForm.code}
-                      onChange={(e) => setNewOrgForm({ ...newOrgForm, code: e.target.value.toUpperCase() })}
-                      className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] font-mono uppercase focus:outline-none focus:border-[#171717]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[12px] font-semibold text-[#171717] mb-1">Legal Entity Name</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Acme Global Inc."
-                      value={newOrgForm.legalName}
-                      onChange={(e) => setNewOrgForm({ ...newOrgForm, legalName: e.target.value })}
-                      className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[12px] font-semibold text-[#171717] mb-1">Timezone</label>
-                    <select
-                      value={newOrgForm.timezone}
-                      onChange={(e) => setNewOrgForm({ ...newOrgForm, timezone: e.target.value })}
-                      className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                    >
-                      {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[12px] font-semibold text-[#171717] mb-1">Currency</label>
-                    <select
-                      value={newOrgForm.currency}
-                      onChange={(e) => setNewOrgForm({ ...newOrgForm, currency: e.target.value })}
-                      className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                    >
-                      {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="p-3.5 bg-[#FAFAF8] rounded-lg border border-[#E5E5E0] space-y-2 mt-2">
-                  <span className="block text-[11px] font-bold uppercase text-[#171717] tracking-wider">
-                    First Organisation Administrator
-                  </span>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[#737373] text-[11px] font-semibold mb-1">Admin Username</label>
-                      <input
-                        type="text"
-                        value={newOrgForm.adminUser}
-                        onChange={(e) => setNewOrgForm({ ...newOrgForm, adminUser: e.target.value })}
-                        className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[#737373] text-[11px] font-semibold mb-1">Admin Password (min 8 chars)</label>
-                      <input
-                        type="password"
-                        placeholder="••••••••"
-                        value={newOrgForm.adminPassword}
-                        onChange={(e) => setNewOrgForm({ ...newOrgForm, adminPassword: e.target.value })}
-                        className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-[#737373] text-[11px] font-semibold mb-1">Admin Email (Optional)</label>
-                    <input
-                      type="email"
-                      placeholder="admin@organisation.com"
-                      value={newOrgForm.adminEmail}
-                      onChange={(e) => setNewOrgForm({ ...newOrgForm, adminEmail: e.target.value })}
-                      className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-3 border-t border-[#E5E5E0]">
-                  <button
-                    type="button"
-                    onClick={() => setShowNewOrg(false)}
-                    className="px-3 py-1.5 border border-[#E5E5E0] bg-white hover:bg-[#FAFAF8] text-[#171717] rounded text-[12px] font-semibold transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={busy || !newOrgForm.name.trim() || !newOrgForm.code.trim()}
-                    className="px-4 py-1.5 bg-[#171717] hover:bg-[#333333] text-white font-semibold rounded text-[12px] disabled:opacity-50 transition-colors shadow-xs"
-                  >
-                    {busy ? 'Provisioning...' : 'Provision Organisation'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Modal: Issue Commercial License & Plan (Clean White Theme) */}
       {showIssueLicenseModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in">
@@ -3043,7 +3145,7 @@ export const PlatformAdminPortal: React.FC = () => {
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <div>
                 <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                  <KeyRound className="w-4 h-4 text-[#171717]" /> Issue Commercial License & Plan
+                   Issue Commercial License & Plan
                 </h3>
                 <p className="text-[11px] text-[#737373] mt-0.5">
                   Select a created organisation and configure commercial plan tier, quotas, and module entitlements.
@@ -3056,7 +3158,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 }}
                 className="text-[#737373] hover:text-[#171717] text-sm"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -3064,7 +3166,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="space-y-4">
                 <div className="p-4 bg-[#EAF5EF] border border-[#2F7D5A]/20 rounded-lg space-y-2">
                   <div className="flex items-center gap-2 text-[#2F7D5A] font-bold text-sm">
-                    <CheckCircle2 className="w-4 h-4" /> Commercial License Issued Successfully!
+                     Commercial License Issued Successfully!
                   </div>
                   <p className="text-[12px] text-[#171717]">
                     The commercial license and enforceable entitlements are active for this organisation:
@@ -3073,7 +3175,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     <div><strong>Organisation:</strong> {createdLicenseSummary.org.name} ({createdLicenseSummary.org.code})</div>
                     <div><strong>License Key:</strong> {createdLicenseSummary.license.license_key}</div>
                     <div><strong>Plan Tier:</strong> {createdLicenseSummary.license.plan_tier}</div>
-                    <div><strong>Capacity Quota:</strong> {createdLicenseSummary.license.max_employees} Employees · {createdLicenseSummary.license.max_users} Users · {createdLicenseSummary.license.max_sites} Sites</div>
+                    <div><strong>Capacity Quota:</strong> {createdLicenseSummary.license.max_employees} Employees | {createdLicenseSummary.license.max_users} Users | {createdLicenseSummary.license.max_sites} Sites</div>
                     <div><strong>Valid Until:</strong> {new Date(createdLicenseSummary.license.end_date).toLocaleDateString()}</div>
                   </div>
                   <button
@@ -3085,7 +3187,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     }}
                     className="px-3 py-1.5 bg-white hover:bg-[#FAFAF8] text-xs font-semibold text-[#171717] rounded border border-[#E5E5E0] flex items-center gap-1.5 shadow-xs"
                   >
-                    <Copy className="w-3.5 h-3.5" /> {licenseCopied ? 'Copied License Key!' : 'Copy License Key'}
+                     {licenseCopied ? 'Copied License Key!' : 'Copy License Key'}
                   </button>
                 </div>
                 <div className="flex justify-end">
@@ -3129,7 +3231,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   ) : (
                     <div className="p-3 bg-[#FAFAF8] rounded border border-[#E5E5E0] space-y-1">
                       <div className="flex items-center gap-2 text-[#2F7D5A] font-bold text-xs">
-                        <CheckCircle2 className="w-4 h-4" /> All Organisations Currently Have Active Licenses
+                         All Organisations Currently Have Active Licenses
                       </div>
                       <p className="text-[11px] text-[#737373]">
                         Every created organisation has already been issued an active commercial license. To modify seat quotas or enabled modules, click <strong>"Configure License"</strong> in the table below.
@@ -3172,27 +3274,17 @@ export const PlatformAdminPortal: React.FC = () => {
                       <select
                         value={issueLicenseForm.planTier}
                         onChange={(e) => {
-                          const plan = e.target.value;
-                          let emp = 355, users = 75, sites = 10;
-                          if (plan === 'STARTER') { emp = 100; users = 20; sites = 2; }
-                          else if (plan === 'PROFESSIONAL') { emp = 300; users = 50; sites = 5; }
-                          else if (plan === 'ENTERPRISE') { emp = 355; users = 75; sites = 10; }
-                          else if (plan === 'ENTERPRISE_PLUS') { emp = 5000; users = 500; sites = 50; }
+                          const pl = planFor(e.target.value);
                           setIssueLicenseForm((prev) => ({
                             ...prev,
-                            planTier: plan,
-                            maxEmployees: emp,
-                            maxUsers: users,
-                            maxSites: sites,
+                            planTier: e.target.value,
+                            customReason: '',
+                            ...(pl ? { maxEmployees: pl.seatsMax, maxUsers: pl.maxUsers, maxSites: pl.maxSites, maxWorkspaces: pl.maxWorkspaces, gracePeriodDays: pl.gracePeriodDays, modules: modulesOf(pl.modules) } : {}),
                           }));
                         }}
                         className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
                       >
-                        <option value="STARTER">Starter</option>
-                        <option value="PROFESSIONAL">Professional</option>
-                        <option value="ENTERPRISE">Enterprise (355 Employees)</option>
-                        <option value="ENTERPRISE_PLUS">Enterprise Plus</option>
-                        <option value="CUSTOM">Custom Plan</option>
+                        {catalogue.filter((x) => x.status === 'ACTIVE' || x.code === issueLicenseForm.planTier).map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
                       </select>
                     </div>
 
@@ -3209,6 +3301,19 @@ export const PlatformAdminPortal: React.FC = () => {
                     </div>
                   </div>
 
+                  {planDiffers(issueLicenseForm) && (
+                    <div>
+                      <label className="block text-[#737373] text-[11px] font-semibold mb-1">These limits differ from the {planFor(issueLicenseForm.planTier)?.name} plan. Why? *</label>
+                      <input
+                        type="text"
+                        required
+                        value={issueLicenseForm.customReason}
+                        onChange={(e) => setIssueLicenseForm({ ...issueLicenseForm, customReason: e.target.value })}
+                        placeholder="Recorded on the licence as custom terms"
+                        className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
+                      />
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className="block text-[#737373] text-[11px] font-semibold mb-1">Named Users</label>
@@ -3334,27 +3439,26 @@ export const PlatformAdminPortal: React.FC = () => {
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <div>
                 <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                  <KeyRound className="w-4 h-4 text-[#171717]" /> Configure License: {selectedLicenseForEdit.tenantName}
+                   Configure License: {selectedLicenseForEdit.tenantName}
                 </h3>
                 <p className="text-[11px] text-[#737373] font-mono">{selectedLicenseForEdit.licenseKey}</p>
               </div>
-              <button onClick={() => setShowEditLicenseModal(false)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setShowEditLicenseModal(false)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleSaveLicenseEdit} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Plan Tier</label>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Plan</label>
                   <select
                     value={editLicenseForm.planTier}
-                    onChange={(e) => setEditLicenseForm({ ...editLicenseForm, planTier: e.target.value })}
+                    onChange={(e) => {
+                      const pl = planFor(e.target.value);
+                      setEditLicenseForm({ ...editLicenseForm, planTier: e.target.value, customReason: '', ...(pl ? { maxEmployees: pl.seatsMax, maxUsers: pl.maxUsers, maxSites: pl.maxSites, maxWorkspaces: pl.maxWorkspaces, gracePeriodDays: pl.gracePeriodDays, modules: modulesOf(pl.modules) } : {}) });
+                    }}
                     className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
                   >
-                    <option value="STARTER">Starter</option>
-                    <option value="PROFESSIONAL">Professional</option>
-                    <option value="ENTERPRISE">Enterprise</option>
-                    <option value="ENTERPRISE_PLUS">Enterprise Plus</option>
-                    <option value="CUSTOM">Custom Plan</option>
+                    {catalogue.filter((x) => x.status === 'ACTIVE' || x.code === editLicenseForm.planTier).map((x) => <option key={x.code} value={x.code}>{x.name}</option>)}
                   </select>
                 </div>
                 <div>
@@ -3461,6 +3565,19 @@ export const PlatformAdminPortal: React.FC = () => {
                 </div>
               </div>
 
+              {planDiffers(editLicenseForm) && (
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">These limits differ from the {planFor(editLicenseForm.planTier)?.name} plan. Why? *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLicenseForm.customReason}
+                    onChange={(e) => setEditLicenseForm({ ...editLicenseForm, customReason: e.target.value })}
+                    placeholder="Recorded on the licence as custom terms"
+                    className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
+                  />
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-3 border-t border-[#E5E5E0]">
                 <button
                   type="button"
@@ -3474,7 +3591,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   disabled={busy}
                   className="px-4 py-1.5 bg-[#171717] hover:bg-[#333333] text-white font-semibold text-xs rounded transition-colors"
                 >
-                  {busy ? 'Saving…' : 'Save License Changes'}
+                  {busy ? 'Saving...' : 'Save License Changes'}
                 </button>
               </div>
             </form>
@@ -3489,13 +3606,13 @@ export const PlatformAdminPortal: React.FC = () => {
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <div>
                 <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-[#171717]" /> Workspaces in {selectedOrgForWs.name}
+                   Workspaces in {selectedOrgForWs.name}
                 </h3>
                 <p className="text-[#737373] text-[12px] mt-0.5">
                   All workspaces within this organisation share its billing and tenant boundary, with strictly isolated operational data.
                 </p>
               </div>
-              <button onClick={() => setSelectedOrgForWs(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForWs(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             {/* Workspaces list */}
@@ -3507,7 +3624,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     onClick={() => setShowAddWsForm(true)}
                     className="flex items-center gap-1 px-2.5 py-1 bg-[#171717] hover:bg-[#333333] text-white font-semibold rounded text-[12px] transition-colors shadow-xs"
                   >
-                    <Plus className="w-3.5 h-3.5" /> Add Workspace
+                     Add Workspace
                   </button>
                 )}
               </div>
@@ -3652,13 +3769,13 @@ export const PlatformAdminPortal: React.FC = () => {
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <div>
                 <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                  <Key className="w-4 h-4 text-[#171717]" /> Provision Admin for {selectedOrgForAdmin.name}
+                   Provision Admin for {selectedOrgForAdmin.name}
                 </h3>
                 <p className="text-[#737373] text-[12px] mt-0.5">
                   Grants full WFM_ADMIN role within organisation {selectedOrgForAdmin.code}.
                 </p>
               </div>
-              <button onClick={() => setSelectedOrgForAdmin(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForAdmin(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleCreateAdmin} className="space-y-3">
@@ -3681,7 +3798,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   minLength={8}
                   value={newAdminForm.password}
                   onChange={(e) => setNewAdminForm({ ...newAdminForm, password: e.target.value })}
-                  placeholder="••••••••"
+                  placeholder="Enter password"
                   className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
                 />
               </div>
@@ -3732,12 +3849,12 @@ export const PlatformAdminPortal: React.FC = () => {
       {/* Modal: Edit Organisation Settings (Clean White Theme) */}
       {selectedOrgForEdit && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white border border-[#E5E5E0] rounded-lg shadow-2xl max-w-md w-full p-6 space-y-4 text-xs">
+          <div className="bg-white border border-[#E5E5E0] rounded-lg shadow-2xl max-w-2xl w-full p-6 space-y-4 text-xs max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <h3 className="text-[16px] font-bold text-[#171717] flex items-center gap-2">
-                <Settings className="w-4 h-4 text-[#171717]" /> Edit Organisation: {selectedOrgForEdit.code}
+                 Edit Organisation: {selectedOrgForEdit.code}
               </h3>
-              <button onClick={() => setSelectedOrgForEdit(null)} className="text-[#737373] hover:text-[#171717] text-sm">✕</button>
+              <button onClick={() => setSelectedOrgForEdit(null)} className="text-[#737373] hover:text-[#171717] text-sm"><X className="w-4 h-4" /></button>
             </div>
 
             <form onSubmit={handleSaveOrgEdit} className="space-y-3">
@@ -3806,6 +3923,123 @@ export const PlatformAdminPortal: React.FC = () => {
                 </div>
               </div>
 
+              <div className="text-[12px] font-semibold text-[#737373] uppercase tracking-wider pt-2">Company</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Country</label>
+                  <input type="text" placeholder="" value={editOrgForm.country} onChange={(e) => setEditOrgForm({ ...editOrgForm, country: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Industry</label>
+                  <input type="text" placeholder="" value={editOrgForm.industry} onChange={(e) => setEditOrgForm({ ...editOrgForm, industry: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Company size</label>
+                  <input type="text" placeholder="" value={editOrgForm.companySize} onChange={(e) => setEditOrgForm({ ...editOrgForm, companySize: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Registration or tax number</label>
+                  <input type="text" placeholder="" value={editOrgForm.registrationId} onChange={(e) => setEditOrgForm({ ...editOrgForm, registrationId: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Website</label>
+                  <input type="text" placeholder="https://" value={editOrgForm.website} onChange={(e) => setEditOrgForm({ ...editOrgForm, website: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+              </div>
+
+              <div className="text-[12px] font-semibold text-[#737373] uppercase tracking-wider pt-2">More contacts</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Contact phone</label>
+                  <input type="text" placeholder="" value={editOrgForm.contactPhone} onChange={(e) => setEditOrgForm({ ...editOrgForm, contactPhone: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div />
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Billing contact name</label>
+                  <input type="text" placeholder="" value={editOrgForm.billingContactName} onChange={(e) => setEditOrgForm({ ...editOrgForm, billingContactName: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Billing contact email</label>
+                  <input type="email" placeholder="" value={editOrgForm.billingContactEmail} onChange={(e) => setEditOrgForm({ ...editOrgForm, billingContactEmail: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Security contact name</label>
+                  <input type="text" placeholder="" value={editOrgForm.securityContactName} onChange={(e) => setEditOrgForm({ ...editOrgForm, securityContactName: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Security contact email</label>
+                  <input type="email" placeholder="" value={editOrgForm.securityContactEmail} onChange={(e) => setEditOrgForm({ ...editOrgForm, securityContactEmail: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+              </div>
+
+              <div className="text-[12px] font-semibold text-[#737373] uppercase tracking-wider pt-2">Registered address</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Line 1</label>
+                  <input type="text" placeholder="" value={editOrgForm.addr1} onChange={(e) => setEditOrgForm({ ...editOrgForm, addr1: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Line 2</label>
+                  <input type="text" placeholder="" value={editOrgForm.addr2} onChange={(e) => setEditOrgForm({ ...editOrgForm, addr2: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">City</label>
+                  <input type="text" placeholder="" value={editOrgForm.city} onChange={(e) => setEditOrgForm({ ...editOrgForm, city: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">State or region</label>
+                  <input type="text" placeholder="" value={editOrgForm.state} onChange={(e) => setEditOrgForm({ ...editOrgForm, state: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Postal code</label>
+                  <input type="text" placeholder="" value={editOrgForm.postalCode} onChange={(e) => setEditOrgForm({ ...editOrgForm, postalCode: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-[13px] text-[#171717]">
+                <input type="checkbox" checked={editOrgForm.billingSame} onChange={(e) => setEditOrgForm({ ...editOrgForm, billingSame: e.target.checked })} />
+                Billing address is the same as the registered address
+              </label>
+              {!editOrgForm.billingSame && (
+                <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Billing line 1</label>
+                  <input type="text" placeholder="" value={editOrgForm.bAddr1} onChange={(e) => setEditOrgForm({ ...editOrgForm, bAddr1: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Billing line 2</label>
+                  <input type="text" placeholder="" value={editOrgForm.bAddr2} onChange={(e) => setEditOrgForm({ ...editOrgForm, bAddr2: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">City</label>
+                  <input type="text" placeholder="" value={editOrgForm.bCity} onChange={(e) => setEditOrgForm({ ...editOrgForm, bCity: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">State or region</label>
+                  <input type="text" placeholder="" value={editOrgForm.bState} onChange={(e) => setEditOrgForm({ ...editOrgForm, bState: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Postal code</label>
+                  <input type="text" placeholder="" value={editOrgForm.bPostalCode} onChange={(e) => setEditOrgForm({ ...editOrgForm, bPostalCode: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                </div>
+              )}
+
+              <div className="text-[12px] font-semibold text-[#737373] uppercase tracking-wider pt-2">Internal</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Account owner</label>
+                  <input type="text" placeholder="" value={editOrgForm.accountOwner} onChange={(e) => setEditOrgForm({ ...editOrgForm, accountOwner: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#171717] mb-1">Contract or PO reference</label>
+                  <input type="text" placeholder="" value={editOrgForm.contractRef} onChange={(e) => setEditOrgForm({ ...editOrgForm, contractRef: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#171717] mb-1">Notes</label>
+                <textarea rows={3} value={editOrgForm.internalNotes} onChange={(e) => setEditOrgForm({ ...editOrgForm, internalNotes: e.target.value })} className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]" />
+              </div>
+
               <div className="flex justify-end gap-2 pt-3 border-t border-[#E5E5E0]">
                 <button
                   type="button"
@@ -3833,9 +4067,6 @@ export const PlatformAdminPortal: React.FC = () => {
           <div className="bg-white border border-[#E5E5E0] rounded-lg shadow-2xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#E5E5E0] pb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[#FFF8EB] border border-[#B35900]/20 flex items-center justify-center text-[#B35900]">
-                  <KeyRound className="w-4 h-4" />
-                </div>
                 <div>
                   <h3 className="text-[16px] font-bold text-[#171717]">Emergency Credential Reset</h3>
                   <p className="text-[12px] text-[#737373]">
@@ -3851,7 +4082,7 @@ export const PlatformAdminPortal: React.FC = () => {
                 }}
                 className="text-[#737373] hover:text-[#171717] text-sm"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -3859,7 +4090,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="space-y-4">
                 <div className="p-4 bg-[#EAF5EF] border border-[#2F7D5A]/20 rounded-lg space-y-3">
                   <div className="flex items-center gap-2 text-[#2F7D5A] font-bold text-sm">
-                    <CheckCircle2 className="w-4 h-4" />
+                    
                     <span>Emergency Recovery Credentials Generated!</span>
                   </div>
                   <p className="text-[12px] text-[#171717]">
@@ -3895,7 +4126,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           }}
                           className="text-[#171717] hover:underline flex items-center gap-1 font-sans capitalize font-semibold"
                         >
-                          <Copy className="w-3 h-3" />
+                          
                           {resetCopied === 'PWD' ? 'Copied!' : 'Copy Password'}
                         </button>
                       </div>
@@ -3921,7 +4152,7 @@ export const PlatformAdminPortal: React.FC = () => {
                           }}
                           className="text-[#171717] hover:underline flex items-center gap-1 font-sans capitalize font-semibold"
                         >
-                          <Copy className="w-3 h-3" />
+                          
                           {resetCopied === 'LINK' ? 'Copied!' : 'Copy Link'}
                         </button>
                       </div>
@@ -3953,7 +4184,7 @@ export const PlatformAdminPortal: React.FC = () => {
                       }}
                       className="px-3 py-1.5 bg-white hover:bg-[#FAFAF8] text-xs font-semibold text-[#171717] rounded border border-[#E5E5E0] flex items-center gap-1.5 shadow-xs"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      
                       <span>{copied ? 'All Details Copied!' : 'Copy All Recovery Details'}</span>
                     </button>
                   </div>
@@ -3995,7 +4226,7 @@ export const PlatformAdminPortal: React.FC = () => {
 
                 <div className="p-3 bg-[#FFF8EB] border border-[#B35900]/20 rounded text-[#171717] text-[12px] space-y-1">
                   <div className="font-bold text-[#B35900] flex items-center gap-1.5">
-                    <ShieldAlert className="w-4 h-4" />
+                    
                     <span>Emergency Credential Recovery Action</span>
                   </div>
                   <p className="text-[#737373]">
@@ -4097,7 +4328,7 @@ export const PlatformAdminPortal: React.FC = () => {
                     onClick={handlePerformEmergencyReset}
                     className="px-4 py-1.5 bg-[#B35900] hover:bg-[#904700] text-white font-semibold rounded text-[12px] disabled:opacity-50 transition-colors shadow-xs flex items-center gap-1.5"
                   >
-                    <KeyRound className="w-3.5 h-3.5" />
+                    
                     <span>{busy ? 'Generating...' : 'Generate Emergency Credentials'}</span>
                   </button>
                 </div>

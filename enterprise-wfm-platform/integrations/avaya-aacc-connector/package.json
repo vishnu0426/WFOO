@@ -1,0 +1,12 @@
+{
+  "name": "wfm-avaya-aacc-connector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads Avaya Aura Contact Center skillset interval statistics from its SQL Server reporting database and relays them out to the WFM Integration Station.",
+  "main": "index.mjs",
+  "scripts": { "test": "node --test test.mjs" },
+  "dependencies": {
+    "mssql": "^11.0.0"
+  }
+}

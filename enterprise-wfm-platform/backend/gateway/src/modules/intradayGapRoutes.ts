@@ -15,6 +15,7 @@ import { blockedReason, loadCtx, mondayOf, refreshStats, requirementFor, revisio
 import { paidSlots } from './templateRules.ts';
 import { fixProblem, suggestGapFixes, type FixKind, type GapPerson } from './gapFixer.ts';
 import { intraday, liveReforecast, localClock } from './intradayRoutes.ts';
+import { addShiftCoverage } from './shiftCoverage.ts';
 
 const uuid = z.string().uuid();
 const SPD = 96;
@@ -69,7 +70,7 @@ intraday.get('/gap-fixes', requires('intraday:read'), async (req, res) => {
   const live = await liveReforecast(p.tenantId, q.groupId, day);
   const need = required.map((r: number, s: number) => live?.required.get(s) ?? r);
   const sched = new Array(SPD).fill(0);
-  for (const r of st.rows) if (r.day === day) for (let g = r.startSlot; g < Math.min(SPD, r.startSlot + r.lengthSlots); g++) sched[g]++;
+  for (const r of st.rows) if (r.day === day) addShiftCoverage(sched, 0, r);
   const out = suggestGapFixes(peopleFrom(st, day), sched, need, { nowSlot });
   const t = (s: number) => hhmm(s * 15);
   res.json({

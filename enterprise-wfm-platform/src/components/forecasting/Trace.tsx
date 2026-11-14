@@ -10,6 +10,7 @@ import { Banner, Busy, Kpi, KpiRow, Table } from './ui';
 export type TraceResult = {
   channel: string; method: string; volume: number; ahtSec: number; trafficErlangs: number; slaTarget: number; answerSec: number; occupancyCap: number; shrinkage: number;
   rawAgents: number; agents: number; onSchedule: number; serviceLevel: number; occupancy: number; asaSec: number; abandon: number; warn: boolean;
+  targetMet?: boolean; status?: string; offeredLoadErlangs?: number; occupancyLimit?: number; confidence?: string; chatEfficiency?: number;
   steps: string[]; sensitivity: { changePct: number; volume: number; agents: number; onSchedule: number }[];
 };
 
@@ -39,10 +40,13 @@ export const TracePanel: React.FC<{ data: TraceResult | null; error?: string }> 
         <Kpi label="Workload" value={dec(data.trafficErlangs, 1)} sub="Erlangs: agents busy all the time" />
         <Kpi label="Agents on the phones" value={data.agents} sub={data.rawAgents !== data.agents ? `${data.rawAgents} for service level, raised by the occupancy cap` : 'meets the service level'} />
         <Kpi label="Agents on the schedule" value={data.onSchedule} sub={`incl. ${pct(data.shrinkage)} shrinkage`} />
-        <Kpi label="Service level reached" value={pct(data.serviceLevel, 1)} tone={data.serviceLevel >= data.slaTarget ? 'good' : 'bad'} sub={`target ${pct(data.slaTarget)} in ${data.answerSec}s · avg wait ${dec(data.asaSec, 0)}s`} />
+        <Kpi label="Service level reached" value={pct(data.serviceLevel, 1)} tone={data.serviceLevel >= data.slaTarget ? 'good' : 'bad'} sub={`target ${pct(data.slaTarget)} in ${data.answerSec}s · avg wait ${dec(data.asaSec, 0)}s${data.abandon > 0 ? ' (everyone who called, including those who gave up)' : ''}`} />
         <Kpi label="Occupancy" value={pct(data.occupancy)} sub={`cap ${pct(data.occupancyCap)}`} />
       </KpiRow>
       <ol className="list-decimal pl-5 space-y-1.5 text-[13px] text-[#171717] leading-relaxed">{data.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
+      {data.targetMet === false && <Banner kind="err">The service level target cannot be reached: the search for the fewest agents stopped at the engine's limit, and {pct(data.serviceLevel, 1)} is the most it found. The agent counts above fall short of the target.</Banner>}
+      {data.status === 'METHOD_FALLBACK' && <Banner kind="info">Erlang A was not reliable for this load, so Erlang C was used: it never needs fewer agents.</Banner>}
+      {data.confidence && <div className="text-[12px] text-[#6B6B6B]">Offered load {dec(data.offeredLoadErlangs ?? 0, 1)} Erlangs · confidence in the Erlang assumptions at this size: {data.confidence.toLowerCase()}{data.chatEfficiency && data.channel === 'chat' ? ` · chat efficiency ${data.chatEfficiency}` : ''}</div>}
       {data.warn && <Banner kind="warn">Small team under real load: Erlang assumes many agents, so treat this number as a guide and sanity-check it.</Banner>}
       <div>
         <div className="text-[11px] font-semibold text-[#6B6B6B] uppercase tracking-wider mb-1.5">If volume is different</div>

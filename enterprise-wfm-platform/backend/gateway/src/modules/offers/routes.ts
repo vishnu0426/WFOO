@@ -19,6 +19,7 @@ import { whoAmI } from '../selfService.ts';
 import { hhmm } from '../workforceRoutes.ts';
 import { hoursUntil } from '../swaps.ts';
 import { ORDERINGS, orderCandidates, overtimeChange, runs, vtoChange, type Candidate, type Change, type Ordering } from './logic.ts';
+import { addShiftCoverage } from '../shiftCoverage.ts';
 
 export const offersAdmin = Router();    // mounted at /scheduling/offers
 export const offersMe = Router();       // mounted at /me/offers
@@ -93,7 +94,7 @@ function gapForDay(live: Live, day: string): number[] {
   const i = live.days.indexOf(day), total = live.days.length * SPD, cover = new Array(total).fill(0);
   for (const s of live.shifts as Row[]) {
     const di = live.days.indexOf(s.day);
-    if (di >= 0) for (let g = di * SPD + s.startSlot; g < Math.min(total, di * SPD + s.startSlot + s.lengthSlots); g++) cover[g]++;
+    if (di >= 0) addShiftCoverage(cover, di, s);
   }
   return Array.from({ length: SPD }, (_, sl) => cover[i * SPD + sl] - live.required[i * SPD + sl]);
 }

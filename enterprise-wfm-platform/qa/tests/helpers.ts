@@ -65,7 +65,7 @@ export const ADMIN_SCREENS: Record<string, string[]> = {
   forecasting: ['forecast-dashboard', 'all-forecasts', 'forecast-builder', 'adjustments', 'scenarios', 'capacity-plan', 'accuracy-heatmap', 'model-leaderboard'],
   scheduling: ['schedule-timeline', 'generate-schedule', 'year-plan', 'schedule-quality', 'shift-templates', 'all-schedules', 'multi-site', 'follow-the-sun', 'rotations', 'shift-swaps', 'vto-overtime', 'shift-bidding', 'schedule-compare', 'schedule-replay'],
   intraday: ['live-coverage', 'adherence', 'break-optimizer', 'ai-recommendations'],
-  configuration: ['wfm-groups', 'activities', 'scheduling-rules', 'sites-skills', 'integration-station', 'compliance-packs', 'self-service-rules', 'rta-mapping', 'optimization-objectives'],
+  configuration: ['wfm-groups', 'activities', 'scheduling-rules', 'organisation', 'integration-station', 'compliance-packs', 'self-service-rules', 'rta-mapping', 'optimization-objectives'],
   'data-management': ['staged-imports', 'data-quality', 'scheduled-syncs'],
   audit: [''],
   administration: ['users', 'roles', 'api-access', 'alerts-reports'],

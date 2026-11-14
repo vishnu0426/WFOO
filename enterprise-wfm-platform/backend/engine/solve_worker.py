@@ -17,6 +17,34 @@ import scheduling
 import wfm_pb2
 
 
+def _parent_alive(ppid):
+    """Whether the engine that started this process is still there."""
+    if sys.platform == "win32":
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, ppid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return bool(ok) and code.value == 259                                      # STILL_ACTIVE
+    return os.getppid() == ppid
+
+
+def guard_parent():
+    """End this process if the engine that started it goes away: a solve nobody is waiting for would otherwise keep its memory and cores until its own time limit."""
+    import threading
+    import time
+    ppid = os.getppid()
+
+    def watch():
+        while True:
+            time.sleep(2)
+            if not _parent_alive(ppid):
+                os._exit(3)
+    threading.Thread(target=watch, daemon=True).start()
+
+
 class FileFlag:
     """Quacks like threading.Event for the solver's cancel check."""
     def __init__(self, path):
@@ -27,6 +55,7 @@ class FileFlag:
 
 
 def main(inp, outp, flag):
+    guard_parent()
     with open(inp, "rb") as f:
         req_bytes, carry, weekend_prior, start = pickle.load(f)
     req = wfm_pb2.ScheduleRequest()

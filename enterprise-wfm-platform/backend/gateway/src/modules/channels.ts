@@ -37,7 +37,7 @@ async function loadSettings(orgId: string): Promise<Settings> {
   return n;
 }
 
-const secretKeys = (info?: ProviderInfo) => new Set((info?.fields ?? []).filter((x) => x.secret).map((x) => x.key));
+export const secretKeys = (info?: ProviderInfo) => new Set((info?.fields ?? []).filter((x) => x.secret).map((x) => x.key));
 /** What the screen gets: the choices made and the non-secret values; secrets are only reported as saved or not. */
 function sideView(provider: string, values: Values, info?: ProviderInfo) {
   const secrets = secretKeys(info);
@@ -59,7 +59,7 @@ channels.get('/providers', requires('users:read'), (_req, res) => { res.json({ e
 channels.get('/settings', requires('users:read'), async (req, res) => { res.json(view(await loadSettings(me(req).tenantId))); });
 
 /** Keep a saved secret when the box was left empty and the provider did not change; drop everything the provider does not use. */
-function mergeValues(info: ProviderInfo, incoming: Values, before: { provider: string; values: Values }): Values {
+export function mergeValues(info: ProviderInfo, incoming: Values, before: { provider: string; values: Values }): Values {
   const out: Values = {};
   for (const f of info.fields) {
     const v = (incoming[f.key] ?? '').trim();
@@ -67,7 +67,7 @@ function mergeValues(info: ProviderInfo, incoming: Values, before: { provider: s
   }
   return out;
 }
-async function checkSide(kind: 'email' | 'sms', info: ProviderInfo | undefined, values: Values, enabled: boolean) {
+export async function checkSide(kind: 'email' | 'sms', info: ProviderInfo | undefined, values: Values, enabled: boolean) {
   if (!info) throw bad(`Choose a ${kind === 'email' ? 'email' : 'SMS'} provider from the list.`);
   const withDflt = withDefaults(info, values);
   if (enabled) {
@@ -107,7 +107,7 @@ function transportFor(o: SmtpOptions) {
 const MAX_ATTACHMENT = 5_000_000;
 interface Msg { channel: 'EMAIL' | 'SMS'; to: string; subject: string; body: string; attachment?: Attachment | Attachment[] | null }
 /** Send one message. Never throws: every failure, including a provider answering nonsense, comes back as a plain reason. */
-async function deliver(_orgId: string, s: Settings, m: Msg): Promise<{ ok: boolean; error?: string }> {
+export async function deliver(_orgId: string, s: Settings, m: Msg): Promise<{ ok: boolean; error?: string }> {
   try {
     if (m.channel === 'EMAIL') {
       if (!s.email.enabled) return { ok: false, error: 'Email is switched off for this organisation.' };

@@ -3,7 +3,8 @@
  * what the signed-in user may do, plus a notice banner. Data itself is fetched by each section from the gateway.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { api, Group, GroupDto, Queue, Session, VersionKind, VersionMeta } from './api';
+import { api, fmtDate, Group, GroupDto, Queue, Session, VersionKind, VersionMeta } from './api';
+import { VIEW_KEY, readStoredView, reconcileView, writeStoredView, type ViewState } from './forecastView';
 import { fetchShared, peek } from './dataCache';
 
 const withQueues = (gs: GroupDto[], qs: Queue[]): Group[] => gs.filter((x) => x.status === 'ACTIVE').map((x) => ({ ...x, queues: qs.filter((q) => q.wfmGroupId === x.id) }));
@@ -22,6 +23,9 @@ type Ctx = {
   setVersionId: (id: string | null) => void;
   kind: VersionKind;
   setKind: (k: VersionKind) => void;
+  /** The date range, interval and queue every Forecasting page looks at, kept between visits. Null until a forecast is chosen. */
+  view: ViewState | null;
+  setView: (patch: Partial<ViewState>) => void;
   reload: (selectId?: string) => Promise<void>;
   reloadGroups: () => Promise<void>;
   ready: boolean;
@@ -48,6 +52,7 @@ export const ForecastProvider: React.FC<{
   const [versionId, setVersionId] = useState<string | null>(null);
   const [ready, setReady] = useState(() => heldGroups() !== null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [view, setViewState] = useState<ViewState | null>(null);
 
   const reloadGroups = useCallback(async () => {
     try {
@@ -94,14 +99,25 @@ export const ForecastProvider: React.FC<{
 
   const group = groups.find((g) => g.id === groupId) || null;
   const version = versions.find((v) => v.id === versionId) || null;
+
+  // bring the shared selection onto the forecast now chosen: the same dates and queue where they still fit, otherwise today (when the forecast covers it) or its first day
+  useEffect(() => {
+    if (!version || !group) return;
+    setViewState((cur) => {
+      const remembered = cur ?? (() => { const r = readStoredView(localStorage.getItem(VIEW_KEY)); return r && r.groupId === group.id ? r : null; })();
+      return reconcileView(remembered, version, group.queues.map((q) => q.id), fmtDate(new Date()));
+    });
+  }, [version?.id, group?.id]);
+  useEffect(() => { if (view && groupId) localStorage.setItem(VIEW_KEY, writeStoredView(groupId, view)); }, [view, groupId]);
+  const setView = useCallback((patch: Partial<ViewState>) => setViewState((cur) => (cur ? { ...cur, ...patch } : cur)), []);
   const perms = useMemo(() => new Set(session.permissions), [session]);
 
   const value = useMemo<Ctx>(() => ({
     groups, group, setGroupId: (id, sel) => { pendingSelect.current = sel; setGroupId(id); }, versions, version,
     setVersionId: (id) => { const v = versions.find((x) => x.id === id); if (v) setKind(v.kind); setVersionId(id); },
-    kind, setKind, reload, reloadGroups, ready, session, can: (p) => perms.has(p),
+    kind, setKind, view, setView, reload, reloadGroups, ready, session, can: (p) => perms.has(p),
     go: (sub, module = 'forecasting') => onNavigate(module, sub), notice, setNotice,
-  }), [groups, group, versions, version, kind, reload, reloadGroups, ready, session, perms, onNavigate, notice]);
+  }), [groups, group, versions, version, kind, view, setView, reload, reloadGroups, ready, session, perms, onNavigate, notice]);
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 };

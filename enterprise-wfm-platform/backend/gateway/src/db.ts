@@ -40,7 +40,10 @@ const TENANT_PLACEHOLDER_ALL = /(?<!:):t\b/g;
 const WORKSPACE_PLACEHOLDER = /(?<!:):w\b/;
 const WORKSPACE_PLACEHOLDER_ALL = /(?<!:):w\b/g;
 
-export interface Scope { tenantId: string; orgId: string; workspaceId: string }
+/** `groupScope`: the WFM groups a signed-in person may see (those at their sites and regions). Absent = the whole organisation. */
+export interface Scope { tenantId: string; orgId: string; workspaceId: string; groupScope?: string[] }
+/** Stands for "no group" when a person is limited to sites that have no groups yet: they see nothing rather than everything. */
+export const NO_GROUP = '00000000-0000-0000-0000-000000000000';
 export const scopeStore = new AsyncLocalStorage<Scope>();
 export const currentScope = (): Scope | undefined => scopeStore.getStore();
 /** Run async work under a tenant/workspace scope without opening a transaction. */
@@ -95,6 +98,9 @@ async function runScoped<T>(tenantId: string, workspaceId: string | undefined, f
     // Resolve the default workspace before switching to the non-bypass role: the lookup only needs app.tenant_id.
     const ws = explicit || await defaultWorkspaceId(client, tenantId);
     await client.query(`SELECT set_config('app.workspace_id', $1, true)`, [ws]);
+    // a person limited to some sites or regions: the database itself hides the rest (policy "group_scope"), whichever query runs
+    const gs = active?.tenantId === tenantId ? active.groupScope : undefined;
+    await client.query(`SELECT set_config('app.group_scope', $1, true)`, [gs ? (gs.length ? gs.join(',') : NO_GROUP) : '']);
     if (rlsRole) await client.query('SET LOCAL ROLE wfm_app');
     const scope = { tenantId, orgId: tenantId, workspaceId: ws };
     const out = await scopeStore.run(scope, () => fn(new Tx(client, tenantId, ws)));
@@ -208,6 +214,54 @@ async function applyRowLevelSecurity(): Promise<void> {
     await pool.query(`DROP POLICY IF EXISTS tenant_isolation ON wfm."${t.table_name}"`);
     await pool.query(`CREATE POLICY tenant_isolation ON wfm."${t.table_name}" USING (${tenant}${workspace}) WITH CHECK (${tenant}${workspace})`);
   }
+  await applyGroupScopePolicies(tables.map((t) => t.table_name));
   rlsRole = true;
   console.log(`[db] row-level security enforced on ${tables.length} tables (role wfm_app)`);
+}
+
+
+/**
+ * Access limited to sites and regions, enforced where the data lives. A RESTRICTIVE policy is added next to the tenant policy, so both must pass. It does nothing for a request without
+ * a group scope (app.group_scope is empty). With one, a row is visible when it belongs to a WFM group in the scope (or to none), and so for the rows that hang off groups:
+ * people through their group, schedules and forecasts through their version, intervals through their queue. What is not listed here (shift templates, skills, sites, rules,
+ * the audit log) is shared reference data every signed-in person of the workspace sees.
+ */
+export const GROUP_SCOPED = {
+  /** tables with a wfm_group_id column are found by name; these are the others */
+  employeesTable: 'employees', groupsTable: 'wfm_groups', groupColumn: { group_people: 'group_id' } as Record<string, string>,
+  byVersion: { schedule_shifts: 'schedule_versions', schedule_revisions: 'schedule_versions', shift_swaps: 'schedule_versions', forecast_scenarios: 'forecast_versions' } as Record<string, string>,
+  byQueue: ['forecast_intervals', 'interval_daily', 'interval_history', 'import_rows'],
+  byEmployee: ['adherence_alerts', 'adherence_exceptions', 'agent_state_events', 'attendance_punches', 'availability', 'bid_awards', 'bid_entries', 'employee_skills', 'offer_invites', 'rotation_members', 'time_off'],
+  byGroups: { site_loans: ['home_group_id', 'to_group_id'] } as Record<string, string[]>,
+};
+
+async function applyGroupScopePolicies(tenantTables: string[]): Promise<void> {
+  const NO = `coalesce(current_setting('app.group_scope', true), '') = ''`;
+  const ARR = `string_to_array(current_setting('app.group_scope', true), ',')::uuid[]`;
+  const has = new Set(tenantTables);
+  const cols = new Map<string, Set<string>>();
+  for (const r of (await pool.query(`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'wfm'`)).rows as { table_name: string; column_name: string }[]) {
+    if (!cols.has(r.table_name)) cols.set(r.table_name, new Set());
+    cols.get(r.table_name)!.add(r.column_name);
+  }
+  const using = new Map<string, string>();
+  const g = GROUP_SCOPED;
+  for (const t of tenantTables) {
+    const c = cols.get(t) ?? new Set<string>();
+    if (t === g.groupsTable) using.set(t, `${NO} OR id = ANY(${ARR})`);
+    else if (t === g.employeesTable) using.set(t, `${NO} OR primary_group_id IS NULL OR primary_group_id = ANY(${ARR}) OR eligible_group_ids && ${ARR} OR id IN (SELECT employee_id FROM wfm.site_loans WHERE to_group_id = ANY(${ARR}))`);
+    else if (g.byGroups[t]) using.set(t, `${NO} OR ${g.byGroups[t].map((x) => `${x} = ANY(${ARR})`).join(' OR ')}`);
+    else if (g.groupColumn[t]) using.set(t, `${NO} OR ${g.groupColumn[t]} = ANY(${ARR})`);
+    else if (c.has('wfm_group_id')) using.set(t, `${NO} OR wfm_group_id IS NULL OR wfm_group_id = ANY(${ARR})`);
+    else if (g.byVersion[t]) using.set(t, `${NO} OR version_id IN (SELECT id FROM wfm.${g.byVersion[t]})`);
+    else if (g.byQueue.includes(t)) using.set(t, `${NO} OR queue_id IS NULL OR queue_id IN (SELECT id FROM wfm.queues)`);
+    else if (g.byEmployee.includes(t)) using.set(t, `${NO} OR employee_id IS NULL OR employee_id IN (SELECT id FROM wfm.employees)`);
+  }
+  for (const t of tenantTables) {
+    if (!has.has(t)) continue;
+    await pool.query(`DROP POLICY IF EXISTS group_scope ON wfm."${t}"`);
+    const u = using.get(t);
+    if (u) await pool.query(`CREATE POLICY group_scope ON wfm."${t}" AS RESTRICTIVE USING (${u}) WITH CHECK (${u})`);
+  }
+  console.log(`[db] site/region access scope enforced on ${using.size} tables`);
 }

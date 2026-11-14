@@ -4,14 +4,19 @@
  * period. Two kinds: a cycle of days, or weekly templates each worked for some weeks. Materializing writes ordinary shifts into a normal
  * schedule version: open it in Schedule Timeline to drag, edit, validate and publish exactly like any other schedule.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import { Waiting, LoadFailed } from '../common/loading';
+import { templateLabel } from '../../services/generateFixes';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
-import { Employee, RotationAnalysis, RotationCrew, RotationMember, RotationPattern, RotationPreview, RotationStep, ScheduleVersion, ShiftTemplate, api, dayYear } from '../../services/api';
+import { Employee, RotationAnalysis, RotationCrew, RotationMember, RotationPattern, RotationPreview, RotationRevision, RotationStep, ScheduleVersion, ShiftTemplate, api, dayYear } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Kpi, KpiRow, Pill, Seg, Select } from '../forecasting/ui';
 import { Heatmap } from './CoverageView';
-import { PRESETS, dayPresetPlan, weeklyCrews, weeklySteps, type DayPreset, type Preset, type WeeklyPreset } from './rotationPresets';
+import { dayPresetPlan, weeklyCrews, weeklySteps, type DayPreset, type Preset, type WeeklyPreset } from './rotationPresets';
+import { LIBRARY, savedToPreset, type SavedTemplate } from './rotationLibrary';
+import { RotationLibrary } from './RotationBrowser';
+import { HelpTip } from '../common/HelpTip';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DOW_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -35,19 +40,23 @@ export const RotationsPanel: React.FC<{ go: (sub: string) => void }> = ({ go }) 
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { if (patterns.data && !patterns.data.some((p) => p.id === sel)) setSel(patterns.data[0]?.id ?? ''); }, [patterns.data]);
+  // a group that names a pattern but has none set up yet opens straight on the form, with that pattern picked
+  const opened = useRef('');
+  useEffect(() => { if (group?.defaultRotationRef && patterns.data && patterns.data.length === 0 && opened.current !== group.id) { opened.current = group.id; setCreating(true); } }, [group?.id, group?.defaultRotationRef, patterns.data]);
   const current = patterns.data?.find((p) => p.id === sel) ?? null;
 
   const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); try { await fn(); setTick((t) => t + 1); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
   const remove = (p: RotationPattern) => confirm(`Delete "${p.name}"?`) && run(async () => { await api(`/scheduling/rotations/${p.id}`, { method: 'DELETE' }); setSel(''); });
 
   if (!group) return <Empty title="No WFM group yet" />;
-  if (patterns.loading && !patterns.data) return <Busy text="Loading patterns…" />;
+  if (patterns.loading && !patterns.data) return <Waiting what="rotation patterns" shape="table" reload={patterns.reload} />;
+  if (patterns.error && !patterns.data) return <LoadFailed what="rotation patterns" error={patterns.error} reload={patterns.reload} />;
 
   return (
     <div className="space-y-6">
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
 
-      <Card title="Rotation patterns" sub={`For ${group.name}. Fixed repeating cycles (4-on-4-off, DuPont, Pitman...) rather than schedules matched to a forecast.`}
+      <Card title="Rotation patterns" sub="Fixed repeating cycles (4-on-4-off, DuPont, Pitman...) rather than schedules matched to a forecast."
         actions={canWrite && <Btn variant="primary" onClick={() => { setCreating(true); setSel(''); }}><Plus className="w-3.5 h-3.5" />New pattern</Btn>}>
         {!patterns.data?.length && !creating ? <Empty title="No rotation patterns yet">Create one for crews that work a fixed cycle instead of a forecast-driven schedule.</Empty> : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -83,16 +92,55 @@ const NewPatternForm: React.FC<{ groupId: string; templates: ShiftTemplate[]; on
   const [observesHolidays, setObservesHolidays] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [libTick, setLibTick] = useState(0);
+  const { group } = useForecast();
 
-  const presets = PRESETS.filter((p) => p.kind === kind);
+  const saved = useApi<SavedTemplate[]>('/scheduling/rotations/templates', [libTick]);
+  const allPresets = [...LIBRARY, ...(saved.data ?? []).map(savedToPreset)];
+  const presets = allPresets.filter((p) => p.kind === kind);
+  // the group's own pattern is picked for the planner when the form opens
+  const started = useRef(false);
+  useEffect(() => {
+    const ref = group?.defaultRotationRef; if (started.current || !ref || !saved.data) return;
+    const p = allPresets.find((x) => x.id === ref || x.id === `lib:${ref}`); started.current = true;
+    if (p) { setKind(p.kind); setTimeout(() => setPresetId(p.id), 0); }
+  }, [saved.data, group?.defaultRotationRef]);
   const preset: Preset | undefined = presets.find((p) => p.id === presetId);
   useEffect(() => { setPresetId(''); setPick({}); }, [kind]);
   // a weekly rotation has to begin on the first day of a pay week
   useEffect(() => { if (kind === 'WEEKLY' && dowOf(anchorDate) !== payStart) setAnchorDate(onOrAfter(anchorDate, payStart)); }, [kind, payStart]);
   // default template for each letter of a preset: the first active ones, in order
-  useEffect(() => { if (preset) setPick(Object.fromEntries(preset.letters.map((l, i) => [l.letter, active[Math.min(i, active.length - 1)]?.id ?? '']))); }, [presetId, templates.length]);
+  // a template whose name says the same thing ("Night 22-06" for a night shift) is preferred; otherwise the next one in order
+  useEffect(() => {
+    if (!preset) return;
+    const word = (s: string) => s.toLowerCase().replace(/\bshift\b|\bworked\b|\([^)]*\)/g, '').trim().split(/\s+/)[0] ?? '';
+    setPick(Object.fromEntries(preset.letters.map((l, i) => {
+      const w = word(l.label);
+      const named = w ? active.find((t) => t.name.toLowerCase().includes(w)) : undefined;
+      return [l.letter, (named ?? active[Math.min(i, active.length - 1)])?.id ?? ''];
+    })));
+  }, [presetId, templates.length]);
   useEffect(() => { if (preset?.kind === 'DAY_CYCLE') setCycleDays(preset.shape.length); }, [presetId]);
   useEffect(() => { if (preset && !name) setName(preset.label); }, [presetId]);
+  // some patterns only make sense starting on a given weekday (fixed nights Monday to Friday, weekend cover)
+  useEffect(() => { if (preset?.anchorWeekday != null && kind === 'DAY_CYCLE') setAnchorDate((a) => onOrAfter(a, preset.anchorWeekday!)); }, [presetId]);
+
+  const removeSaved = async (id: string, label: string) => {
+    if (!confirm(`Remove "${label}" from the library? Patterns already made from it keep working.`)) return;
+    try { await api(`/scheduling/rotations/templates/${id}`, { method: 'DELETE' }); setPresetId(''); setLibTick((t) => t + 1); } catch (e: any) { setError(e.message); }
+  };
+  const importFile = async (f: File | undefined) => {
+    if (!f) return;
+    setError('');
+    try {
+      const j = JSON.parse(await f.text());
+      if (j?.format !== 'wfm-rotation-template') throw new Error('This file is not a rotation pattern exported from here.');
+      const { format, version, ...body } = j;
+      const made = await api<SavedTemplate>('/scheduling/rotations/templates', { method: 'POST', body });
+      setKind(made.kind); setLibTick((t) => t + 1);
+      setTimeout(() => setPresetId(`lib:${made.id}`), 0);
+    } catch (e: any) { setError(e.message || 'Could not read that file.'); }
+  };
 
   const create = async () => {
     setBusy(true); setError('');
@@ -102,11 +150,11 @@ const NewPatternForm: React.FC<{ groupId: string; templates: ShiftTemplate[]; on
         const wp = preset as WeeklyPreset | undefined;
         const steps: RotationStep[] = wp ? weeklySteps(wp, pick, payStart) : [blankStep(1)];
         const sequence = compile(steps);
-        body = { wfmGroupId: groupId, name, kind: 'WEEKLY', steps, cycleDays: sequence.length, sequence, crews: wp ? weeklyCrews(wp) : [{ name: 'Crew A', offsetDays: 0 }], anchorDate, observesHolidays };
+        body = { wfmGroupId: groupId, name, kind: 'WEEKLY', steps, cycleDays: sequence.length, sequence, crews: wp ? weeklyCrews(wp) : [{ name: 'Crew A', offsetDays: 0 }], anchorDate, observesHolidays, templateRef: preset ? preset.id.replace(/^lib:/, '') : undefined };
       } else {
         const dp = preset as DayPreset | undefined;
         const plan = dp ? dayPresetPlan(dp, pick) : { cycleDays, sequence: new Array(cycleDays).fill(null), crews: [{ name: 'Crew A', offsetDays: 0 }] };
-        body = { wfmGroupId: groupId, name, kind: 'DAY_CYCLE', ...plan, anchorDate, observesHolidays };
+        body = { wfmGroupId: groupId, name, kind: 'DAY_CYCLE', ...plan, anchorDate, observesHolidays, templateRef: preset ? preset.id.replace(/^lib:/, '') : undefined };
       }
       const c = await api<RotationPattern>('/scheduling/rotations', { method: 'POST', body });
       onCreated(c.id);
@@ -116,38 +164,48 @@ const NewPatternForm: React.FC<{ groupId: string; templates: ShiftTemplate[]; on
     <Card title="New pattern">
       <div className="space-y-4">
         <div>
-          <div className="text-[12px] font-semibold mb-1.5">How does it repeat?</div>
-          <Seg options={[{ id: 'DAY_CYCLE', label: 'Repeat a day cycle' }, { id: 'WEEKLY', label: 'Rotate weekly templates' }]} value={kind} onChange={(v) => setKind(v as 'DAY_CYCLE' | 'WEEKLY')} />
-          <p className="text-[12px] text-[#6B6B6B] mt-1.5">
-            {kind === 'DAY_CYCLE' ? 'A sequence of days, each a shift or a day off, that repeats: 4-on-4-off, 2-2-3, DuPont. Crews run the same cycle a few days apart.'
-              : 'Weekly templates, each worked for one or more weeks before the next: a week of days, then a week of lates. Crews run it a whole number of weeks apart.'}
-          </p>
+          <div className="text-[12px] font-semibold mb-1.5">How does it repeat?<HelpTip title="How it repeats" text={kind === 'DAY_CYCLE' ? 'A sequence of days, each a shift or a day off, that repeats, such as 4-on-4-off, 2-2-3 or DuPont. Crews run the same cycle a few days apart.' : 'Weekly templates, each worked for one or more weeks before the next, such as a week of days then a week of lates. Crews run it a whole number of weeks apart.'} /></div>
+          <Seg options={[{ id: 'DAY_CYCLE', label: 'Daily cycle (e.g. 4-on-4-off)' }, { id: 'WEEKLY', label: 'Weekly rotation (e.g. days, lates, nights)' }]} value={kind} onChange={(v) => setKind(v as 'DAY_CYCLE' | 'WEEKLY')} />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-          <Field label="Start from a ready-made pattern" hint={preset?.summary ?? 'Or leave blank and build it day by day on the next screen.'}>
-            <Select value={presetId} onChange={(e) => setPresetId(e.target.value)}><option value="">Build my own</option>{presets.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</Select>
-          </Field>
-          {preset && preset.letters.map((l) => (
-            <Field key={l.letter} label={`${l.label} uses`} hint="One of your shift templates">
-              <Select value={pick[l.letter] ?? ''} onChange={(e) => setPick((s) => ({ ...s, [l.letter]: e.target.value }))}>{active.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.earliestStart}, {t.durationHours}h)</option>)}</Select>
-            </Field>
-          ))}
+        <div>
+          <div className="flex items-center gap-3 mb-1.5">
+            <div className="text-[12px] font-semibold">Start from a ready-made pattern<HelpTip title="Ready-made patterns" text="Pick one to fill everything in, or leave it unselected and build your own on the next screen." /></div>
+            <label className="ml-auto text-[12px] underline cursor-pointer">Import from a file<input type="file" accept="application/json,.json" className="sr-only" onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
+          </div>
+          <RotationLibrary presets={presets} selectedId={presetId} onSelect={setPresetId} onDeleteSaved={removeSaved} />
         </div>
+
+        {preset && (
+          <details className="border border-[#E5E5E0] rounded-lg px-3 py-2">
+            <summary className="text-[13px] cursor-pointer">
+              Shifts used: {preset.letters.map((l) => `${l.label} is ${active.find((t) => t.id === pick[l.letter])?.name ?? 'not chosen'}`).join(', ')}. <span className="underline text-[#525252]">Change</span>
+            </summary>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end mt-3">
+              {preset.letters.map((l) => (
+                <Field key={l.letter} label={l.label}>
+                  <Select value={pick[l.letter] ?? ''} onChange={(e) => setPick((s) => ({ ...s, [l.letter]: e.target.value }))}>{active.map((t) => <option key={t.id} value={t.id}>{templateLabel(t)}</option>)}</Select>
+                </Field>
+              ))}
+            </div>
+          </details>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
           <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'WEEKLY' ? 'Days, lates, nights' : '4-on-4-off nights'} /></Field>
-          {kind === 'DAY_CYCLE' && <Field label="Cycle length (days)" hint={preset ? 'Set by the pattern' : 'e.g. 8 for a 4-on-4-off pattern'}><Input type="number" min={2} max={84} disabled={!!preset} value={cycleDays} onChange={(e) => setCycleDays(Math.max(2, Math.min(84, Number(e.target.value) || 2)))} /></Field>}
-          <Field label="Anchor date" hint={kind === 'WEEKLY' ? `Must be a ${DOW_LONG[payStart]}: the first day of this group's pay week` : 'day 0 of the cycle'}>
+          {kind === 'DAY_CYCLE' && !preset && <Field label="Cycle length (days)" tip="The number of days before the pattern repeats. Example: 8 for a 4-on-4-off pattern."><Input type="number" min={2} max={84} disabled={!!preset} value={cycleDays} onChange={(e) => setCycleDays(Math.max(2, Math.min(84, Number(e.target.value) || 2)))} /></Field>}
+          <Field label="First day of the pattern" tip={kind === 'WEEKLY' ? `Must be a ${DOW_LONG[payStart]}, the first day of the pay week.` : 'The day the cycle starts counting from.'}>
             <Input type="date" value={anchorDate} onChange={(e) => setAnchorDate(kind === 'WEEKLY' ? onOrAfter(e.target.value, payStart) : e.target.value)} />
           </Field>
           <div className="flex gap-2 md:pt-[22px]"><Btn variant="primary" disabled={busy || !name.trim() || !active.length} onClick={create}>Create</Btn><Btn onClick={onCancel}>Cancel</Btn></div>
         </div>
       </div>
-      <label className="flex items-center gap-2 text-[12px] mt-3"><input type="checkbox" checked={observesHolidays} onChange={(e) => setObservesHolidays(e.target.checked)} />Skip generating a work shift on days marked as a holiday (Forecasting › special events). Turn off for crews that work through holidays.</label>
+      <details className="mt-3 text-[12px]">
+        <summary className="cursor-pointer text-[#525252]">More options</summary>
+        <label className="flex items-center gap-2 mt-2"><input type="checkbox" checked={observesHolidays} onChange={(e) => setObservesHolidays(e.target.checked)} />Leave days off on public holidays<HelpTip text="Turn this off for crews that work through public holidays." /></label>
+      </details>
       {!active.length && <p className="text-[12px] text-[#BC3F3F] mt-2">Create a shift template first (Scheduling › Shift Templates).</p>}
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
-      <p className="text-[11px] text-[#6B6B6B] mt-2">You can change the days, crews and who is in them next, and see what the pattern means for hours and rest before anyone is put on it.</p>
     </Card>
   );
 };
@@ -168,7 +226,31 @@ const PatternDetail: React.FC<{
   const dirty = JSON.stringify(sequence) !== JSON.stringify(pattern.sequence) || JSON.stringify(crews) !== JSON.stringify(pattern.crews) || observesHolidays !== pattern.observesHolidays || (weekly && JSON.stringify(steps) !== JSON.stringify(pattern.steps));
 
   const body = (over: any = {}) => ({ name: pattern.name, kind: pattern.kind, cycleDays: sequence.length, sequence, steps: weekly ? steps : null, crews, anchorDate: pattern.anchorDate, status: pattern.status, observesHolidays, ...over });
-  const save = () => run(async () => { await api(`/scheduling/rotations/${pattern.id}`, { method: 'PUT', body: body() }); });
+  const rostered = !!pattern.versionId && !!pattern.materializedThrough;
+  const [effFrom, setEffFrom] = useState(() => { const t = addDays(todayIso(), 1); return weekly ? onOrAfter(t, payStart) : t; });
+  const [note, setNote] = useState('');
+  useEffect(() => { if (weekly && pay.data) setEffFrom((d) => onOrAfter(d, payStart)); }, [pay.data?.start]);
+  const [histTick, setHistTick] = useState(0);
+  const save = () => run(async () => {
+    if (rostered) { await api(`/scheduling/rotations/${pattern.id}/revise`, { method: 'POST', body: { ...body(), anchorDate: undefined, effectiveFrom: effFrom, note: note.trim() || undefined } }); setNote(''); setHistTick((t) => t + 1); }
+    else await api(`/scheduling/rotations/${pattern.id}`, { method: 'PUT', body: body() });
+  });
+  const exportFile = async () => {
+    try {
+      const j = await api<any>(`/scheduling/rotations/${pattern.id}/export`);
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(j, null, 2)], { type: 'application/json' })); a.download = `rotation-${pattern.name.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 40)}.json`; a.click(); URL.revokeObjectURL(a.href);
+    } catch (e: any) { alert(e.message); }
+  };
+  const [libMsg, setLibMsg] = useState('');
+  const toLibrary = async () => {
+    const nm = prompt('Name for the library entry', pattern.name)?.trim();
+    if (!nm) return;
+    try {
+      const { format, version, ...j } = await api<any>(`/scheduling/rotations/${pattern.id}/export`);
+      await api('/scheduling/rotations/templates', { method: 'POST', body: { ...j, name: nm } });
+      setLibMsg(`Saved "${nm}". It is now under Your library when anyone in this organisation makes a pattern.`);
+    } catch (e: any) { setLibMsg(e.message); }
+  };
   const toggleActive = () => run(async () => { await api(`/scheduling/rotations/${pattern.id}`, { method: 'PUT', body: body({ cycleDays: pattern.cycleDays, sequence: pattern.sequence, steps: pattern.steps, crews: pattern.crews, status: pattern.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE', observesHolidays: pattern.observesHolidays }) }); });
 
   const [through, setThrough] = useState(addDays(pattern.materializedThrough ?? pattern.anchorDate, 90));
@@ -191,6 +273,8 @@ const PatternDetail: React.FC<{
     <div className="space-y-6">
       <Card title={pattern.name} sub={weekly ? `Week 1 starts ${dayYear(pattern.anchorDate)}, a ${DOW_LONG[dowOf(pattern.anchorDate)]}. Each crew works the same ${totalWeeks}-week rotation, starting a whole number of weeks apart.` : `Cycle day 0 is ${dayYear(pattern.anchorDate)}. Each crew works the same sequence, offset by its own number of days.`}
         actions={canWrite && <>
+          <Btn onClick={toLibrary} disabled={busy || dirty}>Save to library</Btn>
+          <Btn onClick={exportFile} disabled={busy}>Export</Btn>
           <Btn onClick={toggleActive} disabled={busy}>{pattern.status === 'ACTIVE' ? 'Set inactive' : 'Set active'}</Btn>
           <Btn onClick={onDelete} disabled={busy}><Trash2 className="w-3.5 h-3.5" />Delete</Btn>
         </>}>
@@ -268,8 +352,17 @@ const PatternDetail: React.FC<{
 
         <label className="flex items-center gap-2 text-[12px]"><input type="checkbox" disabled={!canWrite} checked={observesHolidays} onChange={(e) => setObservesHolidays(e.target.checked)} />Skip generating a work shift on days marked as a holiday</label>
 
-        {canWrite && <div className="flex items-center gap-2"><Btn variant="primary" disabled={busy || !dirty} onClick={save}>Save changes</Btn>{dirty && <span className="text-[12px] text-[#8F6200]">Unsaved changes</span>}</div>}
+        {libMsg && <p className="text-[12px] text-[#525252]">{libMsg}</p>}
+        {canWrite && rostered && dirty && (
+          <div className="border border-[#E5E5E0] rounded-lg bg-[#FAFAF8] p-3 flex flex-wrap items-end gap-3">
+            <Field label="Change takes effect from" hint={`Shifts from this day to ${dayYear(pattern.materializedThrough!)} are rewritten. Earlier days stay as they were.${weekly ? ` Must be a ${DOW_LONG[payStart]}.` : ''}`}><Input type="date" min={addDays(todayIso(), 1)} value={effFrom} onChange={(e) => setEffFrom(weekly ? onOrAfter(e.target.value, payStart) : e.target.value)} /></Field>
+            <Field label="Reason (optional)"><Input value={note} maxLength={300} onChange={(e) => setNote(e.target.value)} className="min-w-[240px]" /></Field>
+          </div>
+        )}
+        {canWrite && <div className="flex items-center gap-2"><Btn variant="primary" disabled={busy || !dirty} onClick={save}>{rostered ? 'Save change from this date' : 'Save changes'}</Btn>{dirty && <span className="text-[12px] text-[#8F6200]">Unsaved changes</span>}</div>}
       </Card>
+
+      <HistoryCard pattern={pattern} tick={histTick} />
 
       <AnalysisCard pattern={pattern} sequence={sequence} steps={weekly ? steps : null} crews={crews} />
 
@@ -295,6 +388,19 @@ const PatternDetail: React.FC<{
   );
 };
 
+/** Earlier definitions of the pattern and the dates each applied. */
+const HistoryCard: React.FC<{ pattern: RotationPattern; tick: number }> = ({ pattern, tick }) => {
+  const rev = useApi<RotationRevision[]>(`/scheduling/rotations/${pattern.id}/revisions`, [pattern.id, pattern.version, tick]);
+  if (!rev.data?.length) return null;
+  return (
+    <Card title="Change history" sub={pattern.effectiveFrom ? `The current definition applies from ${dayYear(pattern.effectiveFrom)}.` : 'Earlier definitions of this pattern.'}>
+      <ul className="text-[13px] space-y-1">
+        {rev.data.map((r) => <li key={`${r.version}-${r.changedAt}`}>Version {r.version}: {r.name}, {r.kind === 'WEEKLY' ? `${r.cycleDays / 7}-week rotation` : `${r.cycleDays}-day cycle`}, {r.effectiveFrom ? `from ${dayYear(r.effectiveFrom)}` : 'from the start'} until {r.effectiveTo ? dayYear(r.effectiveTo) : 'now'}. Changed by {r.changedBy ?? 'unknown'}{r.note ? `: ${r.note}` : ''}.</li>)}
+      </ul>
+    </Card>
+  );
+};
+
 /** What the pattern means for the people on it, worked out as it is edited: before anyone is put on it. */
 const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | null)[]; steps: RotationStep[] | null; crews: RotationCrew[] }> = ({ pattern, sequence, steps, crews }) => {
   const [data, setData] = useState<RotationAnalysis | null>(null);
@@ -311,7 +417,7 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
     }, 400);
     return () => { live = false; clearTimeout(t); };
   }, [key]);
-  const mark = (l: string) => (l === 'OK' ? '✓' : l === 'INFO' ? 'i' : '!');
+  const mark = (l: string) => (l === 'OK' ? 'OK' : l === 'INFO' ? 'i' : '!');
   const tone = (l: string) => (l === 'OK' ? 'text-[#2A7553]' : l === 'INFO' ? 'text-[#525252]' : 'text-[#8F6200] font-medium');
   return (
     <Card title="What this pattern means" sub="Worked out from the days above as you change them, against your company limits. It does not look at who is in the crews.">
@@ -319,9 +425,15 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
       {loading && !data && <Busy text="Working it out…" />}
       {data && (
         <>
+          {(() => {
+            const checks = data.findings.filter((f) => f.level === 'WARN').length + (data.legal?.findings.length ?? 0) + (data.fairness?.notes.length ?? 0);
+            return <p className={`text-[14px] font-semibold ${checks ? 'text-[#8F6200]' : 'text-[#2A7553]'}`}>{checks ? `${checks} thing${checks === 1 ? '' : 's'} worth a look before you use this pattern` : 'Looks fine: nothing to check'}</p>;
+          })()}
           <ul className="space-y-1 text-[13px]">
             {data.findings.map((f, i) => <li key={i} className={tone(f.level)}>{mark(f.level)} {f.text}</li>)}
           </ul>
+          <details>
+          <summary className="cursor-pointer text-[12px] underline text-[#525252] mb-2">See the hours and rest for each crew</summary>
           <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg">
             <table className="w-full text-[12px]">
               <thead className="bg-[#FAFAF8] text-[#6B6B6B] border-b border-[#E5E5E0]">
@@ -342,6 +454,31 @@ const AnalysisCard: React.FC<{ pattern: RotationPattern; sequence: (string | nul
               </tbody>
             </table>
           </div>
+          </details>
+          {data.legal && (
+            <div className="space-y-1.5">
+              <div className="text-[13px] font-semibold">Labour law{data.legal.packName ? `: ${data.legal.packName}` : ''}</div>
+              {!data.legal.applied ? <p className="text-[12px] text-[#6B6B6B]">No labour-law pack applies to this group yet, so no legal check was made. Choose one under Compliance Packs.</p>
+                : data.legal.findings.length === 0 ? <p className="text-[12px] text-[#2A7553]">Within the limits of this pack.</p>
+                : <ul className="space-y-1 text-[13px]">{data.legal.findings.map((f, i) => <li key={i} className={f.severity === 'BLOCK' ? 'text-[#BC3F3F] font-medium' : 'text-[#8F6200]'}>{f.severity === 'BLOCK' ? 'Over the legal limit: ' : 'Worth checking: '}{f.label}{f.count > 1 && f.rule !== 'NIGHT_WORK' ? ` (${f.count} times)` : ''}{f.example ? `, for example ${f.example}` : ''}</li>)}</ul>}
+            </div>
+          )}
+          {data.fairness && (
+            <div className="space-y-1.5">
+              <details>
+              <summary className="cursor-pointer text-[12px] underline text-[#525252]">See how nights, weekends and Sundays are shared between crews (per year)</summary>
+              <div className="overflow-x-auto border border-[#E5E5E0] rounded-lg mt-2">
+                <table className="w-full text-[12px]">
+                  <thead className="bg-[#FAFAF8] text-[#6B6B6B] border-b border-[#E5E5E0]"><tr><th className="p-2 text-left">Crew</th><th className="p-2 text-right">Shifts</th><th className="p-2 text-right">Nights</th><th className="p-2 text-right">Weekend days</th><th className="p-2 text-right">Sundays</th><th className="p-2 text-right">Holidays worked</th></tr></thead>
+                  <tbody>{data.fairness.perCrew.map((c) => (
+                    <tr key={c.crew} className="border-b border-[#F0F0EC] last:border-0"><td className="p-2 font-medium">{c.crew}</td><td className="p-2 text-right tabular-nums">{c.shiftsPerYear}</td><td className="p-2 text-right tabular-nums">{c.nightsPerYear}</td><td className="p-2 text-right tabular-nums">{c.weekendDaysPerYear}</td><td className="p-2 text-right tabular-nums">{c.sundaysPerYear}</td><td className="p-2 text-right tabular-nums">{c.holidaysWorkedPerYear ?? 'n/a'}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              </details>
+              {data.fairness.notes.map((n, i) => <p key={i} className="text-[12px] text-[#8F6200]">{n}</p>)}
+            </div>
+          )}
           {data.contractHours && <p className="text-[11px] text-[#6B6B6B]">Compared with a {data.contractHours}-hour week (this WFM group's full-time hours), and with the limits in Configuration › Scheduling Rules.</p>}
         </>
       )}
@@ -427,7 +564,7 @@ const MembersPanel: React.FC<{ pattern: RotationPattern; canWrite: boolean; temp
       {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="ok" onClose={() => setNotice('')}>{notice}</Banner>}
       <div className="mb-2 max-w-xs"><Input aria-label="Find a person" placeholder="Find a person by name or number" value={find} onChange={(e) => { setFind(e.target.value); setShown(100); }} /></div>
-      {!emps.data?.length ? <Empty title={find.trim() ? 'No one matches that search' : 'No people in this WFM group yet'} /> : (
+      {emps.data === null ? (emps.error ? <LoadFailed what="the people" error={emps.error} reload={emps.reload} /> : <Waiting what="the people" shape="table" reload={emps.reload} />) : !emps.data.length ? <Empty title={find.trim() ? 'No one matches that search' : 'No people in this WFM group yet'} /> : (
         <div className="max-h-[420px] overflow-y-auto divide-y divide-[#F0F0EC] border border-[#E5E5E0] rounded-lg">
           {emps.data.map((e) => {
             const a = assign[e.id] ?? blankAssign;

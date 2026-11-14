@@ -4,8 +4,10 @@
  * view NICE/Genesys/Verint sell as a separate module. The default attrition rate is not a guess: it comes from the
  * audit trail's own record of who in this group has actually been marked Terminated over the last 12 months.
  */
+import { Waiting } from '../common/loading';
 import React, { useState } from "react";
 import { dec } from "../../services/api";
+import { planNote } from "../../services/capacityStory";
 import { useApi } from "./hooks";
 import { Busy } from "./ui";
 import { Metric, Section } from "../wfm/app-shell";
@@ -21,7 +23,7 @@ export function HeadcountPlanSection({ groupId, versionId, rev }: { groupId: str
   const [pctOverride, setPctOverride] = useState<number | null>(null);
   const a = attr.data;
 
-  if ((attr.loading && !a) || (cap.loading && !cap.data)) return <Section title="Headcount plan"><div className="p-6"><Busy text="Loading headcount…" /></div></Section>;
+  if ((attr.loading && !a) || (cap.loading && !cap.data)) return <Section title="Headcount plan"><div className="p-6"><Waiting what="the headcount plan" shape="table" /></div></Section>;
   if (!a || !cap.data) return null;
 
   const pct = pctOverride ?? a.estimatedAnnualPct;
@@ -46,6 +48,7 @@ export function HeadcountPlanSection({ groupId, versionId, rev }: { groupId: str
   });
   const totalHires = rows.reduce((s, r) => s + r.hires, 0);
   const firstShort = rows.find((r) => r.hires > 0);
+  const note = planNote(rows);
 
   return (
     <Section title="Headcount plan" action={
@@ -61,10 +64,12 @@ export function HeadcountPlanSection({ groupId, versionId, rev }: { groupId: str
           ? ` The default (${dec(a.estimatedAnnualPct, 1)}%) comes from ${a.terminatedTrailing12mo} termination${a.terminatedTrailing12mo === 1 ? "" : "s"} of this group's people over the last 12 months -- type a different number to try another assumption.`
           : " No terminations recorded for this group in the last 12 months, so the default starts at 0% -- type an assumption to plan against."}
       </p>
+      {note && (
+        <div data-testid="plan-note" data-tone={note.tone} className={`mx-6 mb-3 rounded-lg border px-4 py-2.5 text-[14px] font-medium ${note.tone === "over" ? "border-[#B7791F] bg-[#FFF8EB] text-[#7A5210]" : note.tone === "short" ? "border-[#C84A4A] bg-[#FDF2F2] text-[#9B2C2C]" : "border-[#2F7D5A] bg-[#F1F8F4] text-[#1F5C41]"}`}>{note.text}</div>)}
       <div className="grid grid-cols-2 divide-x border-y md:grid-cols-4 md:divide-y-0">
-        <Metric label="Headcount today" value={String(a.currentHeadcount)} />
-        <Metric label="Total hires needed" value={String(totalHires)} hint={`over ${rows.length} month${rows.length === 1 ? "" : "s"}`} tone={totalHires > 0 ? "warning" : undefined} />
-        <Metric label="First month short-handed" value={firstShort ? firstShort.period : "None"} tone={firstShort ? "critical" : undefined} />
+        <Metric label="Headcount today" value={String(a.currentHeadcount)} hint="Active people in this group" />
+        <Metric label="Total hires needed" value={String(totalHires)} hint={totalHires === 0 ? "None: you are not short in this period" : `over ${rows.length} month${rows.length === 1 ? "" : "s"}`} tone={totalHires > 0 ? "warning" : undefined} />
+        <Metric label="Short-handed" value={firstShort ? `From ${firstShort.period}` : "Never in this period"} tone={firstShort ? "critical" : undefined} />
         <Metric label="Headcount at the end" value={String(rows[rows.length - 1].end)} />
       </div>
       <RefTable right={[1, 2, 3, 4, 5, 6]} head={["Month", "People needed (FTE)", "Start of month", "Lost to attrition", "Before hiring", "Hire this month", "End of month"]}>

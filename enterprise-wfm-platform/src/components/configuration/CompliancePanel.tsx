@@ -3,6 +3,7 @@
  * are read-only: copy one to change it, or start a new one. Say where each pack applies: the whole organisation, a WFM group or a team,
  * and the most specific one wins. The schedule generator will not create shifts a BLOCK rule forbids, and a schedule with BLOCK problems cannot be published.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Plus, Trash2 } from 'lucide-react';
 import { api, Team } from '../../services/api';
@@ -14,7 +15,7 @@ type Param = { key: string; label: string; kind: 'number' | 'time' | 'boolean'; 
 type Spec = { type: string; label: string; help: string; params: Param[]; defaultSeverity: 'BLOCK' | 'WARN'; informational?: boolean };
 type Rule = { id: string; type: string; severity: 'BLOCK' | 'WARN'; params: Record<string, any> };
 type Pack = { id: string; code: string; name: string; region: string; description: string; rules: Rule[]; builtIn: boolean; usedBy: number };
-type Assignment = { scopeType: 'TENANT' | 'GROUP' | 'TEAM'; scopeId: string | null; scopeName: string; packId: string; packName: string };
+type Assignment = { scopeType: 'TENANT' | 'REGION' | 'SITE' | 'GROUP' | 'TEAM'; scopeId: string | null; scopeName: string; packId: string; packName: string };
 
 export const CompliancePanel: React.FC = () => {
   const { can, groups } = useForecast();
@@ -24,6 +25,8 @@ export const CompliancePanel: React.FC = () => {
   const packs = useApi<Pack[]>('/compliance/packs', [tick]);
   const assigns = useApi<Assignment[]>('/compliance/assignments', [tick]);
   const teams = useApi<Team[]>('/workforce/teams?fields=pick');
+  const sites = useApi<{ id: string; name: string; status: string; regionName: string | null }[]>('/config/sites');
+  const regions = useApi<{ id: string; name: string }[]>('/config/regions');
   const [sel, setSel] = useState<string>('');
   const [draft, setDraft] = useState<Pack | null>(null);
   const [error, setError] = useState('');
@@ -50,7 +53,8 @@ export const CompliancePanel: React.FC = () => {
   const setParam = (i: number, k: string, v: any) => setDraft((d) => d && { ...d, rules: d.rules.map((r, j) => (j === i ? { ...r, params: { ...r.params, [k]: v } } : r)) });
   const addRule = (type: string) => { const s = spec.get(type); if (!s) return; setDraft((d) => d && { ...d, rules: [...d.rules, { id: `${type.toLowerCase()}-${d.rules.length + 1}`, type, severity: s.defaultSeverity, params: Object.fromEntries(s.params.map((p) => [p.key, p.default])) }] }); };
 
-  if (packs.loading && !packs.data) return <Busy text="Loading packs…" />;
+  if (packs.loading && !packs.data) return <Waiting what="compliance packs" shape="cards" reload={packs.reload} />;
+  if (packs.error && !packs.data) return <LoadFailed what="compliance packs" error={packs.error} reload={packs.reload} />;
   const ro = !draft || draft.builtIn || !canWrite;
   return (
     <div className="space-y-6">
@@ -122,9 +126,13 @@ export const CompliancePanel: React.FC = () => {
         </Card>
       )}
 
-      <Card title="Where each pack applies" sub="The most specific choice wins: a team's pack, else its WFM group's, else the organisation's. With none chosen, only the scheduling rules and each person's contract apply.">
+      <Card title="Where each pack applies" sub="The most specific choice wins: a person's, else their team's, else the WFM group's, else the site's, else the region's, else the organisation's. With none chosen, only the scheduling rules and each person's contract apply.">
         <div className="space-y-3 max-w-3xl">
           <AssignRow label="Whole organisation" value={at('TENANT', null)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('TENANT', null, v)} />
+          {(regions.data?.length ?? 0) > 0 && <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] pt-2">Regions</div>}
+          {(regions.data ?? []).map((r) => <AssignRow key={r.id} label={r.name} value={at('REGION', r.id)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('REGION', r.id, v)} />)}
+          {(sites.data?.length ?? 0) > 0 && <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] pt-2">Sites</div>}
+          {(sites.data ?? []).filter((s) => s.status !== 'CLOSED' || at('SITE', s.id)).map((s) => <AssignRow key={s.id} label={`${s.name}${s.regionName ? ` (${s.regionName})` : ''}`} value={at('SITE', s.id)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('SITE', s.id, v)} />)}
           <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] pt-2">WFM groups</div>
           {groups.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No WFM groups yet.</p>}
           {groups.map((g) => <AssignRow key={g.id} label={g.name} value={at('GROUP', g.id)} packs={packs.data ?? []} disabled={!canWrite || busy} onChange={(v) => assign('GROUP', g.id, v)} />)}

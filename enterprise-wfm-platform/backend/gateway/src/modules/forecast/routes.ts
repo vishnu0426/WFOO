@@ -7,16 +7,18 @@ import { HttpError, bad, conflict, isoDay, notFound, parse } from '../../http.ts
 import { cached, dropCache, engine, key, peekCache, publish, storeCache } from '../../infra.ts';
 import {
   MODELS, SLOT_H, addDays, aggregateStaff, bucketRecords, capacityFor, createVersion, dayRange, erlangFactor, holdout, loadGroup, loadVersion, num, realised, rollup,
-  runStaffing, scenarioResult, shortLabel, todayIn, versionDto, versionRecords, versionRows, type Daily, type Group, type Overrides, type QRow, type Rec,
+  runStaffing, scenarioResult, shortLabel, staffingHealth, todayIn, versionDto, versionRecords, versionRows, type Daily, type Group, type Overrides, type QRow, type Rec,
 } from './service.ts';
 import { LEARNING, evaluate, learn } from './learning.ts';
+import { WINDOW_DAYS, headlineFrom } from './accuracyHeadline.ts';
 import { normalise, parseCsv, type DateFormat } from '../csv.ts';
 import { planRows, summarisePlan, withPlainVolumeHeader } from './planningImport.ts';
 import { DEMAND_SQL } from './demand.ts';
 import { MIN_OWN_DAYS } from './borrowShape.ts';
-import { analyseQueue, type QueueQuality } from './historyQuality.ts';
+import { advise, analyseQueue, type QueueQuality } from './historyQuality.ts';
 import { BIAS, GOOD, POOR, trendOf } from './accuracyTrend.ts';
 import { payWeekFor } from '../payWeek.ts';
+import { compareDays } from './compare.ts';
 
 export const forecast = Router();
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -25,18 +27,19 @@ const uuid = z.string().uuid();
 
 // ---------------------------------------------------------------- versions
 
+/** A version as the lists show it: the model that won and its typical daily miss, read from the saved summary. */
+function withModel(v: any) {
+  const series: any[] = v.summary?.series ?? [];
+  const picks = series.map((x) => ({ model: x.model as string, wape: (x.scores ?? []).find((c: any) => c.selected)?.wape as number | undefined }));
+  const models = [...new Set(picks.map((x) => x.model).filter(Boolean))];
+  const wapes = picks.map((x) => x.wape).filter((w): w is number => typeof w === 'number');
+  return { ...versionDto(v), model: models.length === 1 ? models[0] : models.length > 1 ? 'mixed' : null, wape: wapes.length ? sum(wapes) / wapes.length : null };
+}
 forecast.get('/versions', requires('forecast:read'), async (req, res) => {
   const groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
   const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>(
     `SELECT * FROM forecast_versions WHERE tenant_id = :t AND ($1::uuid IS NULL OR wfm_group_id = $1) ORDER BY kind, seq DESC LIMIT 300`, [groupId]));
-  // the list also carries the model that won and its typical daily miss, read from the saved summary
-  res.json(rows.map((v) => {
-    const series: any[] = v.summary?.series ?? [];
-    const picks = series.map((x) => ({ model: x.model as string, wape: (x.scores ?? []).find((c: any) => c.selected)?.wape as number | undefined }));
-    const models = [...new Set(picks.map((x) => x.model).filter(Boolean))];
-    const wapes = picks.map((x) => x.wape).filter((w): w is number => typeof w === 'number');
-    return { ...versionDto(v), model: models.length === 1 ? models[0] : models.length > 1 ? 'mixed' : null, wape: wapes.length ? sum(wapes) / wapes.length : null };
-  }));
+  res.json(rows.map(withModel));
 });
 
 // ---------------------------------------------------------------- preview before creating: a typical day from recent history
@@ -67,6 +70,7 @@ forecast.get('/history-quality', requires('forecast:read'), async (req, res) => 
     const group = await loadGroup(tx, q.groupId);
     const ids = group.queues.map((x) => x.id);
     if (!ids.length) return { groupId: group.id, queues: [] as QueueQuality[], pending: [] as string[] };
+    const staleAfterDays = (await tx.one<{ d: number }>('SELECT history_stale_days AS d FROM wfm_groups WHERE tenant_id = :t AND id = $1', [q.groupId]))?.d ?? 3;
     const meta = await tx.q<any>('SELECT q.id, q.open_slot, q.close_slot, q.volume_basis, q.shape_from_queue_id, d.name AS shape_from_name FROM queues q LEFT JOIN queues d ON d.id = q.shape_from_queue_id WHERE q.tenant_id = :t AND q.id = ANY($1::uuid[])', [ids]);
     // Days, volume and abandoned calls come from the daily rollup (one row per queue per day, kept exact by the database): reading a year of intervals for every queue took
     // seconds for a big group and grew with history. Only odd handle times need the intervals themselves, and only the last 120 days of them, against a median worked out
@@ -81,17 +85,17 @@ forecast.get('/history-quality', requires('forecast:read'), async (req, res) => 
     const queues = group.queues.map((gq) => {
       const m = meta.find((x: any) => x.id === gq.id);
       const own = rows.filter((r: any) => r.queueId === gq.id);
-      const a: QueueQuality & { shapeFromQueueId?: string | null; shapeFromName?: string | null } = analyseQueue({ id: gq.id, name: gq.name, openSlot: m?.openSlot ?? 0, closeSlot: m?.closeSlot ?? 96, volumeBasis: m?.volumeBasis ?? 'OFFERED', rows: own }, today);
+      const a: QueueQuality & { shapeFromQueueId?: string | null; shapeFromName?: string | null } = analyseQueue({ id: gq.id, name: gq.name, openSlot: m?.openSlot ?? 0, closeSlot: m?.closeSlot ?? 96, volumeBasis: m?.volumeBasis ?? 'OFFERED', rows: own }, today, { staleAfterDays });
       a.shapeFromQueueId = m?.shapeFromQueueId ?? null; a.shapeFromName = m?.shapeFromName ?? null;
       if (a.shapeFromQueueId) {
         const intervalDays = own.filter((r: any) => r.intervals > 1).length;
-        a.findings.push(intervalDays < MIN_OWN_DAYS
+        a.findings.push(advise(intervalDays < MIN_OWN_DAYS
           ? { code: 'BORROWED_SHAPE', severity: 'INFO', count: intervalDays, message: `Borrowing the daily pattern of ${a.shapeFromName}: this queue has ${intervalDays} of the ${MIN_OWN_DAYS} days of its own interval history it needs. Its volume level still comes from its own history. It switches to its own pattern by itself.` }
-          : { code: 'BORROWED_SHAPE_DONE', severity: 'INFO', count: intervalDays, message: `This queue has ${intervalDays} days of its own interval history, so it uses its own daily pattern. The borrowed setting (${a.shapeFromName}) can be cleared.` });
+          : { code: 'BORROWED_SHAPE_DONE', severity: 'INFO', count: intervalDays, message: `This queue has ${intervalDays} days of its own interval history, so it uses its own daily pattern. The borrowed setting (${a.shapeFromName}) can be cleared.` }));
       }
       return a;
     });
-    return { groupId: group.id, queues, pending: oddKnown ? [] : ['AHT_ODD'] };
+    return { groupId: group.id, staleAfterDays, queues, pending: oddKnown ? [] : ['AHT_ODD'] };
   }))();
   res.json(out);
 });
@@ -130,7 +134,8 @@ forecast.get('/preview', requires('forecast:read'), async (req, res) => {
   const ahtBase = totAll > 0 ? data.rows.reduce((x: number, r: any) => x + r.work, 0) / totAll : 0;
   const ahtFactor = q.aht !== undefined && ahtBase > 0 ? q.aht / ahtBase : 1;
   const qrows = data.rows.filter((r) => nDays.get(r.dow)).map((r) => ({ queueId: r.queueId, day: addDays(base, r.dow), slot: r.slot, vol: r.tot / nDays.get(r.dow)!, aht: (r.tot > 0 ? r.work / r.tot : 300) * ahtFactor }));
-  const staff = aggregateStaff(await runStaffing(data.group, qrows, over));
+  const staffOut = await runStaffing(data.group, qrows, over);
+  const staff = aggregateStaff(staffOut);
   const vol = new Map<string, number>();
   for (const r of qrows) vol.set(`${r.day}|${r.slot}`, (vol.get(`${r.day}|${r.slot}`) ?? 0) + r.vol);
 
@@ -140,11 +145,34 @@ forecast.get('/preview', requires('forecast:read'), async (req, res) => {
   const slots = Array.from({ length: 96 }, (_, s) => { const a = staff.get(`${day}|${s}`); return { slot: s, volume: r2(vol.get(`${day}|${s}`) ?? 0), required: a?.required ?? 0, onPhones: a?.base ?? 0 }; });
   const weekHours = [...staff.values()].reduce((t, a) => t + a.required * SLOT_H, 0);
   res.json({
-    ready: true, dow, aht: ahtBase > 0 ? Math.round(ahtBase * ahtFactor) : null, ahtHistory: ahtBase > 0 ? Math.round(ahtBase) : null, basis: { from: data.first, to: data.last, weeks: Math.round((Math.max(...[...nDays.values()], 1))) }, slots,
+    ready: true, staffing: staffingHealth(staffOut), dow, aht: ahtBase > 0 ? Math.round(ahtBase * ahtFactor) : null, ahtHistory: ahtBase > 0 ? Math.round(ahtBase) : null, basis: { from: data.first, to: data.last, weeks: Math.round((Math.max(...[...nDays.values()], 1))) }, slots,
     day: { volume: Math.round(sum(slots.map((x) => x.volume))), peakRequired: Math.max(0, ...slots.map((x) => x.required)), agentHours: r2(sum(slots.map((x) => x.required)) * SLOT_H) },
     week: { volume: Math.round(sum([...vol.values()])), agentHours: r2(weekHours), fte: r2(weekHours / (data.group.fteHoursWeek || 40)) },
     targets: { serviceLevel: over.serviceLevel ?? data.group.serviceLevel, answerSec: over.answerSec ?? data.group.answerSec, occupancyCap: over.occupancyCap ?? data.group.occupancyCap, shrinkage: over.shrinkage ?? data.group.shrinkage, method: data.group.method, fteHoursWeek: data.group.fteHoursWeek },
   });
+});
+
+/** The model registry for one forecast version: every model run behind it, with the data, settings, tests and events it rested on. */
+forecast.get('/versions/:id/registry', requires('forecast:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
+    `SELECT r.*, q.name AS queue_name, r.training_start::text AS training_start, r.training_end::text AS training_end, r.forecast_from::text AS forecast_from, r.forecast_to::text AS forecast_to
+       FROM forecast_model_runs r LEFT JOIN queues q ON q.id = r.queue_id WHERE r.tenant_id = :t AND r.forecast_version_id = $1 ORDER BY q.name NULLS FIRST`, [id]));
+  if (!rows.length) throw notFound('Model records for this forecast');
+  res.json(rows.map((r) => ({ id: r.id, queueId: r.queueId, queueName: r.queueName ?? 'Group total', channel: r.channel, model: r.modelName, requested: r.requestedModel, modelVersion: r.modelVersion, engineVersion: r.engineVersion,
+    libraries: r.libraryVersions, training: { from: r.trainingStart, to: r.trainingEnd, rows: r.trainingRows, dataHash: r.dataHash }, config: r.modelConfig, backtest: r.backtest, bands: r.bands,
+    forecast: { from: r.forecastFrom, to: r.forecastTo, p10: r.volumeP10, p50: r.volumeP50, p90: r.volumeP90 }, events: r.sourceEvents, eventsHash: r.eventsHash, generatedBy: r.generatedBy, generatedAt: r.generatedAt, siteId: r.siteId })));
+});
+
+/** Every model run for a queue (or a whole group), newest first: how the model and its inputs changed from one forecast to the next. */
+forecast.get('/registry', requires('forecast:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid.optional(), queueId: uuid.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), req.query);
+  if (!q.groupId && !q.queueId) throw bad('Give a group or a queue.');
+  const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
+    `SELECT r.id, r.forecast_version_id, r.queue_id, r.model_name, r.model_version, r.data_hash, r.training_end::text AS training_end, r.bands, r.generated_by, r.generated_at, v.name AS version_name
+       FROM forecast_model_runs r JOIN forecast_versions v ON v.id = r.forecast_version_id
+      WHERE r.tenant_id = :t AND ($1::uuid IS NULL OR r.wfm_group_id = $1) AND ($2::uuid IS NULL OR r.queue_id = $2) ORDER BY r.generated_at DESC LIMIT $3`, [q.groupId ?? null, q.queueId ?? null, q.limit]));
+  res.json(rows.map((r) => ({ id: r.id, versionId: r.forecastVersionId, versionName: r.versionName, queueId: r.queueId, model: r.modelName, modelVersion: r.modelVersion, dataHash: r.dataHash, trainingEnd: r.trainingEnd, bands: r.bands, generatedBy: r.generatedBy, generatedAt: r.generatedAt })));
 });
 
 const CreateBody = z.object({
@@ -332,7 +360,7 @@ forecast.get('/versions/:id/data', requires('forecast:read'), async (req, res) =
 
 const STAB: Record<string, string> = { HIGH: 'Steady', MEDIUM: 'Some swings', VARIABLE: 'Swings a lot' };
 const MODEL_NAME: Record<string, string> = {
-  snaive: 'Seasonal naive (same as last week)', wavg: 'Weighted weekly average', ets: 'Holt-Winters (ETS)', gbm: 'Gradient boosting (multi-feature)', combo: 'Ensemble (ETS + weekly average + boosting)', croston: 'Croston (sparse queues)', sarima: 'Seasonal ARIMA (weekly cycle, 12+ weeks of history)', arima: 'ARIMA with weekday effects (12+ weeks of history)',
+  snaive: 'Seasonal naive (same as last week)', wavg: 'Weighted weekly average', ets: 'Holt-Winters (ETS)', gbm: 'Gradient boosting (multi-feature)', combo: 'Ensemble (ETS + weekly average + boosting)', croston: 'Croston (sparse queues)', sarima: 'Seasonal ARIMA (weekly cycle, 12+ weeks of history)', arima: 'ARIMA with weekday effects (12+ weeks of history)', lstm: 'LSTM neural network (16+ weeks of steady history)',
 };
 forecast.get('/versions/:id/leaderboard', requires('forecast:read'), async (req, res) => {
   const p = me(req), id = String(req.params.id), queueId = req.query.queueId ? parse(uuid, req.query.queueId) : null;
@@ -349,14 +377,15 @@ forecast.get('/versions/:id/leaderboard', requires('forecast:read'), async (req,
     const better = gain >= 0 ? `${Math.round(gain * 100)}% better than the baseline` : `${Math.round(-gain * 100)}% worse than the baseline`;
     return {
       modelId: m.model, modelName: MODEL_NAME[m.model] ?? m.model, rank: i + 1, isRecommended: !!m.selected,
-      wapePercent: r2(m.wape * 100), mapePercent: r2(m.mape * 100), mae: m.mae, rmse: m.rmse, biasPercent: r2(m.bias * 100), stabilityScore: m.stability, stability: STAB[m.stability] ?? m.stability,
+      wapePercent: r2(m.wape * 100), rawWapePercent: m.raw_scored ? r2(m.raw_wape * 100) : null, rawBiasPercent: m.raw_scored ? r2(m.raw_bias * 100) : null, rawMae: m.raw_scored ? m.raw_mae : null,
+      accuracyBasis: 'wapePercent is measured against the cleaned history the models learn from; rawWapePercent against what really came in, outliers and event days included.', mapePercent: r2(m.mape * 100), mae: m.mae, rmse: m.rmse, biasPercent: r2(m.bias * 100), stabilityScore: m.stability, stability: STAB[m.stability] ?? m.stability,
       vsBaselinePercent: r2(gain * 100),
       recommendationReason: m.model === 'snaive' ? 'The simple baseline: "same as last week". Every other model has to beat it.'
         : m.selected ? `Chosen: ${r2(m.wape * 100)}% average miss, ${better}.` : i === 0 ? `Most accurate, but not the one in use. ${better}.` : `${better}; ${m.stability === 'HIGH' ? 'steady from week to week' : 'error moves around between weeks'}.`,
       backtestPeriod: 'Last 4 weeks (rolling 7-day-ahead forecasts)',
     };
   });
-  res.json({ versionId: id, queueId: s.queueId, queueName: s.name, baselineWapePercent: naive ? r2(naive.wape * 100) : null, cleanedDays: s.cleanedDays, sigmaRel: s.sigmaRel, notes: s.notes, rows, series: series.map((x) => ({ queueId: x.queueId, name: x.name })) });
+  res.json({ versionId: id, queueId: s.queueId, queueName: s.name, baselineWapePercent: naive ? r2(naive.wape * 100) : null, cleanedDays: s.cleanedDays, sigmaRel: s.sigmaRel, bands: s.bands ?? null, notes: s.notes, rows, series: series.map((x) => ({ queueId: x.queueId, name: x.name })) });
 });
 
 // ---------------------------------------------------------------- adjustments (draft only, reason mandatory)
@@ -403,7 +432,7 @@ forecast.patch('/versions/:id/adjustments', requires('forecast:adjust'), async (
 // ---------------------------------------------------------------- lifecycle: Draft -> Submitted -> Approved -> Published (-> Archived)
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'PUBLISHED' | 'ARCHIVED';
-async function move(req: any, res: any, from: Status[], to: Status, action: 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH', reasonRequired = false) {
+async function move(req: any, res: any, from: Status[], to: Status, action: 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'ARCHIVE', reasonRequired = false) {
   const p = me(req), id = String(req.params.id);
   const reason = String(req.body?.reason ?? '').trim();
   if (reasonRequired && reason.length < 3) throw bad('A reason is required');
@@ -421,9 +450,10 @@ async function move(req: any, res: any, from: Status[], to: Status, action: 'SUB
       APPROVE: { set: 'approved_by = $2, approved_at = now()', params: [p.name] },
       REJECT: { set: 'submitted_by = NULL, submitted_by_id = NULL, submitted_at = NULL, approved_by = NULL, approved_at = NULL', params: [] },
       PUBLISH: { set: 'published_by = $2, published_at = now()', params: [p.name] },
+      ARCHIVE: { set: 'rev = rev', params: [] },
     };
     await tx.exec(`UPDATE forecast_versions SET status = '${to}', ${upd[action].set} WHERE tenant_id = :t AND id = $1`, [id, ...upd[action].params]);
-    await audit(tx, p, req, { action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to } });
+    await audit(tx, p, req, { action: action === 'ARCHIVE' ? 'UPDATE' : action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to }, diffSummary: action === 'ARCHIVE' ? 'archived' : undefined });
     return tx.one<any>('SELECT * FROM forecast_versions WHERE tenant_id = :t AND id = $1', [id]);
   });
   if (action === 'PUBLISH') { await dropCache(p.tenantId, 'sched:*'); }
@@ -434,6 +464,26 @@ forecast.post('/versions/:id/submit', requires('forecast:submit'), (req, res) =>
 forecast.post('/versions/:id/approve', requires('forecast:approve'), (req, res) => move(req, res, ['SUBMITTED'], 'APPROVED', 'APPROVE'));
 forecast.post('/versions/:id/reject', requiresAny('forecast:approve', 'forecast:submit'), (req, res) => move(req, res, ['SUBMITTED', 'APPROVED'], 'DRAFT', 'REJECT', true));
 forecast.post('/versions/:id/publish', requires('forecast:publish'), (req, res) => move(req, res, ['APPROVED'], 'PUBLISHED', 'PUBLISH'));
+/** Put a version that is not live away without deleting it (a reason is required; the live version cannot be archived, publish another to replace it). Clone it to work on it again. */
+forecast.post('/versions/:id/archive', requiresAny('forecast:approve', 'forecast:delete'), (req, res) => move(req, res, ['DRAFT', 'SUBMITTED', 'APPROVED'], 'ARCHIVED', 'ARCHIVE', true));
+
+/**
+ * One version set against another of the same forecast (the same group and type), day by day. `with` is the version compared against (the baseline, usually the live one); the answer
+ * is the version in the address minus the baseline. Totals are over the days both cover.
+ */
+forecast.get('/versions/:id/compare', requires('forecast:read'), async (req, res) => {
+  const p = me(req), id = String(req.params.id), base = parse(uuid, req.query.with);
+  if (base === id) throw bad('Choose a different version to compare with');
+  const { v, w, adj } = await withTenant(p.tenantId, async (tx) => ({
+    v: await loadVersion(tx, id), w: await loadVersion(tx, base),
+    adj: await tx.q<any>('SELECT version_id, count(*)::int AS n FROM forecast_intervals WHERE tenant_id = :t AND version_id = ANY($1::uuid[]) AND manual IS NOT NULL GROUP BY version_id', [[id, base]]),
+  }));
+  if (v.wfmGroupId !== w.wfmGroupId || v.kind !== w.kind) throw bad('Only versions of the same forecast (the same group and type) can be compared');
+  const [dv, dw] = await Promise.all([versionRecords(p.tenantId, v), versionRecords(p.tenantId, w)]);
+  const edits = (vid: string) => adj.find((x: any) => x.versionId === vid)?.n ?? 0;
+  // in the answer: a is the baseline, b is the version asked about
+  res.json({ base: withModel(w), version: withModel(v), adjusted: { base: edits(base), version: edits(id) }, ...compareDays(dw.daily, dv.daily) });
+});
 
 forecast.post('/versions/:id/clone', requires('forecast:create'), async (req, res) => {
   const p = me(req), id = String(req.params.id);
@@ -473,6 +523,7 @@ forecast.get('/versions/:id/export.csv', requires('forecast:read'), async (req, 
 // ---------------------------------------------------------------- scenarios (what-if)
 
 const Params = z.object({
+  ahtAddSec: z.number().min(-600).max(600).optional(),
   volumePct: z.number().min(-90).max(500).optional(), ahtPct: z.number().min(-90).max(500).optional(), serviceLevel: z.number().gt(0).lt(1).optional(), answerSec: z.number().int().positive().max(600).optional(),
   shrinkage: z.number().min(0).max(0.9).optional(), occupancyCap: z.number().gt(0.3).lte(1).optional(), method: z.enum(['erlang_c', 'erlang_a']).optional(), blended: z.boolean().optional(),
 });
@@ -509,11 +560,18 @@ forecast.post('/versions/:id/scenarios/compare', requires('forecast:read'), asyn
   const to = v.kind === 'LONG' || v.toDay <= cap4 ? v.toDay : cap4;
   const data = v.kind === 'LONG' ? (await versionRecords(p.tenantId, v)).daily : await withTenant(p.tenantId, (tx) => versionRows(tx, id, { from: v.fromDay, to }));
   const factor = v.kind === 'LONG' ? await erlangFactor(p.tenantId, group) : 1;
+  // "+15 s handle time" is applied as the same share of the average handle time on every interval (15 s on a 300 s average is +5%)
+  const rows: { w: number; aht: number }[] = (data as any[]).map((r) => ({ w: r.vol ?? r.volume ?? 0, aht: r.aht ?? 0 }));
+  const wsum = rows.reduce((t, r) => t + r.w, 0), avgAht = wsum > 0 ? rows.reduce((t, r) => t + r.w * r.aht, 0) / wsum : 0;
+  const withSeconds = ({ ahtAddSec, ...rest }: any): Overrides => (ahtAddSec && avgAht > 0 ? { ...rest, ahtPct: ((1 + (rest.ahtPct ?? 0) / 100) + ahtAddSec / avgAht - 1) * 100 } : rest);
+  const meta = await withTenant(p.tenantId, async (tx) => ({ rate: (await tx.one<{ r: string | null }>('SELECT agent_cost_per_hour::text AS r FROM wfm_groups WHERE tenant_id = :t AND id = $1', [v.wfmGroupId]))?.r, cur: (await tx.one<{ c: string }>('SELECT currency AS c FROM tenants WHERE id = :t'))?.c ?? 'USD' }));
+  const rate = meta.rate == null ? null : Number(meta.rate);
   const results: any[] = [];
-  for (const s of [{ name: 'Baseline', params: {} as Overrides }, ...list]) results.push(await scenarioResult(v, group, data, s.name, s.params, factor, to));
+  for (const s of [{ name: 'Baseline', params: {} as any }, ...list]) results.push(await scenarioResult(v, group, data, s.name, withSeconds(s.params), factor, to));
+  results.forEach((r, i) => { r.params = i === 0 ? {} : list[i - 1].params; r.cost = rate === null ? null : r2(r.agentHours * rate); });
   const base = results[0];
-  for (const r of results) { r.impactRequiredFteDelta = r2(r.fte - base.fte); r.impactServiceLevelDelta = r.serviceLevel !== null && base.serviceLevel !== null ? r2((r.serviceLevel - base.serviceLevel) * 100) : null; }
-  res.json({ version: versionDto(v), window: { from: v.fromDay, to }, results });
+  for (const r of results) { r.impactRequiredFteDelta = r2(r.fte - base.fte); r.impactServiceLevelDelta = r.serviceLevel !== null && base.serviceLevel !== null ? r2((r.serviceLevel - base.serviceLevel) * 100) : null; r.impactCostDelta = r.cost !== null && base.cost !== null ? r2(r.cost - base.cost) : null; }
+  res.json({ version: versionDto(v), window: { from: v.fromDay, to }, costPerHour: rate, currency: meta.cur, avgAhtSec: Math.round(avgAht), results });
 });
 
 // ---------------------------------------------------------------- capacity plan (long-term)
@@ -524,6 +582,12 @@ forecast.get('/versions/:id/capacity', requires('forecast:read'), async (req, re
   const { daily } = await versionRecords(p.tenantId, v);
   const factor = await erlangFactor(p.tenantId, group);
   const cap = capacityFor(group, daily, factor);
+  // who there is to do the work, and where the shrinkage figure comes from: the page sets need against supply and says which shrinkage it used
+  const extra = await withTenant(p.tenantId, async (tx) => ({
+    hc: await tx.one<{ n: number; h: number }>("SELECT count(*)::int AS n, coalesce(sum(weekly_contract_hours), 0)::float8 AS h FROM employees WHERE tenant_id = :t AND primary_group_id = $1 AND status = 'ACTIVE'", [v.wfmGroupId]),
+    cats: await tx.q<any>('SELECT name, pct::float8 AS pct FROM shrinkage_categories WHERE tenant_id = :t AND wfm_group_id = $1 ORDER BY sort, name', [v.wfmGroupId]),
+    flat: (await tx.one<{ s: number }>('SELECT shrinkage::float8 AS s FROM wfm_groups WHERE tenant_id = :t AND id = $1', [v.wfmGroupId]))?.s ?? 0,
+  }));
   const grain = req.query.grain === 'week' ? 'week' : 'month';
   const by = new Map<string, any>();
   const keyOf = (d: string) => rollup([{ day: d, volume: 0, aht: 0, p10: 0, p90: 0, edited: false }], grain)[0].period;
@@ -534,6 +598,8 @@ forecast.get('/versions/:id/capacity', requires('forecast:read'), async (req, re
   }
   res.json({
     version: versionDto(v), factor: r2(factor), fteHoursWeek: group.fteHoursWeek, shrinkage: group.shrinkage,
+    headcount: { people: extra.hc?.n ?? 0, fte: r2((extra.hc?.h ?? 0) / group.fteHoursWeek) },
+    shrinkageSource: { source: extra.cats.length ? 'CATEGORIES' : 'FLAT', effectivePct: r2(group.shrinkage * 100), flatPct: r2(extra.flat * 100), categories: extra.cats.map((c: any) => ({ name: c.name, pct: c.pct })) },
     periods: [...by.values()].map((c) => ({ period: c.period, days: c.days, volume: Math.round(c.volume), workloadHours: r2(c.workloadHours), agentHours: r2(c.agentHours),
       fte: r2(c.agentHours / (group.fteHoursWeek * (c.days / 7))), peakFte: r2(c.peakDayHours / (group.fteHoursWeek / 7)) })),
   });
@@ -552,7 +618,24 @@ forecast.get('/accuracy', requires('forecast:read'), async (req, res) => {
 /** How the published forecasts really did, week after week, per queue: the miss, whether they run high or low, and whether they are drifting. */
 forecast.get('/accuracy-trend', requires('forecast:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ groupId: uuid, weeks: z.coerce.number().int().min(4).max(52).default(12) }), req.query);
-  res.json(await withTenant(p.tenantId, async (tx) => {
+  res.json(await accuracyTrendFor(p.tenantId, q.groupId, q.weeks));
+});
+
+/** The one accuracy figure every screen shows: 100% minus the daily WAPE of the published forecasts over the last 28 days, with the 28 days before for the change. */
+export async function headlineFor(tenantId: string, groupId: string) {
+  const cur = await evaluate(tenantId, groupId);
+  const prev = await evaluate(tenantId, groupId, addDays(cur.to, -WINDOW_DAYS));
+  return headlineFrom(cur, prev);
+}
+forecast.get('/accuracy-headline', requires('forecast:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid }), req.query);
+  res.json(await headlineFor(p.tenantId, q.groupId));
+});
+
+/** How the published forecasts really did, week after week (the accuracy trend screen and the Today page show this one result). */
+export async function accuracyTrendFor(tenantId: string, groupId: string, weeks: number) {
+  const q = { groupId, weeks };
+  return (await withTenant(tenantId, async (tx) => {
     const group = await loadGroup(tx, q.groupId), today = todayIn(group.timezone ?? 'UTC'), from = addDays(today, -q.weeks * 7 - 7);
     const weekStart = (await payWeekFor(tx, q.groupId)).start;
     const rows = await tx.q<any>(
@@ -566,7 +649,7 @@ forecast.get('/accuracy-trend', requires('forecast:read'), async (req, res) => {
     const t = trendOf(rows.map((r: any) => ({ queueId: r.queueId, name: r.name, day: r.day, actual: r.actual, forecast: r.forecast, absErr: r.absErr, intervals: r.intervals })), weekStart, q.weeks);
     return { groupId: q.groupId, weekStart, weeks: q.weeks, limits: { good: GOOD, poor: POOR, bias: BIAS }, ...t };
   }));
-});
+}
 
 // ---------------------------------------------------------------- staffing traceability
 
@@ -580,19 +663,20 @@ forecast.post('/trace-staffing', requires('forecast:read'), async (req, res) => 
   const chat = group.queues.filter((q) => q.channel === 'chat');
   const base = {
     channel: b.channel, service_level: b.serviceLevel ?? group.serviceLevel, answer_sec: b.answerSec ?? group.answerSec, occupancy_cap: b.occupancyCap ?? group.occupancyCap,
-    method: b.method ?? group.method, patience_sec: group.patienceSec, concurrency: b.channel === 'chat' ? (chat.length ? sum(chat.map((q) => q.concurrency)) / chat.length : 2) : 1, open_slot: 0, close_slot: 96,
+    method: b.method ?? group.method, patience_sec: group.patienceSec, chat_efficiency: group.chatEfficiency, concurrency: b.channel === 'chat' ? (chat.length ? sum(chat.map((q) => q.concurrency)) / chat.length : 2) : 1, open_slot: 0, close_slot: 96,
   };
   const shrink = b.shrinkage ?? group.shrinkage;
   const run = async (vol: number, over: object = {}) => (await engine.staffing({ inputs: [{ channel: b.channel, day: '2000-01-03', slot: 40, volume: vol, aht_sec: b.ahtSec }], params: [{ ...base, ...over }], interval_min: 15, shrinkage: shrink })).out[0];
   const r = await run(b.volume), raw = await run(b.volume, { occupancy_cap: 1 });
-  const conc = base.concurrency > 1 ? base.concurrency * 0.85 : 1;
+  const conc = base.concurrency > 1 ? base.concurrency * (group.chatEfficiency || 0.85) : 1;
   const traffic = (b.volume * b.ahtSec) / conc / 900;
   const sens = [];
   for (const pct of [-20, -10, 0, 10, 20]) { const o = await run(b.volume * (1 + pct / 100)); sens.push({ changePct: pct, volume: r2(b.volume * (1 + pct / 100)), agents: o.base, onSchedule: o.required }); }
   const d1 = (v: number) => (Math.round(v * 10) / 10).toString();
   res.json({
     channel: b.channel, method: base.method, volume: b.volume, ahtSec: b.ahtSec, trafficErlangs: r2(traffic), slaTarget: base.service_level, answerSec: base.answer_sec, occupancyCap: base.occupancy_cap, shrinkage: shrink,
-    rawAgents: raw.base, agents: r.base, onSchedule: r.required, serviceLevel: r.service_level, occupancy: r.occupancy, asaSec: r.asa_sec, abandon: r.abandon, warn: r.warn, sensitivity: sens,
+    rawAgents: raw.base, agents: r.base, onSchedule: r.required, serviceLevel: r.service_level, occupancy: r.occupancy, asaSec: r.asa_sec, abandon: r.abandon, warn: r.warn,
+    targetMet: r.target_met, status: r.status, offeredLoadErlangs: r.offered_load_erlangs, occupancyLimit: r.occupancy_limit, confidence: r.confidence, chatEfficiency: group.chatEfficiency, sensitivity: sens,
     steps: [
       `Forecast: ${d1(b.volume)} contacts in 15 minutes at ${Math.round(b.ahtSec)}s average handle time.`,
       `Workload (offered traffic) = contacts × AHT ÷ interval seconds = ${d1(b.volume)} × ${Math.round(b.ahtSec)} ÷ 900 = ${d1(traffic * conc)} Erlangs` + (conc > 1 ? `, ÷ ${d1(conc)} effective chats at once = ${d1(traffic)} Erlangs.` : '.'),
@@ -608,21 +692,23 @@ forecast.post('/trace-staffing', requires('forecast:read'), async (req, res) => 
 forecast.get('/events', requires('forecast:read'), async (req, res) => {
   const groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
   res.json(await withTenant(me(req).tenantId, (tx) => tx.q(
-    `SELECT e.id, e.wfm_group_id, e.queue_id, g.name AS group_name, q.name AS queue_name, e.name, e.kind, e.start_day::text AS start_day, e.end_day::text AS end_day, e.uplift_pct, e.lead_days, e.lag_days
-     FROM special_events e LEFT JOIN wfm_groups g ON g.id = e.wfm_group_id LEFT JOIN queues q ON q.id = e.queue_id
-     WHERE e.tenant_id = :t AND ($1::uuid IS NULL OR e.wfm_group_id IS NULL OR e.wfm_group_id = $1) ORDER BY e.start_day DESC`, [groupId])));
+    `SELECT e.id, e.wfm_group_id, e.site_id, e.queue_id, g.name AS group_name, st.name AS site_name, q.name AS queue_name, e.name, e.kind, e.start_day::text AS start_day, e.end_day::text AS end_day, e.uplift_pct, e.lead_days, e.lag_days
+     FROM special_events e LEFT JOIN wfm_groups g ON g.id = e.wfm_group_id LEFT JOIN sites st ON st.id = e.site_id LEFT JOIN queues q ON q.id = e.queue_id
+     WHERE e.tenant_id = :t AND ($1::uuid IS NULL OR (e.wfm_group_id IS NULL AND e.site_id IS NULL) OR e.wfm_group_id = $1 OR e.site_id = (SELECT site_id FROM wfm_groups WHERE id = $1)) ORDER BY e.start_day DESC`, [groupId])));
 });
 forecast.post('/events', requires('forecast:create'), async (req, res) => {
   const p = me(req);
   const b = parse(z.object({
-    groupId: uuid.nullable().optional(), queueId: uuid.nullable().optional(), name: z.string().min(1).max(100), kind: z.enum(['holiday', 'campaign', 'outage', 'other']).default('campaign'),
+    groupId: uuid.nullable().optional(), siteId: uuid.nullable().optional(), queueId: uuid.nullable().optional(), name: z.string().min(1).max(100), kind: z.enum(['holiday', 'campaign', 'outage', 'other']).default('campaign'),
     startDay: z.string().regex(isoDay), endDay: z.string().regex(isoDay).optional(), upliftPct: z.number().min(-95).max(500).default(0),
     leadDays: z.number().int().min(0).max(60).default(0), lagDays: z.number().int().min(0).max(60).default(0),
   }), req.body);
+  if (b.siteId && b.groupId) throw bad('An event belongs to one site or one group, not both.');
   const out = await withTenant(p.tenantId, async (tx) => {
+    if (b.siteId && !(await tx.one('SELECT 1 FROM sites WHERE tenant_id = :t AND id = $1', [b.siteId]))) throw notFound('Site');
     const e = await tx.one<any>(
-      `INSERT INTO special_events (tenant_id, wfm_group_id, queue_id, name, kind, start_day, end_day, uplift_pct, lead_days, lag_days) VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [b.groupId ?? null, b.queueId ?? null, b.name, b.kind, b.startDay, b.endDay ?? b.startDay, b.upliftPct, b.leadDays, b.lagDays]);
+      `INSERT INTO special_events (tenant_id, wfm_group_id, site_id, queue_id, name, kind, start_day, end_day, uplift_pct, lead_days, lag_days) VALUES (:t, $1, $10, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [b.groupId ?? null, b.queueId ?? null, b.name, b.kind, b.startDay, b.endDay ?? b.startDay, b.upliftPct, b.leadDays, b.lagDays, b.siteId ?? null]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'SPECIAL_EVENT', entityId: e!.id, entityName: b.name, after: b });
     return e;
   });
@@ -688,11 +774,12 @@ forecast.put('/learning/settings', requires('forecast:create'), async (req, res)
 
 /** Forget what was learned (for example after a lasting change in the business). New forecasts go back to the plain model output. */
 forecast.delete('/learning/factors', requires('forecast:create'), async (req, res) => {
-  const p = me(req), q = parse(groupQ, req.query);
+  // wiping what the system has learned needs a reason on record, like the other changes that move forecasts
+  const p = me(req), q = parse(groupQ.extend({ reason: z.string({ required_error: 'Say why the learned corrections are being cleared.' }).trim().min(3, 'Say why the learned corrections are being cleared.').max(300) }), req.query);
   const n = await withTenant(p.tenantId, async (tx) => {
     const c = (await tx.one<{ n: number }>('SELECT count(*)::int AS n FROM forecast_feedback WHERE tenant_id = :t AND wfm_group_id = $1', [q.groupId]))!.n;
     await tx.exec('DELETE FROM forecast_feedback WHERE tenant_id = :t AND wfm_group_id = $1', [q.groupId]);
-    await audit(tx, p, req, { action: 'DELETE', entityType: 'FORECAST_LEARNING', entityId: q.groupId, entityName: 'Learned corrections', diffSummary: `${c} learned correction(s) cleared` });
+    await audit(tx, p, req, { action: 'DELETE', entityType: 'FORECAST_LEARNING', entityId: q.groupId, entityName: 'Learned corrections', reason: q.reason, diffSummary: `${c} learned correction(s) cleared` });
     return c;
   });
   res.json({ cleared: n });

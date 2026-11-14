@@ -3,6 +3,7 @@
  * windows; you choose the window and the number of places. Everyone whose shift can take the change without breaking a blocking rule
  * is invited, in the order set under Configuration › Self-Service Rules. The first valid acceptances change the published schedule.
  */
+import { Waiting } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { api, when } from '../../services/api';
@@ -80,7 +81,7 @@ export const OffersPanel: React.FC = () => {
       </Card>
 
       <Card title="Suggested from the forecast" sub={group ? `${group.name} on ${day}: where the published schedule has more or fewer people than ${sug.data?.reforecastApplied ? 'today is actually running' : 'the forecast needs'}.` : undefined}>
-        {sug.error ? <p className="text-[13px] text-[#6B6B6B]">{sug.error}</p> : !sug.data ? <Busy text="Looking at the forecast…" /> : sug.data.vto.length + sug.data.overtime.length === 0 ? <p className="text-[13px] text-[#6B6B6B]">The schedule matches the forecast on this day. Nothing to suggest.</p> : (
+        {sug.error ? <p className="text-[13px] text-[#6B6B6B]">{sug.error}</p> : !sug.data ? <Waiting what="the suggestions" shape="table" reload={sug.reload} /> : sug.data.vto.length + sug.data.overtime.length === 0 ? <p className="text-[13px] text-[#6B6B6B]">The schedule matches the forecast on this day. Nothing to suggest.</p> : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[...sug.data.vto, ...sug.data.overtime].map((s, i) => (
               <div key={i} className="p-3 border border-[#E5E5E0] rounded-lg flex items-center justify-between gap-3">
@@ -93,7 +94,7 @@ export const OffersPanel: React.FC = () => {
       </Card>
 
       <Card title="Offers" sub="Newest first. Click one to see who was asked and what they answered.">
-        {offers.loading && !offers.data && <Busy text="Loading…" />}
+        {offers.loading && !offers.data && <Waiting what="offers" shape="table" reload={offers.reload} />}
         {offers.data && mine.length === 0 && <Empty title="No offers yet">Open an offer above, or use a suggestion.</Empty>}
         <div className="space-y-2">
           {mine.map((o) => {
@@ -118,7 +119,7 @@ export const OffersPanel: React.FC = () => {
                           return <tr key={i.employeeId}><td className="p-2.5 font-mono text-[#6B6B6B]">{i.rank}</td><td className="p-2.5">{i.name} <span className="text-[#6B6B6B] text-[11px]">#{i.employeeNumber}</span></td><td className="p-2.5"><Pill tone={s.tone}>{s.label}</Pill></td><td className="p-2.5 text-[12px] text-[#8F6200]">{i.warnings[0] ?? ''}</td></tr>;
                         })}
                       </Table>
-                    ) : <Busy text="Loading…" />}
+                    ) : <Waiting what="this offer" shape="lines" />}
                     {o.status === 'OPEN' && canEdit && <Btn onClick={() => cancel(o.id)}>Cancel offer</Btn>}
                   </div>
                 )}

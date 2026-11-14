@@ -84,6 +84,7 @@ export type LicenseUsageReport = {
     users: LicenseCapacityMetric;
     supervisors: LicenseCapacityMetric;
     workspaces: LicenseCapacityMetric;
+    sites: LicenseCapacityMetric;
   };
   lifecycle: {
     status: string;
@@ -100,7 +101,10 @@ export type LicenseCapacityRequest = {
   id: string;
   tenantId: string;
   requestedByUserId: string;
-  resourceType: 'EMPLOYEES' | 'USERS' | 'SITES' | 'MODULES';
+  resourceType: 'EMPLOYEES' | 'USERS' | 'SITES' | 'WORKSPACES' | 'MODULES' | 'PLAN';
+  requestedModules?: string[];
+  requestedPlan?: string | null;
+  decisionNote?: string;
   currentCapacity: number;
   requestedCapacity: number;
   additionalNeeded: number;
@@ -140,6 +144,8 @@ export type Session = {
   workspaces?: Workspace[];
   permissions: string[];
   enabledModules?: string[];
+  /** the regions and sites this person is limited to; `restricted` is false for someone who sees the whole organisation */
+  access?: { restricted: boolean; regions: { id: string; name: string }[]; sites: { id: string; name: string }[] };
 };
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
@@ -182,6 +188,7 @@ async function fail(res: Response): Promise<never> {
 }
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+  const t0 = performance.now();
   const res = await send(path, {
     method: opts.method || 'GET',
     headers: opts.body !== undefined ? { 'Content-Type': 'application/json' } : {},
@@ -190,8 +197,25 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   if (!res.ok) return fail(res);
   // anything saved, deleted or imported may have changed what is remembered: it is shown if asked for, but fetched again (checks that only look, like a preview, change nothing)
   if (opts.method && opts.method !== 'GET' && !READ_ONLY_POST.test(path)) markStale();
-  return res.json().catch(() => ({}));
+  const body = await res.json().catch(() => ({}));
+  recordTiming(opts.method || 'GET', path, performance.now() - t0);
+  return body;
 }
+
+// ---------------------------------------------------------------- how long each kind of request takes, kept in memory, to find the slow ones
+type Timing = { calls: number; totalMs: number; maxMs: number; lastMs: number };
+const timings = new Map<string, Timing>();
+function recordTiming(method: string, path: string, ms: number) {
+  const key = `${method} ${path.split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, ':id')}`;
+  const t = timings.get(key) ?? { calls: 0, totalMs: 0, maxMs: 0, lastMs: 0 };
+  t.calls++; t.totalMs += ms; t.maxMs = Math.max(t.maxMs, ms); t.lastMs = ms;
+  timings.set(key, t);
+}
+/** The slowest requests this tab has made, worst average first. In the browser console: `__wfmTimings()`. */
+export function requestTimings(top = 15) {
+  return [...timings.entries()].map(([request, t]) => ({ request, calls: t.calls, averageMs: Math.round(t.totalMs / t.calls), maxMs: Math.round(t.maxMs), lastMs: Math.round(t.lastMs) })).sort((a, b) => b.averageMs - a.averageMs).slice(0, top);
+}
+if (typeof window !== 'undefined') (window as any).__wfmTimings = () => { const r = requestTimings(); console.table(r); return r; };
 const READ_ONLY_POST = /\/(preview|check|detect|test|test-pull|suggest|validate|simulate|what-if|dry-run|trace)(\?|$)/;
 
 /** A paged list: the rows of this page and the true number of matches (the gateway's X-Total-Count). */
@@ -289,14 +313,18 @@ export type Channel = 'VOICE' | 'CHAT' | 'EMAIL' | 'BACKOFFICE';
 export type Queue = { shapeFromQueueId?: string | null; aliases?: string[]; volumeBasis?: 'OFFERED' | 'ANSWERED'; abandonRepeatPct?: number; id: string; name: string; code: string; channel: Channel; wfmGroupId: string | null; ahtDefault: number; concurrency: number; openSlot: number; closeSlot: number; slaTargetSeconds: number; slaTargetPercent: number; turnaroundHours: number | null; skillId?: string | null };
 export type GroupDto = {
   id: string; name: string; code: string; description: string; timezone: string; status: 'ACTIVE' | 'INACTIVE'; queueIds: string[]; queueNames: string[]; channels: Channel[];
-  serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number; shrinkagePercent: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number;
+  serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number; shrinkagePercent: number; chatEfficiency?: number; agentCostPerHour?: number | null; method: 'erlang_c' | 'erlang_a'; patienceSec: number;
   blended: boolean; model: string; fteHoursWeek: number;
+  /** The shrinkage staffing really uses: the sum of the group's categories when it has any, otherwise the flat percentage. */
+  shrinkageEffectivePercent?: number; shrinkageSource?: 'CATEGORIES' | 'FLAT'; shrinkageCategories?: { name: string; pct: number }[]; historyStaleDays?: number;
   /** Weekday a pay week begins on (Monday 0 ... Sunday 6) for this group; null = the company setting. */
   payWeekStart?: number | null;
   /** The site this group's people work at. */
   siteId?: string | null;
   /** Who manages the group (a person marked as a manager). */
   managerId?: string | null; managerName?: string | null;
+  /** The rotation pattern this group normally follows: a ready-made pattern's id, or the id of a pattern in the organisation's library. */
+  defaultRotationRef?: string | null;
 };
 export type Group = GroupDto & { queues: Queue[] };
 export type ShrinkageCategory = { id: string; name: string; pct: number; sort: number };
@@ -318,8 +346,11 @@ export type Bucket = {
 export type Score = { model: string; wape: number; mase: number; bias: number; selected: boolean; mae: number; rmse: number; mape: number; stability: 'HIGH' | 'MEDIUM' | 'VARIABLE' };
 export type Series = {
   queueId: string | null; name: string; model: string; scores: Score[]; backtest: { day: string; volume: number; aht_sec: number }[];
-  notes: string[]; cleanedDays: number; sigmaRel: number;
+  notes: string[]; cleanedDays: number; sigmaRel: number; bands?: BandInfo | null;
 };
+/** How the P10-P90 band was made and how it held up on days it was not fitted to (coverage: about 0.10 and 0.90 is calibrated; -1 = not measured). */
+export type RegistryRow = { id: string; queueId: string | null; queueName: string; model: string; modelVersion: string; engineVersion: string | null; training: { from: string; to: string; rows: number; dataHash: string }; generatedBy: string | null; generatedAt: string };
+export type BandInfo = { method: 'EMPIRICAL' | 'NORMAL' | null; p10Coverage: number; p90Coverage: number; points: number };
 export type AuditEntry = { at: string; by: string; role: string; action: string; reason: string | null; detail: any };
 export type VersionFull = VersionMeta & { summary: { series: Series[] }; audit: AuditEntry[] };
 export type DataResp = {
@@ -327,15 +358,15 @@ export type DataResp = {
   group: { id: string; name: string; serviceLevel: number; answerSec: number; shrinkage: number; occupancyCap: number; method: string };
 };
 export type LeaderRow = {
-  modelId: string; modelName: string; rank: number; isRecommended: boolean; wapePercent: number; mapePercent: number; mae: number; rmse: number; biasPercent: number;
+  modelId: string; modelName: string; rank: number; isRecommended: boolean; wapePercent: number; rawWapePercent?: number | null; rawBiasPercent?: number | null; rawMae?: number | null; accuracyBasis?: string; mapePercent: number; mae: number; rmse: number; biasPercent: number;
   stabilityScore: 'HIGH' | 'MEDIUM' | 'VARIABLE'; stability: string; vsBaselinePercent: number; recommendationReason: string; backtestPeriod: string;
 };
-export type Leaderboard = { versionId: string; queueId: string | null; queueName: string; baselineWapePercent: number | null; cleanedDays: number; notes: string[]; rows: LeaderRow[]; series: { queueId: string | null; name: string }[] };
+export type Leaderboard = { versionId: string; queueId: string | null; queueName: string; baselineWapePercent: number | null; cleanedDays: number; bands?: BandInfo | null; notes: string[]; rows: LeaderRow[]; series: { queueId: string | null; name: string }[] };
 
 export const MODEL_LABEL: Record<string, string> = {
   auto: 'Auto (most accurate wins)', snaive: 'Same as last week', wavg: 'Weighted weekly average', ets: 'Holt-Winters (ETS)',
   gbm: 'Gradient boosting', combo: 'Ensemble (blend of models)', croston: 'Croston (sparse queues)',
-  sarima: 'Seasonal ARIMA (SARIMA)', arima: 'ARIMA with weekday effects',
+  sarima: 'Seasonal ARIMA (SARIMA)', arima: 'ARIMA with weekday effects', lstm: 'LSTM neural network',
 };
 export const CHANNEL_LABEL: Record<string, string> = { VOICE: 'Voice', CHAT: 'Chat', EMAIL: 'Email', BACKOFFICE: 'Back office' };
 
@@ -362,7 +393,7 @@ export const STATUS_LABEL: Record<VersionStatus, string> = { DRAFT: 'Draft', SUB
 
 // ---------------------------------------------------------------- workforce and scheduling (phase 2)
 
-export type Skill = { id: string; name: string; code: string; category: 'CHANNELS' | 'LANGUAGES' | 'PRODUCTS' | 'TIERS'; type: 'CORE' | 'SECONDARY' | 'SPECIALTY'; status: 'ACTIVE' | 'INACTIVE'; requiresCertification: boolean; description: string; holders: number };
+export type Skill = { id: string; name: string; code: string; category: 'CHANNELS' | 'LANGUAGES' | 'PRODUCTS' | 'TIERS'; type: 'CORE' | 'SECONDARY' | 'SPECIALTY'; status: 'ACTIVE' | 'INACTIVE'; requiresCertification: boolean; description: string; holders: number; activeHolders?: number; levels?: number[]; requiredBy?: { groupId: string; groupName: string; minProficiency: number; qualified: number }[]; risk?: { level: 'NONE' | 'THIN' | 'OK'; reason: string | null; requiredByGroups: number; fixGroupId?: string | null } };
 export type Team = { id: string; name: string; code: string; description: string; location: string; managerId: string | null; managerName: string | null; deputyId?: string | null; deputyName?: string | null; status: 'ACTIVE' | 'INACTIVE'; memberCount: number };
 export type EmployeeStatus = 'ONBOARDING' | 'ACTIVE' | 'LEAVE' | 'SUSPENDED' | 'TERMINATED';
 export type EmploymentType = 'FULL_TIME' | 'PART_TIME' | 'CONTRACTOR' | 'TEMPORARY';
@@ -388,6 +419,8 @@ export type ShiftTemplate = {
   mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] | null;
   /** Variable length: the shortest shift in hours (null = fixed at durationHours, which is then the longest) and the gap between offered lengths. */
   minDurationHours?: number | null; lengthStepMinutes?: number; mealPaid?: boolean; paidHoursMin?: number;
+  /** A split shift: the "meal" is an unpaid gap of 1 to 6 hours between two parts of the day. */
+  splitShift?: boolean;
   /** A different start window on some weekdays, keyed by weekday number (Monday = 0). */
   dayWindows?: Record<string, { earliest: string; latest: string }> | null;
   /** Meal and breaks by shift length: the rule with the largest fromHours not above the length applies. */
@@ -395,7 +428,7 @@ export type ShiftTemplate = {
   /** Who it is offered to (null = everyone) and the dates it is in force. */
   groupIds?: string[] | null; employmentTypes?: string[] | null; skillIds?: string[] | null; effectiveFrom?: string | null; effectiveTo?: string | null;
 };
-export type SolverInfo = { status: string; gap: number; wallSec: number; variables: number; constraints: number; objective: number; candidates: number; people: number; backend?: string; attempts?: string[] } | null;
+export type SolverInfo = { status: string; gap: number; wallSec: number; variables: number; constraints: number; objective: number; candidates: number; people: number; backend?: string; attempts?: string[]; windowed?: boolean; score?: number | null; scoreTerms?: { name: string; value: number }[] } | null;
 export type ScheduleStats = {
   solver: SolverInfo; coverage: { percent: number; requiredSlots: number; underSlots: number; overSlots: number; underIntervals: number; criticalIntervals: number };
   hours: { paid: number; overtime: number; required: number; premium?: number }; shifts: number; people: number; violations: number; warnings?: number; uncoveredDays?: string[]; projectedDays?: string[];
@@ -408,8 +441,17 @@ export type ScheduleVersion = {
   /** Why this schedule no longer matches the forecast it was built from (empty while current). */
   stale?: string[];
   acknowledged?: { by: string; at: string; reason: string; issues: string[] } | null;
+  /** Where a draft stands in review. `changedSince`: it was edited after it was submitted or approved, so that review no longer counts. */
+  approval?: { state: 'NONE' | 'SUBMITTED' | 'APPROVED'; changedSince: boolean; submittedBy: string | null; submittedAt: string | null; approvedBy: string | null; approvedAt: string | null; note: string | null };
   /** A schedule can be published up to a date; later weeks stay planned. null = published in full (or a draft). */
   publishThrough?: string | null;
+};
+export type Verdict = { valid: boolean; status: 'VALIDATED' | 'VALIDATED_WITH_WARNINGS' | 'INVALID'; coverageStatus: 'ADEQUATE' | 'UNDERSTAFFED'; hardViolations: number; softWarnings: number; coveragePercent: number; underHours: number; fairnessSpreadHours: number;
+  findings: { severity: 'HARD' | 'SOFT'; code: string; employeeName: string | null; day: string | null; message: string }[]; days: { day: string; coveragePercent: number; underHours: number }[] };
+export type PublishImpact = {
+  previous: { id: string; name: string }[]; noticeHours: number; today: string;
+  totals: { people: number; added: number; removed: number; changed: number; unchanged: number; hoursDelta: number; shortNotice: number };
+  people: { employeeId: string; name: string; added: number; removed: number; changed: number; hoursDelta: number; shortNotice: number; changes: { day: string; kind: 'ADDED' | 'REMOVED' | 'CHANGED'; from: { start: string; end: string } | null; to: { start: string; end: string } | null; shortNotice: boolean }[] }[];
 };
 export type Violation = { type: string; employeeId: string; employeeName: string; day: string; message: string; severity?: 'BLOCK' | 'WARN' };
 export type ScheduleShift = {
@@ -446,7 +488,7 @@ export type Activity = { id: string; name: string; code: string; shortCode: stri
 export const ACTIVITY_CATEGORY_LABEL: Record<Activity['category'], string> = { WORK: 'Queue work', BREAK: 'Break', MEAL: 'Meal', TRAINING: 'Training', MEETING: 'Meeting', COACHING: 'Coaching', ABSENCE: 'Absence', OTHER: 'Other' };
 export type SchedulingPolicy = { minRestHours: number | null; maxWeeklyHours: number | null; maxConsecutiveDays: number | null; maxDaysPerWeek: number | null; adherenceGraceSeconds: number; timelineColors: { shift: string; manual: string; violation: string }; weights: Record<'understaffing' | 'overstaffing' | 'contractHours' | 'preferences' | 'fairness', number>; scheduling: SchedulingDefaults; updatedBy: string | null; updatedAt: string | null };
 export type ConsistentTimes = { mode: 'OFF' | 'PREFER' | 'REQUIRE'; startToleranceMin: number; endToleranceMin: number };
-export type SchedulingDefaults = { consistentTimes: ConsistentTimes; targetCoverage: number; enforcePublishChecks: boolean; breakSlackMin: number; payWeekStart: number; partTimeToleranceHours: number | null };
+export type SchedulingDefaults = { consistentTimes: ConsistentTimes; targetCoverage: number; enforcePublishChecks: boolean; breakSlackMin: number; payWeekStart: number; weekendDays: number[]; partTimeToleranceHours: number | null; overtime?: 'FREE' | 'WHEN_SHORT' | 'NEVER'; holidays?: 'ALLOW' | 'AVOID' | 'CLOSED'; requireApproval?: boolean; changeNoticeHours?: number };
 
 // ---- schedule quality: report, evaluation, shortage
 export type ReportException = { level: 'WARNING' | 'INFO'; code: string; subject: string; message: string; people?: { id: string; name: string }[] };
@@ -511,9 +553,15 @@ export type Learning = {
 
 // ---------------------------------------------------------------- time & attendance
 export type Punch = { id: string; employeeId: string; employeeName: string; day: string; clockIn: string; clockOut: string | null; hours: number | null; source: 'IMPORT' | 'MANUAL'; note: string };
-export type AttendanceDay = { employeeId: string; employeeNumber: string; name: string; day: string; scheduledHours: number; actualHours: number; varianceHours: number; status: 'MATCHED' | 'MISSED' | 'UNSCHEDULED' | 'OPEN'; punches: { clockIn: string; clockOut: string | null }[] };
+export type AttendanceIssue = 'missed' | 'late' | 'early' | 'open' | 'unscheduled' | 'upcoming' | 'excused' | 'ok';
+export type AttendanceReason = 'APPROVED_ABSENCE' | 'CLOCK_FAULT' | 'SYSTEM_OUTAGE' | 'WORKED_ELSEWHERE' | 'MANAGER_OVERRIDE' | 'OTHER';
+export type AttendanceExcuse = { id: string; kind: 'missed' | 'late' | 'early' | 'open'; reasonCode: AttendanceReason; note: string; paid: boolean; level: 'SUPERVISOR' | 'MANAGER'; by: string; at: string };
+export type AttendanceDay = { employeeId: string; employeeNumber: string; name: string; day: string; scheduledHours: number; actualHours: number; varianceHours: number; status: 'MATCHED' | 'MISSED' | 'UNSCHEDULED' | 'OPEN' | 'UPCOMING' | 'EXCUSED'; excused: AttendanceExcuse[]; paidExcuse: boolean; lateMinutes: number; earlyLeaveMinutes: number; due: boolean; issues: AttendanceIssue[]; shift: string | null; punches: { id: string; clockIn: string; clockOut: string | null; source: 'IMPORT' | 'MANUAL' }[] };
 export type AttendanceWeek = { employeeId: string; employeeNumber: string; name: string; weekStart: string; actualHours: number; scheduledHours: number; overtimeHours: number };
 export type AttendanceSummary = { days: AttendanceDay[]; weeks: AttendanceWeek[] };
+export type AttendanceCounts = Record<AttendanceIssue, number> & { total: number; punches: number; dueScheduled: number };
+export type AttendancePerson = { employeeId: string; employeeNumber: string; name: string; scheduledHours: number; actualHours: number; varianceHours: number; overtimeHours: number; problems: { missed: number; late: number; early: number; open: number }; days: AttendanceDay[] };
+export type AttendanceWeekView = { from: string; to: string; payStart: number; graceMinutes: number; counts: AttendanceCounts; feedMissing: boolean; total: number; people: AttendancePerson[] };
 export type ImportResult = { dryRun: boolean; rowsRead: number; newPunches: number; alreadyImported: number; errors: { line: number; message: string }[]; errorCount: number; committed: boolean };
 
 // ---------------------------------------------------------------- rotating rosters
@@ -521,12 +569,17 @@ export type RotationCrew = { name: string; offsetDays: number };
 export type RotationStep = { name: string; weeks: number; days: (string | null)[] };
 export type RotationPattern = { id: string; wfmGroupId: string; name: string; cycleDays: number; sequence: (string | null)[]; crews: RotationCrew[]; anchorDate: string; status: 'ACTIVE' | 'INACTIVE'; observesHolidays: boolean; versionId: string | null; materializedThrough: string | null; memberCount: number; version: number; createdBy: string | null; createdAt: string;
   /** DAY_CYCLE: a sequence of days. WEEKLY: weekly templates (steps), each worked for some weeks; `sequence` is then the day cycle they unroll to. */
-  kind: 'DAY_CYCLE' | 'WEEKLY'; steps: RotationStep[] | null };
+  kind: 'DAY_CYCLE' | 'WEEKLY'; steps: RotationStep[] | null; templateRef?: string | null; effectiveFrom?: string | null };
 export type RotationAnalysis = {
   cycleDays: number; payWeekStart: number; contractHours: number | null;
   crews: { name: string; offsetDays: number; shiftsPerCycle: number; paidHoursPerCycle: number; averageWeeklyHours: number; maxHoursInAnyWeek: number; maxDaysInAnyWeek: number; longestRun: number; neverOff: boolean; shortestRestHours: number | null; weekendDaysPerWeek: number; weekendsFullyOff: number }[];
   findings: { level: 'WARN' | 'INFO' | 'OK'; text: string }[];
+  /** Checked against the customer's labour-law pack; `applied` is false when none is assigned. */
+  legal?: { applied: boolean; packName: string | null; findings: { severity: 'BLOCK' | 'WARN'; rule: string; label: string; count: number; example: string | null }[] };
+  /** What each crew carries over a year. */
+  fairness?: { perCrew: { crew: string; shiftsPerYear: number; nightsPerYear: number; weekendDaysPerYear: number; sundaysPerYear: number; holidaysWorkedPerYear: number | null }[]; notes: string[]; nightHours?: unknown };
 };
+export type RotationRevision = { version: number; effectiveFrom: string | null; effectiveTo: string | null; name: string; kind: 'DAY_CYCLE' | 'WEEKLY'; cycleDays: number; changedBy: string | null; changedAt: string; note: string | null };
 export type RotationPreview =
   | { available: false; reason: string }
   | { available: true; from: string; days: number; people: number; uncoveredDays: string[];
@@ -537,18 +590,31 @@ export type RotationMember = { employeeId: string; name: string; employeeNumber:
 
 // ---------------------------------------------------------------- Integration Station
 export type IntegrationField = { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean };
-export type IntegrationPreset = { id: string; label: string; method: string; authType: string; fields: IntegrationField[]; note: string | null; writesTo: string; canPull?: boolean };
+export type IntegrationReadiness = { level: 'VERIFIED' | 'TESTED' | 'FROM_DOCS' | 'NOT_READY'; label: string; note: string };
+export type IntegrationGuide = { what: string; needs: string[]; limits: string[] };
+export type IntegrationPreset = { id: string; label: string; method: string; authType: string; fields: IntegrationField[]; note: string | null; guide?: IntegrationGuide | null; readiness?: IntegrationReadiness; writesTo: string; canPull?: boolean };
 export type IntegrationCatalog = Record<string, IntegrationPreset[]>;
 export type Connector = {
   id: string; wfmGroupId: string | null; category: string; method: string; preset: string; name: string; status: string; config: Record<string, string>;
   lastReceivedAt: string | null; lastError: string | null; lastSample: unknown; connectedAt: string | null; backfillStatus: string; backfillThrough: string | null; hasWebhookSecret: boolean; createdBy: string | null; createdAt: string;
-  scheduleMin: number | null; scheduleAt: string | null; scheduleDays: number[] | null; nextRunAt: string | null; canPull: boolean; note: string;   // whether the server can pull this source itself, and why not
+  scheduleMin: number | null; scheduleAt: string | null; scheduleDays: number[] | null; nextRunAt: string | null; rows24h?: number | null; canPull: boolean; note: string;   // whether the server can pull this source itself, and why not
 };
 export type ConnectorCreated = Connector & { apiKey: string | null; webhookSecret: string | null; webhookUrl: string | null };
 export type IntegrationFieldMap = { targetField: string; sourcePath: string; transform: string | null };
 export type EntitySuggestion = { sourceId: string; sourceLabel: string; targetId: string | null; targetName: string | null; score: number };
 export type EntityMatchRow = { entityType: string; sourceId: string; sourceLabel: string; targetId: string | null };
 export type EventRule = { eventType: string; action: 'PENDING' | 'STATE' | 'SKIP'; state: string | null; reason: string | null; seenCount: number; lastSeenAt: string };
+export type FeedOutcome = 'ACCEPTED' | 'IGNORED' | 'WAITING' | 'REJECTED';
+export type FeedEvent = { at: string; eventType: string | null; sourceId: string | null; outcome: FeedOutcome; state: string | null; reason: string | null; message: string | null; raw: unknown };
+export type AgentSuggestion = { kind: 'EXACT' | 'LIKELY'; employeeId: string; employeeName: string; why: string } | { kind: 'AMBIGUOUS' | 'NONE'; why: string };
+export type FeedAgent = { sourceId: string; seenCount: number; firstSeenAt: string; lastSeenAt: string; lastEventType: string | null; matched: boolean; via: string | null; employee: { id: string; name: string; number: string } | null; suggestion: AgentSuggestion | null };
+export type EventTypeSuggestion = { kind: 'SKIP' | 'OWN_STATE' | 'UNKNOWN'; why: string } | { kind: 'STATE'; state: string; reason: string | null; why: string };
+export type ActivitySuggestion = { kind: 'ACTIVITY'; activityId: string; activityName: string; why: string } | { kind: 'NOT_WORKING' | 'NONE'; why: string };
+export type FeedReview = {
+  eventTypes: { eventType: string; seenCount: number; lastSeenAt: string; action: 'PENDING' | 'STATE' | 'SKIP'; state: string | null; reason: string | null; needsDecision: boolean; suggestion: EventTypeSuggestion }[];
+  states: { state: string; reason: string; seenCount: number; lastSeenAt: string; mapped: boolean; suggestion: ActivitySuggestion }[];
+  agents: { seen: number; matched: number; unmatched: number; exact: number; likely: number };
+};
 export type MapTestResult = { raw: unknown; mapped: Record<string, unknown>; resolved: Record<string, unknown>; issues: string[]; notes: string[]; ok: boolean };
 
 // ---------------------------------------------------------------- dynamic break re-optimization
@@ -562,8 +628,8 @@ export type ScheduleJob = {
   progress: { done?: number; total?: number; note?: string; etaSec?: number | null; windows?: { from: string; to: string; kind: 'SOLVED' | 'PATTERN'; coverage: number | null; backend: string | null; status: string; shifts: number; note?: string }[] };
 };
 export type PlanWeek = {
-  weekStart: string; weekEnd: string; coveragePercent: number | null; needSlots: number; underSlots: number; overSlots: number; shifts: number; people: number;
+  weekStart: string; weekEnd: string; /** days of this week that are inside the schedule (7 unless it starts or ends mid-week) */ days?: number; coveragePercent: number | null; needSlots: number; underSlots: number; overSlots: number; shifts: number; people: number;
   shiftSource: 'SOLVED' | 'PATTERN' | 'MIXED' | 'EMPTY'; forecast: 'SHORT' | 'LONG' | 'MIXED' | 'NONE'; confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE'; weeksAhead: number; state: 'LOCKED' | 'PARTLY_LOCKED' | 'PAST' | 'PLANNED';
 };
-export type PlanView = { versionId: string; name: string; status: string; periodStart: string; periodEnd: string; publishThrough: string | null; today: string; plan: any; weeks: PlanWeek[]; summary: { coverage: number; shifts: number; people: number; violations: number } };
+export type PlanView = { versionId: string; name: string; status: string; periodStart: string; periodEnd: string; /** the pay week's first day, Monday 0 ... Sunday 6 */ weekStartDay?: number; publishThrough: string | null; today: string; plan: any; weeks: PlanWeek[]; summary: { coverage: number; shifts: number; people: number; violations: number } };
 export type RotationLines = { versionId: string; from: string; to: string; cycleWeeks: number; peopleOnLines: number; lines: { id: string; name: string; size: number; summary: string; weeks: { week: number; text: string; days: { day: string; shift: string }[] }[]; people: { id: string; name: string; number: string }[] }[] };

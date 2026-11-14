@@ -31,10 +31,11 @@ export function errorHandler(err: any, req: Request, res: Response, _next: NextF
   // a date or number the database cannot hold (2026-02-30, a huge value) is the caller's mistake, not a server fault, and its raw message is not for them
   const badValue = !(err instanceof HttpError) && ['22007', '22008', '22003', '22P02'].includes(err?.code);
   const syntax = !(err instanceof HttpError) && err?.type === 'entity.parse.failed';
-  const status = badValue || syntax ? 400 : err instanceof HttpError ? err.status : Number(err?.status) || (err?.code === '23505' ? 409 : err?.code === '23503' ? 409 : 500);
-  const code = badValue ? 'VALIDATION' : syntax ? 'BAD_JSON' : err instanceof HttpError ? err.code : err?.code === '23505' ? 'DUPLICATE' : err?.code === '23503' ? 'IN_USE' : err?.code || 'INTERNAL';
+  const status = badValue || syntax ? 400 : err instanceof HttpError ? err.status : Number(err?.status) || (err?.code === '23505' ? 409 : err?.code === '23503' ? 409 : err?.code === '42501' ? 403 : 500);
+  const code = badValue ? 'VALIDATION' : syntax ? 'BAD_JSON' : err instanceof HttpError ? err.code : err?.code === '23505' ? 'DUPLICATE' : err?.code === '23503' ? 'IN_USE' : err?.code === '42501' ? 'OUTSIDE_YOUR_ACCESS' : err?.code || 'INTERNAL';
   let message = badValue ? 'One of the values is not valid (check dates and numbers).' : syntax ? 'The request body is not valid JSON.' : err?.message || 'Unexpected error';
   if (err?.code === '23505') message = 'That already exists (a unique value is duplicated).';
+  if (err?.code === '42501') message = 'That is outside the sites and regions you have access to.';
   if (err?.code === '23503') message = 'That is referenced by other records and cannot be changed this way.';
   if (status >= 500) console.error(`[http] ${req.method} ${req.path} ${req.requestId ?? ''}`, err);
   res.status(status).json({ error: { code, message: status >= 500 && !(err instanceof HttpError) ? 'Internal error' : message, details: err?.details, requestId: req.requestId } });

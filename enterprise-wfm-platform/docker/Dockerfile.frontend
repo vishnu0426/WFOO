@@ -1,7 +1,7 @@
 # Frontend image: builds the admin web app, super admin portal, and employee portal, serves all with nginx.
 #   admin web app       -> port 3000
-#   super admin portal  -> port 3001
-#   employee portal     -> port 3002
+#   super admin portal  -> port 3002
+#   employee portal     -> port 3001
 # nginx forwards /api, /health and /ws to the gateway on 127.0.0.1:4000 (the compose file uses host networking).
 # Build context is the repository root (enterprise-wfm-platform/).
 

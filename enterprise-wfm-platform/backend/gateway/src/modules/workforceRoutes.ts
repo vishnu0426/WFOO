@@ -2,10 +2,10 @@
  * Workforce: employees, teams, skills, weekly availability and time off.
  * Everything the scheduler needs to know about a person lives here; the scheduler reads it, it never writes it.
  */
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
-import { me, requires, requiresAny } from '../auth.ts';
+import { me, requires, requiresAny, type Principal } from '../auth.ts';
 import { approvalAudience, approverLevel, teamLimit } from './approvals.ts';
 import { afterDeparture, applyDeparture, departureImpact, refuseIfLeading, type Departure } from './departures.ts';
 import { audit } from '../audit.ts';
@@ -14,6 +14,7 @@ import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { assertCapacity } from './licensing/service.ts';
 import { dropCache, publish } from '../infra.ts';
 import { parseCsv } from './csv.ts';
+import { riskOf, type RequiredBy } from './skillCoverage.ts';
 import { reconcileForEmployee } from './rotations.ts';
 import { notify, usersOf } from '../notify.ts';
 
@@ -27,7 +28,7 @@ const code = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(
 
 const EmpFields = z.object({
   employeeNumber: z.string().trim().min(1).max(40), firstName: z.string().trim().min(1).max(80), lastName: z.string().trim().min(1).max(80),
-  email: z.string().email().nullable().optional(), phone: z.string().max(40).optional(), extension: z.string().trim().max(20).nullable().optional(), timezone: z.string().max(60).nullable().optional(),
+  email: z.string().email().nullable().optional(), phone: z.string().max(40).optional(), extension: z.string().trim().max(20).refine((v) => !v.includes('@'), 'An agent extension is a phone extension, not an email address').nullable().optional(), timezone: z.string().max(60).nullable().optional(),
   status: z.enum(['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED']).optional(), hireDate: z.string().regex(isoDay).refine((d) => d >= '1950-01-01' && d <= new Date(Date.now() + 366 * 864e5).toISOString().slice(0, 10), 'must be between 1950 and a year from now').nullable().optional(),
   teamId: uuid.nullable().optional(), location: z.string().max(80).optional(),
   employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY']).optional(),
@@ -95,7 +96,7 @@ const EMP_SORT: Record<string, string> = {
 };
 
 /** People matching a filter. Without a page everyone is returned (imports and checks need all of them); with one, the database cuts the page. */
-async function loadEmployees(tx: Tx, f: EmpFilter = {}, page?: { limit: number; offset: number; sort?: string; desc?: boolean }) {
+export async function loadEmployees(tx: Tx, f: EmpFilter = {}, page?: { limit: number; offset: number; sort?: string; desc?: boolean }) {
   const by = (page?.sort && EMP_SORT[page.sort]) || EMP_SORT.name, dir = page?.desc ? 'DESC' : 'ASC';
   const order = by.split(', ').map((c) => `${c} ${dir} NULLS LAST`).join(', ');
   const rows = await tx.q<any>(
@@ -539,8 +540,8 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
 
 // ---------------------------------------------------------------- teams and skills
 
-const teamDto = (t: any) => ({ id: t.id, name: t.name, code: t.code, description: t.description, location: t.location, managerId: t.managerId, managerName: t.managerName ?? null, deputyId: t.deputyId ?? null, deputyName: t.deputyName ?? null, status: t.status, memberCount: t.memberCount ?? 0 });
-const TeamBody = z.object({ name: z.string().trim().min(1).max(80), code: z.string().trim().min(1).max(30).optional(), description: z.string().max(300).optional(), location: z.string().max(80).optional(), managerId: uuid.nullable().optional(), deputyId: uuid.nullable().optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional() });
+const teamDto = (t: any) => ({ id: t.id, name: t.name, code: t.code, description: t.description, location: t.location, managerId: t.managerId, managerName: t.managerName ?? null, deputyId: t.deputyId ?? null, deputyName: t.deputyName ?? null, status: t.status, memberCount: t.memberCount ?? 0, siteId: t.siteId ?? null });
+const TeamBody = z.object({ name: z.string().trim().min(1).max(80), code: z.string().trim().min(1).max(30).optional(), description: z.string().max(300).optional(), location: z.string().max(80).optional(), managerId: uuid.nullable().optional(), deputyId: uuid.nullable().optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional(), siteId: uuid.nullable().optional() });
 
 /** A team as the lists show it, with the supervisor's and deputy's names and the head count. */
 const TEAM_SELECT = `SELECT t.*, e.first_name || ' ' || e.last_name AS manager_name, d.first_name || ' ' || d.last_name AS deputy_name, (SELECT count(*)::int FROM employees x WHERE x.team_id = t.id AND x.status <> 'TERMINATED') AS member_count
@@ -577,7 +578,8 @@ workforce.post('/teams', requires('workforce:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     await ensureMarked(tx, b.managerId, 'is_supervisor', 'supervisor'); await ensureMarked(tx, b.deputyId, 'is_supervisor', 'deputy');
     if (b.managerId && b.managerId === b.deputyId) throw bad('The deputy has to be a different person from the supervisor.');
-    const t = await tx.one<any>('INSERT INTO teams (tenant_id, name, code, description, location, manager_id, deputy_id) VALUES (:t, $1, $2, $3, $4, $5, $6) RETURNING *', [b.name, b.code ?? code(b.name), b.description ?? '', b.location ?? '', b.managerId ?? null, b.deputyId ?? null]);
+    if (b.siteId && !(await tx.one('SELECT 1 FROM sites WHERE tenant_id = :t AND id = $1', [b.siteId]))) throw notFound('Site');
+    const t = await tx.one<any>('INSERT INTO teams (tenant_id, name, code, description, location, manager_id, deputy_id, site_id) VALUES (:t, $1, $2, $3, $4, $5, $6, $7) RETURNING *', [b.name, b.code ?? code(b.name), b.description ?? '', b.location ?? '', b.managerId ?? null, b.deputyId ?? null, b.siteId ?? null]);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'TEAM', entityId: t!.id, entityName: b.name, after: teamDto(t) });
     return teamById(tx, t!.id);
   });
@@ -595,8 +597,8 @@ workforce.put('/teams/:id', requires('workforce:write'), async (req, res) => {
     if (mgr && mgr === dep) throw bad('The deputy has to be a different person from the supervisor.');
     const t = await tx.one<any>(
       `UPDATE teams SET name = coalesce($2, name), description = coalesce($3, description), location = coalesce($4, location), status = coalesce($5, status),
-         manager_id = CASE WHEN $6::boolean THEN $7::uuid ELSE manager_id END, deputy_id = CASE WHEN $8::boolean THEN $9::uuid ELSE deputy_id END WHERE tenant_id = :t AND id = $1 RETURNING *`,
-      [id, b.name ?? null, b.description ?? null, b.location ?? null, b.status ?? null, b.managerId !== undefined, b.managerId ?? null, b.deputyId !== undefined, b.deputyId ?? null]);
+         manager_id = CASE WHEN $6::boolean THEN $7::uuid ELSE manager_id END, deputy_id = CASE WHEN $8::boolean THEN $9::uuid ELSE deputy_id END, site_id = CASE WHEN $10::boolean THEN $11::uuid ELSE site_id END WHERE tenant_id = :t AND id = $1 RETURNING *`,
+      [id, b.name ?? null, b.description ?? null, b.location ?? null, b.status ?? null, b.managerId !== undefined, b.managerId ?? null, b.deputyId !== undefined, b.deputyId ?? null, b.siteId !== undefined, b.siteId ?? null]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'TEAM', entityId: id, entityName: t!.name, before: teamDto(before), after: teamDto(t) });
     return teamById(tx, id);
   });
@@ -618,9 +620,36 @@ workforce.delete('/teams/:id', requires('workforce:write'), async (req, res) => 
 const skillDto = (s: any) => ({ id: s.id, name: s.name, code: s.code, category: s.category, type: s.type, status: s.status, requiresCertification: s.requiresCertification, description: s.description, holders: s.holders ?? 0 });
 const SkillBody = z.object({ name: z.string().trim().min(1).max(80), code: z.string().trim().min(1).max(30).optional(), category: z.enum(['CHANNELS', 'LANGUAGES', 'PRODUCTS', 'TIERS']).optional(), type: z.enum(['CORE', 'SECONDARY', 'SPECIALTY']).optional(), status: z.enum(['ACTIVE', 'INACTIVE']).optional(), requiresCertification: z.boolean().optional(), description: z.string().max(300).optional() });
 
+/**
+ * The skills, each with who holds it: `holders` is everyone who has it on their record, `activeHolders` only people who can be scheduled (active), `levels` how those are spread over
+ * levels 1 to 5, `requiredBy` the WFM groups that need it with how many people are qualified for each, and `risk` (NONE, THIN or OK, with the reason) against `thin` people (default 3).
+ */
 workforce.get('/skills', requires('workforce:read'), async (req, res) => {
-  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<any>('SELECT s.*, (SELECT count(*)::int FROM employee_skills es WHERE es.skill_id = s.id) AS holders FROM skills s WHERE s.tenant_id = :t ORDER BY s.name'));
-  res.json(rows.map(skillDto));
+  const q = parse(z.object({ thin: z.coerce.number().int().min(1).max(100).default(3) }), req.query);
+  const { rows, groups } = await withTenant(me(req).tenantId, async (tx) => ({
+    rows: await tx.q<any>(
+      `SELECT s.*, (SELECT count(*)::int FROM employee_skills es WHERE es.skill_id = s.id) AS holders,
+         (SELECT count(*)::int FROM employee_skills es JOIN employees e ON e.id = es.employee_id WHERE es.skill_id = s.id AND e.status = 'ACTIVE') AS active_holders,
+         (SELECT array[count(*) FILTER (WHERE es.proficiency = 1)::int, count(*) FILTER (WHERE es.proficiency = 2)::int, count(*) FILTER (WHERE es.proficiency = 3)::int,
+                       count(*) FILTER (WHERE es.proficiency = 4)::int, count(*) FILTER (WHERE es.proficiency = 5)::int]
+            FROM employee_skills es JOIN employees e ON e.id = es.employee_id WHERE es.skill_id = s.id AND e.status = 'ACTIVE') AS levels
+       FROM skills s WHERE s.tenant_id = :t ORDER BY s.name`),
+    groups: await tx.q<any>(
+      `SELECT gs.skill_id, g.id AS group_id, g.name AS group_name, gs.min_proficiency,
+         (SELECT count(*)::int FROM employees e JOIN employee_skills es ON es.employee_id = e.id AND es.skill_id = gs.skill_id AND es.proficiency >= gs.min_proficiency
+           WHERE e.tenant_id = gs.tenant_id AND e.status = 'ACTIVE' AND e.eligible_group_ids @> ARRAY[g.id]) AS qualified,
+         (SELECT count(*)::int FROM employees e JOIN employee_skills es ON es.employee_id = e.id AND es.skill_id = gs.skill_id AND es.proficiency >= gs.min_proficiency
+           WHERE e.tenant_id = gs.tenant_id AND e.status = 'ACTIVE' AND NOT (e.eligible_group_ids @> ARRAY[g.id])) AS outside_qualified,
+         (SELECT count(*)::int FROM employees e JOIN employee_skills es ON es.employee_id = e.id AND es.skill_id = gs.skill_id
+           WHERE e.tenant_id = gs.tenant_id AND e.status = 'ACTIVE' AND e.eligible_group_ids @> ARRAY[g.id]) AS in_group_holders
+       FROM group_skills gs JOIN wfm_groups g ON g.id = gs.wfm_group_id WHERE gs.tenant_id = :t ORDER BY g.name`),
+  }));
+  const by = new Map<string, RequiredBy[]>();
+  for (const g of groups) by.set(g.skillId, [...(by.get(g.skillId) ?? []), { groupId: g.groupId, groupName: g.groupName, minProficiency: g.minProficiency, qualified: g.qualified, outsideQualified: g.outsideQualified, inGroupHolders: g.inGroupHolders }]);
+  res.json(rows.map((s) => {
+    const requiredBy = by.get(s.id) ?? [], activeHolders = s.activeHolders ?? 0;
+    return { ...skillDto(s), activeHolders, levels: s.levels ?? [0, 0, 0, 0, 0], requiredBy, risk: riskOf({ activeHolders, requiredBy }, q.thin) };
+  }));
 });
 workforce.post('/skills', requires('workforce:write'), async (req, res) => {
   const p = me(req), b = parse(SkillBody, req.body);
@@ -686,10 +715,74 @@ workforce.put('/employees/:id/availability', requires('workforce:write'), async 
   res.json(out.map(availDto));
 });
 
+// ---------------------------------------------------------------- the team-week grid: many people at once
+
+/**
+ * People with their recurring weekly availability, a page at a time, for the grid. Windows that apply only between two dates are not part of the recurring week: they are counted
+ * (`dated`) so the screen can say a person has some, and left alone by the grid.
+ */
+workforce.get('/availability/grid', requires('workforce:read'), async (req, res) => {
+  const p = me(req);
+  const q = parse(z.object({ teamId: uuid.optional(), groupId: uuid.optional(), q: z.string().max(80).optional(), limit: z.coerce.number().int().min(1).max(200).default(100), offset: z.coerce.number().int().min(0).default(0) }), req.query);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const lim = await teamLimit(tx, p);
+    const rows = await tx.q<any>(
+      `SELECT e.id, e.first_name || ' ' || e.last_name AS name, e.employee_number, t.name AS team_name, count(*) OVER ()::int AS total
+       FROM employees e LEFT JOIN teams t ON t.id = e.team_id
+       WHERE e.tenant_id = :t AND e.status IN ('ACTIVE','ONBOARDING','LEAVE') AND ($1::uuid IS NULL OR e.team_id = $1) AND ($2::uuid IS NULL OR e.eligible_group_ids @> ARRAY[$2::uuid])
+         AND ($3::text IS NULL OR concat_ws(' ', e.first_name, e.last_name, e.employee_number) ILIKE '%' || $3 || '%') AND ($4::uuid[] IS NULL OR e.team_id = ANY($4::uuid[]) OR e.id = $5::uuid)
+       ORDER BY e.last_name, e.first_name, e.id LIMIT $6 OFFSET $7`, [q.teamId ?? null, q.groupId ?? null, q.q || null, lim ? lim.teamIds : null, lim?.self ?? null, q.limit, q.offset]);
+    const ids = rows.map((e) => e.id);
+    const wins = ids.length ? await tx.q<any>(
+      `SELECT id, employee_id, day_of_week, start_slot, end_slot, kind, effective_from::text AS effective_from, effective_to::text AS effective_to FROM availability WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) ORDER BY day_of_week, start_slot`, [ids]) : [];
+    const by = new Map<string, any[]>();
+    for (const w of wins) by.set(w.employeeId, [...(by.get(w.employeeId) ?? []), w]);
+    return {
+      total: rows[0]?.total ?? 0,
+      people: rows.map((e) => {
+        const mine = by.get(e.id) ?? [];
+        return { id: e.id, name: e.name, employeeNumber: e.employeeNumber, teamName: e.teamName ?? null, windows: mine.filter((w) => !w.effectiveFrom && !w.effectiveTo).map(availDto), dated: mine.filter((w) => w.effectiveFrom || w.effectiveTo).length };
+      }),
+    };
+  });
+  res.json(out);
+});
+
+/**
+ * Set the recurring weekly availability of many people in one go: for each person the full recurring week replaces what they had (windows with dates are kept as they are). All or
+ * nothing, audited per person, and the scheduler's cached view is dropped so the next schedule follows it.
+ */
+workforce.put('/availability/bulk', requires('workforce:write'), async (req, res) => {
+  const p = me(req);
+  const b = parse(z.object({
+    people: z.array(z.object({ employeeId: uuid, windows: z.array(Window.omit({ effectiveFrom: true, effectiveTo: true }).strict()).max(60) })).min(1).max(500),
+    reason: z.string().trim().max(300).optional(),
+  }), req.body);
+  const prepared = b.people.map((x) => ({ id: x.employeeId, list: x.windows.map((w) => ({ ...w, s: slotOf(w.startTime), e: w.endTime === '24:00' ? 96 : slotOf(w.endTime) })) }));
+  for (const x of prepared) for (const w of x.list) if (Number.isNaN(w.s) || Number.isNaN(w.e) || w.e <= w.s) throw bad(`Window ${w.startTime}-${w.endTime}: the end must be after the start (HH:MM)`);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const lim = await teamLimit(tx, p);
+    const ids = [...new Set(prepared.map((x) => x.id))];
+    const found = await tx.q<{ id: string; name: string }>(
+      `SELECT id, first_name || ' ' || last_name AS name FROM employees WHERE tenant_id = :t AND id = ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR team_id = ANY($2::uuid[]) OR id = $3::uuid)`, [ids, lim ? lim.teamIds : null, lim?.self ?? null]);
+    const known = new Map(found.map((e) => [e.id, e.name]));
+    const missing = ids.filter((i) => !known.has(i));
+    if (missing.length) throw notFound(`${missing.length} of these people`);
+    await tx.exec(`DELETE FROM availability WHERE tenant_id = :t AND employee_id = ANY($1::uuid[]) AND effective_from IS NULL AND effective_to IS NULL`, [ids]);
+    for (const x of prepared) {
+      for (const w of x.list) await tx.exec('INSERT INTO availability (tenant_id, employee_id, day_of_week, start_slot, end_slot, kind) VALUES (:t, $1, $2, $3, $4, $5)', [x.id, w.dayOfWeek, w.s, w.e, w.kind]);
+      await audit(tx, p, req, { action: 'UPDATE', entityType: 'AVAILABILITY', entityId: x.id, entityName: known.get(x.id) as string, reason: b.reason, after: x.list.map((w) => `${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][w.dayOfWeek]} ${w.startTime}-${w.endTime} ${w.kind}`) });
+    }
+    return { updated: ids.length };
+  });
+  await dropCache(p.tenantId, 'sched:*');
+  res.json(out);
+});
+
 // ---------------------------------------------------------------- time off
 
-const toDto = (t: any) => ({ id: t.id, employeeId: t.employeeId, employeeName: t.employeeName, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, createdAt: t.createdAt, escalatedAt: t.escalatedAt ?? null, decidedLevel: t.decidedLevel ?? null });
-const TO_SQL = `SELECT o.*, o.start_day::text AS start_day, o.end_day::text AS end_day, (o.end_day - o.start_day + 1) AS days, e.first_name || ' ' || e.last_name AS employee_name
+export const toDto = (t: any) => ({ id: t.id, employeeId: t.employeeId, employeeName: t.employeeName, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, createdAt: t.createdAt, escalatedAt: t.escalatedAt ?? null, decidedLevel: t.decidedLevel ?? null });
+export const TO_SQL = `SELECT o.*, o.start_day::text AS start_day, o.end_day::text AS end_day, (o.end_day - o.start_day + 1) AS days, e.first_name || ' ' || e.last_name AS employee_name
                 FROM time_off o JOIN employees e ON e.id = o.employee_id WHERE o.tenant_id = :t`;
 
 workforce.get('/time-off', requires('workforce:read'), async (req, res) => {
@@ -725,25 +818,84 @@ workforce.post('/time-off', requires('workforce:write'), async (req, res) => {
   await dropCache(me(req).tenantId, 'sched:*');
   res.status(201).json(out);
 });
+/**
+ * Decide one time-off request: the rules are the same whether a manager does it one at a time or a hundred are approved together. A supervisor may decide their own team's requests,
+ * a manager anyone's; approving may not create a double booking; approved leave takes the person off generated rotation shifts, cancelling puts them back.
+ */
+export async function decideTimeOff(tx: Tx, p: Principal, req: Request | null, id: string, status: 'APPROVED' | 'REJECTED' | 'CANCELLED', reasonText: string | undefined) {
+  const b = { status, reason: reasonText };
+  const cur = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
+  if (!cur) throw notFound('Time-off request');
+  const level = await approverLevel(tx, p, cur.employeeId, 'workforce:write');      // a supervisor may decide their own team's requests; a manager anyone's
+  if (b.status === 'APPROVED') {   // approving must not create the double booking either
+    const clash = await tx.one<any>(`SELECT type, start_day::text AS s, end_day::text AS e FROM time_off WHERE tenant_id = :t AND employee_id = $1 AND id <> $2 AND status = 'APPROVED' AND end_day >= $3::date AND start_day <= $4::date LIMIT 1`, [cur.employeeId, id, cur.startDay, cur.endDay]);
+    if (clash) throw conflict(`${cur.employeeName} already has approved ${String(clash.type).toLowerCase()} time off from ${clash.s} to ${clash.e} that overlaps these dates.`);
+  }
+  await tx.exec('UPDATE time_off SET status = $2, decided_by = $3, decided_at = now(), reason = CASE WHEN $4 <> \'\' THEN $4 ELSE reason END, decided_level = $5 WHERE tenant_id = :t AND id = $1', [id, b.status, p.name, b.reason ?? '', level]);
+  const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
+  await audit(tx, p, req, { action: b.status === 'APPROVED' ? 'APPROVE' : b.status === 'REJECTED' ? 'REJECT' : 'UPDATE', entityType: 'TIME_OFF', diffSummary: level === 'SUPERVISOR' ? 'Decided by the team supervisor (first line)' : 'Decided by a manager', entityId: id, entityName: cur.employeeName, reason: b.reason, before: { status: cur.status }, after: { status: b.status } });
+  if (b.status !== 'CANCELLED') publish(p.tenantId, ['timeoff', 'decided'], { id, employeeId: cur.employeeId, employee: cur.employeeName, status: b.status, startDate: cur.startDay, endDate: cur.endDay });
+  if (b.status !== 'CANCELLED') await notify(tx, await usersOf(tx, [cur.employeeId]), { kind: 'TIME_OFF', title: `Time off ${b.status === 'APPROVED' ? 'approved' : 'declined'}`, body: `${cur.startDay} to ${cur.endDay}${b.reason ? `: ${b.reason}` : ''}`, data: { screen: 'time-off', id } });
+  await reconcileForEmployee(tx, p, req, cur.employeeId);   // approving takes the person off their rotation shifts; cancelling puts them back
+  return toDto(t);
+}
+
 workforce.post('/time-off/:id/decide', requiresAny('workforce:write', 'requests:approve'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   const b = parse(z.object({ status: z.enum(['APPROVED', 'REJECTED', 'CANCELLED']), reason: z.string().max(300).optional() }), req.body);
   if (b.status === 'REJECTED' && (b.reason ?? '').trim().length < 3) throw bad('Give a reason when rejecting a request');
+  const out = await withTenant(p.tenantId, (tx) => decideTimeOff(tx, p, req, id, b.status, b.reason));
+  await dropCache(p.tenantId, 'sched:*');
+  res.json(out);
+});
+
+// ---------------------------------------------------------------- fixing thin coverage of a skill a group requires
+
+/** Active people for a group's skill, in the two ways a planner can fix a shortfall. */
+async function skillFixFor(tx: Tx, skillId: string, groupId: string) {
+  const need = await tx.one<any>(
+    `SELECT s.name AS skill_name, g.name AS group_name, gs.min_proficiency FROM group_skills gs JOIN skills s ON s.id = gs.skill_id JOIN wfm_groups g ON g.id = gs.wfm_group_id
+     WHERE gs.tenant_id = :t AND gs.skill_id = $1 AND gs.wfm_group_id = $2`, [skillId, groupId]);
+  if (!need) throw bad('That WFM group does not require this skill');
+  // people who have the skill at the level asked for but cannot be scheduled in the group: they only need adding to it
+  const outside = await tx.q<any>(
+    `SELECT e.id, e.first_name || ' ' || e.last_name AS name, es.proficiency AS level, hg.name AS home_group, count(*) OVER ()::int AS total
+     FROM employee_skills es JOIN employees e ON e.id = es.employee_id LEFT JOIN wfm_groups hg ON hg.id = e.primary_group_id
+     WHERE es.skill_id = $1 AND e.tenant_id = :t AND e.status = 'ACTIVE' AND es.proficiency >= $3 AND NOT (e.eligible_group_ids @> ARRAY[$2::uuid])
+     ORDER BY es.proficiency DESC, e.last_name, e.first_name LIMIT 200`, [skillId, groupId, need.minProficiency]);
+  // people already in the group who lack the skill, or have it below the level asked for: they need the skill (or a higher level)
+  const inGroup = await tx.q<any>(
+    `SELECT e.id, e.first_name || ' ' || e.last_name AS name, es.proficiency AS level, count(*) OVER ()::int AS total
+     FROM employees e LEFT JOIN employee_skills es ON es.employee_id = e.id AND es.skill_id = $1
+     WHERE e.tenant_id = :t AND e.status = 'ACTIVE' AND e.eligible_group_ids @> ARRAY[$2::uuid] AND (es.proficiency IS NULL OR es.proficiency < $3)
+     ORDER BY e.last_name, e.first_name LIMIT 200`, [skillId, groupId, need.minProficiency]);
+  return {
+    skill: { id: skillId, name: need.skillName }, group: { id: groupId, name: need.groupName, minProficiency: need.minProficiency },
+    addToGroup: { total: outside[0]?.total ?? 0, people: outside.map((x) => ({ id: x.id, name: x.name, level: x.level, homeGroup: x.homeGroup })) },
+    giveSkill: { total: inGroup[0]?.total ?? 0, people: inGroup.map((x) => ({ id: x.id, name: x.name, level: x.level ?? null })) },
+  };
+}
+
+workforce.get('/skills/:id/fix', requires('workforce:read'), async (req, res) => {
+  const id = parse(uuid, req.params.id), q = parse(z.object({ groupId: uuid }), req.query);
+  res.json(await withTenant(me(req).tenantId, (tx) => skillFixFor(tx, id, q.groupId)));
+});
+
+/** Make people who already have the skill at the level a group asks for eligible for that group. Only people who really qualify are changed, whatever ids are sent. */
+workforce.post('/skills/:id/add-to-group', requires('workforce:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const b = parse(z.object({ groupId: uuid, employeeIds: z.array(uuid).min(1).max(500), reason: z.string().trim().min(3, 'is required').max(300) }), req.body);
   const out = await withTenant(p.tenantId, async (tx) => {
-    const cur = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
-    if (!cur) throw notFound('Time-off request');
-    const level = await approverLevel(tx, p, cur.employeeId, 'workforce:write');      // a supervisor may decide their own team's requests; a manager anyone's
-    if (b.status === 'APPROVED') {   // approving must not create the double booking either
-      const clash = await tx.one<any>(`SELECT type, start_day::text AS s, end_day::text AS e FROM time_off WHERE tenant_id = :t AND employee_id = $1 AND id <> $2 AND status = 'APPROVED' AND end_day >= $3::date AND start_day <= $4::date LIMIT 1`, [cur.employeeId, id, cur.startDay, cur.endDay]);
-      if (clash) throw conflict(`${cur.employeeName} already has approved ${String(clash.type).toLowerCase()} time off from ${clash.s} to ${clash.e} that overlaps these dates.`);
-    }
-    await tx.exec('UPDATE time_off SET status = $2, decided_by = $3, decided_at = now(), reason = CASE WHEN $4 <> \'\' THEN $4 ELSE reason END, decided_level = $5 WHERE tenant_id = :t AND id = $1', [id, b.status, p.name, b.reason ?? '', level]);
-    const t = (await tx.q<any>(`${TO_SQL} AND o.id = $1`, [id]))[0];
-    await audit(tx, p, req, { action: b.status === 'APPROVED' ? 'APPROVE' : b.status === 'REJECTED' ? 'REJECT' : 'UPDATE', entityType: 'TIME_OFF', diffSummary: level === 'SUPERVISOR' ? 'Decided by the team supervisor (first line)' : 'Decided by a manager', entityId: id, entityName: cur.employeeName, reason: b.reason, before: { status: cur.status }, after: { status: b.status } });
-    if (b.status !== 'CANCELLED') publish(p.tenantId, ['timeoff', 'decided'], { id, employeeId: cur.employeeId, employee: cur.employeeName, status: b.status, startDate: cur.startDay, endDate: cur.endDay });
-    if (b.status !== 'CANCELLED') await notify(tx, await usersOf(tx, [cur.employeeId]), { kind: 'TIME_OFF', title: `Time off ${b.status === 'APPROVED' ? 'approved' : 'declined'}`, body: `${cur.startDay} to ${cur.endDay}${b.reason ? `: ${b.reason}` : ''}`, data: { screen: 'time-off', id } });
-    await reconcileForEmployee(tx, p, req, cur.employeeId);   // approving takes the person off their rotation shifts; cancelling puts them back
-    return toDto(t);
+    const need = await tx.one<any>(
+      `SELECT s.name AS skill_name, g.name AS group_name, gs.min_proficiency FROM group_skills gs JOIN skills s ON s.id = gs.skill_id JOIN wfm_groups g ON g.id = gs.wfm_group_id
+       WHERE gs.tenant_id = :t AND gs.skill_id = $1 AND gs.wfm_group_id = $2`, [id, b.groupId]);
+    if (!need) throw bad('That WFM group does not require this skill');
+    const rows = await tx.q<{ id: string }>(
+      `UPDATE employees e SET eligible_group_ids = array_append(e.eligible_group_ids, $2::uuid), updated_at = now(), version = version + 1
+       FROM employee_skills es WHERE e.tenant_id = :t AND e.id = ANY($3::uuid[]) AND es.employee_id = e.id AND es.skill_id = $1 AND es.proficiency >= $4
+         AND e.status = 'ACTIVE' AND NOT (e.eligible_group_ids @> ARRAY[$2::uuid]) RETURNING e.id`, [id, b.groupId, b.employeeIds, need.minProficiency]);
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'SKILL', entityId: id, entityName: `${need.skillName} for ${need.groupName}`, reason: b.reason, diffSummary: `${rows.length} people who have ${need.skillName} (level ${need.minProficiency} or higher) can now be scheduled in ${need.groupName}` });
+    return { updated: rows.length, skipped: b.employeeIds.length - rows.length };
   });
   await dropCache(p.tenantId, 'sched:*');
   res.json(out);

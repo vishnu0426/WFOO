@@ -3,6 +3,7 @@
  *   1 Upload · 2 Validate + quality audit · 3 Diff against live data · 4 Atomic commit (and later, exact rollback).
  * Interval history (volume, handle time, actuals) is live; people and schedule files arrive with the workforce module.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useRef, useState } from 'react';
 import { ArrowRight, Check, CheckCircle2, Download, FileText, Radio, RotateCcw, UploadCloud } from 'lucide-react';
 import { api, ApiError, download, dayYear, int, Queue, when } from '../../services/api';
@@ -189,8 +190,8 @@ const StagedPanel: React.FC = () => {
             <div className="p-3 bg-[#FAFAF8] rounded border border-[#E5E5E0] flex flex-wrap items-center justify-between gap-2 text-[12px]">
               <div><span className="text-[#6B6B6B]">File: </span><span className="font-semibold text-[#171717]">{job.fileName}</span> <span className="text-[#6B6B6B]">· {job.totalRecords.toLocaleString()} rows read</span></div>
               <div className="flex items-center gap-3">
-                <span className="text-[#2A7553] font-semibold">✓ {int(job.validRecords)} valid</span>
-                <span className="text-[#8F6200] font-semibold">⚠ {int(job.warningRecords)} to review</span>
+                <span className="text-[#2A7553] font-semibold">{int(job.validRecords)} valid</span>
+                <span className="text-[#8F6200] font-semibold">{int(job.warningRecords)} to review</span>
                 <span className={`font-semibold ${job.errorRecords ? 'text-[#BC3F3F]' : 'text-[#6B6B6B]'}`}>{int(job.errorRecords)} rejected</span>
               </div>
             </div>
@@ -261,7 +262,7 @@ const StagedPanel: React.FC = () => {
       </Card>
 
       <Card title="Recent imports" sub="Newest first. Roll back only works while nothing later has overwritten the same intervals.">
-        {jobs.data?.length === 0 ? <Empty title="No imports yet">Upload a file above to bring in your interval history.</Empty> : (
+        {jobs.data === null ? (jobs.error ? <LoadFailed what="past imports" error={jobs.error} reload={jobs.reload} /> : <Waiting what="past imports" shape="table" reload={jobs.reload} />) : jobs.data.length === 0 ? <Empty title="No imports yet">Upload a file above to bring in your interval history.</Empty> : (
           <Table head={['File', 'Type', 'Rows', 'Result', 'When', 'By', 'Status', '']} right={[2]}>
             {jobs.data?.map((j) => (
               <tr key={j.id}>
@@ -300,7 +301,7 @@ const QualityPanel: React.FC = () => {
   return (
     <div className="space-y-6">
       <Card title="History coverage" sub="What is in live interval history for each queue.">
-        {cov.data?.length === 0 ? <Empty title="No queues yet" /> : (
+        {cov.data === null ? (cov.error ? <LoadFailed what="history coverage" error={cov.error} reload={cov.reload} /> : <Waiting what="history coverage" shape="table" reload={cov.reload} />) : cov.data.length === 0 ? <Empty title="No queues yet" /> : (
           <Table head={['Queue', 'From', 'To', 'Days', 'Intervals', 'Missing inside range']} right={[3, 4, 5]}>
             {cov.data?.map((c) => <tr key={c.queueId}><td className="p-3 font-medium">{c.name}</td><td className="p-3">{c.firstDay ? dayYear(c.firstDay) : '–'}</td><td className="p-3">{c.lastDay ? dayYear(c.lastDay) : '–'}</td><td className="p-3 text-right font-mono">{c.days}</td><td className="p-3 text-right font-mono">{int(c.intervals)}</td><td className="p-3 text-right font-mono">{c.missingIntervals ? int(c.missingIntervals) : '–'}</td></tr>)}
           </Table>
@@ -308,7 +309,7 @@ const QualityPanel: React.FC = () => {
       </Card>
       <Card title="Issues found" sub="Live checks on history, plus what was flagged when files were staged.">
         {q.error && <Banner kind="err">{q.error}</Banner>}
-        {q.data?.length === 0 ? <p className="text-[13px] text-[#2A7553] flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" />No data-quality issues.</p> : (
+        {q.data === null ? (q.error ? <LoadFailed what="the data-quality check" error={q.error} reload={q.reload} /> : <Waiting what="the data-quality check" shape="table" reload={q.reload} />) : q.data.length === 0 ? <p className="text-[13px] text-[#2A7553] flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" />No data-quality issues.</p> : (
           <div className="space-y-2">{q.data?.map((i) => (
             <div key={i.id} className="border border-[#E5E5E0] rounded p-3 text-[12px]">
               <div className="flex items-center gap-2"><Pill tone={i.severity === 'ERROR' ? 'bad' : i.severity === 'WARNING' ? 'warn' : 'info'}>{i.severity}</Pill><span className="font-semibold">{i.entityName}</span></div>
@@ -405,7 +406,7 @@ const LiveFeedPanel: React.FC = () => {
         );
       })()}
 
-      {!s ? <Busy /> : (
+      {!s ? (status.error ? <LoadFailed what="the feed status" error={status.error} reload={status.reload} /> : <Waiting what="the feed status" shape="cards" reload={status.reload} />) : (
         <SourcesManager connectors={s.connectors} timezone={s.timezone} onShowPush={showPush} onChanged={() => setTick((t) => t + 1)}
           phoneCard={
             <SourceCard icon={<Radio className="w-4 h-4" />} kindLabel="Pushed to us" name="Direct feed" state={s.direct.state} lastData={s.direct.lastReceivedAt}
@@ -424,7 +425,7 @@ const LiveFeedPanel: React.FC = () => {
       )}
 
       <Card title="Rows turned away" sub="Rows the feed received but could not use, with the reason. They are not saved, so fix the source and send them again.">
-        {!s ? <Busy /> : s.rejects.length === 0 ? <Empty title="Nothing has been rejected">Every row received so far was saved.</Empty> : (
+        {!s ? <Waiting what="rejected rows" shape="table" reload={status.reload} /> : s.rejects.length === 0 ? <Empty title="Nothing has been rejected">Every row received so far was saved.</Empty> : (
           <Table head={['When', 'Via', 'Queue', 'Row', 'Why']}>
             {s.rejects.map((r, i) => <tr key={i}><td className="p-3 whitespace-nowrap">{when(r.receivedAt)}</td><td className="p-3">{SOURCE_LABEL[r.source] ?? r.source}</td><td className="p-3">{r.queue || '–'}</td><td className="p-3 font-mono">{r.rowIndex + 1}</td><td className="p-3">{r.message}</td></tr>)}
           </Table>

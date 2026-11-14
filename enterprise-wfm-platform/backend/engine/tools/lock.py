@@ -1,0 +1,140 @@
+"""Builds requirements.lock: every package the engine needs, direct and indirect, at an exact version, with the SHA-256 of every file PyPI publishes for that version.
+
+    python tools/lock.py            # writes requirements.lock (what the engine runs on) and requirements-dev.lock (plus the test tools)
+    python tools/lock.py --check    # exits 1 if either file no longer matches requirements.txt
+
+pip installs a lock like this with `pip install --require-hashes -r requirements.lock`: a package whose file is not one of those listed, or a package that is not listed, is refused,
+so the build is the same build every time and a tampered or substituted package cannot slip in. The indirect packages are worked out from each package's own published
+requirements for the platform the engine is deployed on (Linux, Python 3.12 by default: --platform / --python to change), not from whatever is installed on the machine running this,
+and each is pinned to the version installed here (the one the tests ran against) when there is one, else the newest allowed. Needs network access to pypi.org; nothing else does.
+"""
+import argparse
+import json
+import re
+import sys
+import urllib.request
+from importlib import metadata
+from pathlib import Path
+
+from packaging.markers import Marker
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+HERE = Path(__file__).resolve().parent.parent
+DEV_ONLY = {"pytest", "cryptography"}                                     # direct requirements that are test tools, not the engine
+
+
+def fetch(name, version=None):
+    url = f"https://pypi.org/pypi/{name}/{version}/json" if version else f"https://pypi.org/pypi/{name}/json"
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return json.load(r)
+
+
+def env_for(platform, python):
+    major, minor = python.split(".")[:2]
+    sysname = {"linux": "Linux", "win32": "Windows", "darwin": "Darwin"}[platform]
+    return {"sys_platform": platform, "platform_system": sysname, "os_name": "nt" if platform == "win32" else "posix", "python_version": f"{major}.{minor}",
+            "python_full_version": f"{major}.{minor}.0", "implementation_name": "cpython", "platform_python_implementation": "CPython", "platform_machine": "x86_64", "extra": ""}
+
+
+def installed(name):
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def pick_version(req, name):
+    """The version to pin: the one installed here if it satisfies the requirement (it is what was tested), else the newest release that does."""
+    have = installed(name)
+    if have and (not req.specifier or req.specifier.contains(have, prereleases=True)):
+        return have
+    releases = [Version(v) for v, files in fetch(name)["releases"].items() if files and not any(f.get("yanked") for f in files)]
+    ok = sorted(v for v in releases if not v.is_prerelease and (not req.specifier or req.specifier.contains(v)))
+    if not ok:
+        raise SystemExit(f"no release of {name} satisfies {req.specifier}")
+    return str(ok[-1])
+
+
+def resolve(direct, env):
+    """{canonical name: (name, version)} for the direct requirements and everything they need on `env`."""
+    pins, queue = {}, list(direct)
+    while queue:
+        req = queue.pop(0)
+        key = canonicalize_name(req.name)
+        if req.marker and not req.marker.evaluate(env):
+            continue
+        if key in pins:
+            if req.specifier and not req.specifier.contains(pins[key][1], prereleases=True):
+                raise SystemExit(f"{req.name}: pinned {pins[key][1]} but another package needs {req.specifier}")
+            continue
+        version = pick_version(req, req.name)
+        pins[key] = (req.name, version)
+        for line in fetch(req.name, version)["info"].get("requires_dist") or []:
+            sub = Requirement(line)
+            if sub.marker is None or sub.marker.evaluate(env):
+                queue.append(Requirement(f"{sub.name}{sub.specifier}"))
+    return pins
+
+
+def direct_requirements():
+    out = []
+    for line in (HERE / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.append(Requirement(line))
+    return out
+
+
+def render(pins, header):
+    lines = header
+    for key in sorted(pins):
+        name, version = pins[key]
+        files = fetch(name, version)["urls"]
+        hashes = sorted({f["digests"]["sha256"] for f in files})
+        if not hashes:
+            raise SystemExit(f"PyPI lists no files for {name} {version}")
+        lines.append(f"{key}=={version} \\")
+        lines += [f"    --hash=sha256:{h} \\" for h in hashes[:-1]] + [f"    --hash=sha256:{hashes[-1]}"]
+    return "\n".join(lines) + "\n"
+
+
+def build(platform, python):
+    env = env_for(platform, python)
+    direct = direct_requirements()
+    note = ["# Generated by tools/lock.py from requirements.txt: do not edit. Install with: pip install --require-hashes -r {}",
+            f"# Resolved for {platform}, Python {python}. Each package is pinned to an exact version with the SHA-256 of every file PyPI publishes for it."]
+    prod = resolve([r for r in direct if canonicalize_name(r.name) not in DEV_ONLY], env)
+    dev = resolve(direct, env)
+    return (render(prod, [note[0].format("requirements.lock"), note[1]]), render(dev, [note[0].format("requirements-dev.lock"), note[1]]))
+
+
+def parse_lock(text):
+    return {m.group(1): m.group(2) for m in re.finditer(r"^([A-Za-z0-9_.\-]+)==([^\s\\]+)", text, re.M)}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--platform", default="linux", choices=["linux", "win32", "darwin"])
+    ap.add_argument("--python", default="3.12")
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--out", default=str(HERE), help="folder to write the lock files to (default: next to requirements.txt)")
+    a = ap.parse_args()
+    prod, dev = build(a.platform, a.python)
+    targets = {Path(a.out) / "requirements.lock": prod, Path(a.out) / "requirements-dev.lock": dev}
+    if a.check:
+        stale = [p.name for p, text in targets.items() if not p.exists() or parse_lock(p.read_text(encoding="utf-8")) != parse_lock(text)]
+        if stale:
+            print("out of date: " + ", ".join(stale) + " (run python tools/lock.py)")
+            sys.exit(1)
+        print("the lock files match requirements.txt")
+        return
+    for p, text in targets.items():
+        p.write_text(text, encoding="utf-8", newline="\n")
+        print(f"wrote {p.name}: {len(parse_lock(text))} packages")
+
+
+if __name__ == "__main__":
+    main()

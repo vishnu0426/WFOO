@@ -22,5 +22,8 @@ export function fromPath(pathname: string): { module: ModuleId; sub: string } {
   const [m, s] = pathname.split('/').filter(Boolean);
   if (!m || !(MODULES as readonly string[]).includes(m)) return HOME;
   const module = m as ModuleId;
+  if (module === 'workforce' && s === 'site-loans') return { module, sub: 'cross-site-cover' };   // the old address of Cross-Site Cover
+  if (module === 'configuration' && s === 'sites-skills') return { module, sub: 'organisation' };   // sites moved to Organisation; a group's skills are on the group
+  if (module === 'configuration' && s === 'holiday-calendar') return { module, sub: 'work-calendar' };   // the old address of the Work Calendar
   return { module, sub: s || DEFAULT_SUB[module] };
 }

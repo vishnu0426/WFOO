@@ -5,13 +5,21 @@
  */
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { raw } from '../../db.ts';
 import { dropCache, redis } from '../../infra.ts';
-import { bad, conflict, notFound, parse } from '../../http.ts';
+import { HttpError, bad, conflict, notFound, parse } from '../../http.ts';
 import { ensureRolePermissions } from '../../bootstrap.ts';
-import { authenticatePlatform, signPlatformToken } from './auth.ts';
+import { adminFromMfaToken, authenticatePlatform, signMfaToken, signPlatformToken } from './auth.ts';
+import { getPlatformUrls, getSecuritySetting, sendPlatformEmail, settingsRouter } from './settings.ts';
+import { findRecoveryCode, mfaFailed, mfaLocked, mfaPassed, newRecoveryCodes, newSecret, otpauthUri, verifyTotp } from './mfa.ts';
+import { decrypt, encrypt } from '../../secrets.ts';
+import { cleanWeekend } from '../payWeek.ts';
+import { BUILT_INS } from '../compliance/rules.ts';
+import { addMonths, ALL_MODULES, applyPlanToLicence, forget as forgetTenant, getPlan, plansRouter, resolveTerms, usageOf, whyNotFit, type Terms, type PlanRow } from './plans.ts';
+import { hasCountry, publicHolidays } from '../holidays.ts';
 
 export const platform = Router();
 
@@ -21,20 +29,119 @@ const PlatformLogin = z.object({
   password: z.string().min(1),
 });
 
+const Address = z.object({
+  line1: z.string().max(200),
+  line2: z.string().max(200),
+  city: z.string().max(100),
+  state: z.string().max(100),
+  postalCode: z.string().max(30),
+  country: z.string().max(80),
+}).partial();
+const optEmail = z.union([z.string().email(), z.literal('')]).optional();
+
+// Onboarding profile (organization_settings columns added in migration 062)
+const OrgProfile = {
+  country: z.string().max(80).optional(),
+  industry: z.string().max(80).optional(),
+  companySize: z.string().max(40).optional(),
+  registrationId: z.string().max(80).optional(),
+  website: z.string().max(200).optional(),
+  contactPhone: z.string().max(40).optional(),
+  billingContactName: z.string().max(160).optional(),
+  billingContactEmail: optEmail,
+  securityContactName: z.string().max(160).optional(),
+  securityContactEmail: optEmail,
+  registeredAddress: Address.optional(),
+  billingAddress: Address.optional(),
+  billingSameAsRegistered: z.boolean().optional(),
+  contractRef: z.string().max(80).optional(),
+  accountOwner: z.string().max(160).optional(),
+  internalNotes: z.string().max(2000).optional(),
+  termsAcceptedAt: z.string().max(40).nullable().optional(),
+  isTrial: z.boolean().optional(),
+};
+const PROFILE_COLUMNS: Record<string, string> = {
+  country: 'country', industry: 'industry', companySize: 'company_size', registrationId: 'registration_id', website: 'website',
+  contactPhone: 'contact_phone', billingContactName: 'billing_contact_name', billingContactEmail: 'billing_contact_email',
+  securityContactName: 'security_contact_name', securityContactEmail: 'security_contact_email', registeredAddress: 'registered_address',
+  billingAddress: 'billing_address', billingSameAsRegistered: 'billing_same_as_registered', contractRef: 'contract_ref',
+  accountOwner: 'account_owner', internalNotes: 'internal_notes', termsAcceptedAt: 'terms_accepted_at', isTrial: 'is_trial',
+};
+const JSON_PROFILE = new Set(['registeredAddress', 'billingAddress']);
+
+// Writes the profile fields that were sent (and only those) to organization_settings.
+async function saveOrgProfile(tenantId: string, body: Record<string, any>): Promise<void> {
+  const sets: string[] = [];
+  const args: any[] = [tenantId];
+  for (const [key, col] of Object.entries(PROFILE_COLUMNS)) {
+    if (body[key] === undefined) continue;
+    let v = body[key];
+    if (JSON_PROFILE.has(key)) v = JSON.stringify(v ?? {});
+    else if ((col === 'billing_contact_email' || col === 'security_contact_email') && v === '') v = null;
+    else if (col === 'terms_accepted_at' && v) v = new Date(v);
+    args.push(v);
+    sets.push(`${col} = $${args.length}${JSON_PROFILE.has(key) ? '::jsonb' : ''}`);
+  }
+  if (!sets.length) return;
+  await raw(`UPDATE wfm.organization_settings SET ${sets.join(', ')}, updated_at = now() WHERE tenant_id = $1`, args);
+}
+
+function profileOut(s: any) {
+  const g = (camel: string, snake: string, fallback: any = '') => s?.[camel] ?? s?.[snake] ?? fallback;
+  return {
+    country: g('country', 'country'),
+    industry: g('industry', 'industry'),
+    companySize: g('companySize', 'company_size'),
+    registrationId: g('registrationId', 'registration_id'),
+    website: g('website', 'website'),
+    contactPhone: g('contactPhone', 'contact_phone'),
+    billingContactName: g('billingContactName', 'billing_contact_name'),
+    billingContactEmail: g('billingContactEmail', 'billing_contact_email', null),
+    securityContactName: g('securityContactName', 'security_contact_name'),
+    securityContactEmail: g('securityContactEmail', 'security_contact_email', null),
+    registeredAddress: g('registeredAddress', 'registered_address', {}),
+    billingAddress: g('billingAddress', 'billing_address', {}),
+    billingSameAsRegistered: g('billingSameAsRegistered', 'billing_same_as_registered', true),
+    contractRef: g('contractRef', 'contract_ref'),
+    accountOwner: g('accountOwner', 'account_owner'),
+    internalNotes: g('internalNotes', 'internal_notes'),
+    termsAcceptedAt: g('termsAcceptedAt', 'terms_accepted_at', null),
+    isTrial: g('isTrial', 'is_trial', false),
+    onboardedBy: g('onboardedBy', 'onboarded_by'),
+  };
+}
+
 const NewOrgBody = z.object({
   name: z.string().min(1).max(120),
   code: z.string().min(1).max(40).regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, numbers, dot, dash and underscore'),
   legalName: z.string().max(200).optional(),
   timezone: z.string().min(1).max(80).default('UTC'),
   currency: z.string().min(3).max(3).default('USD'),
+  locale: z.string().min(2).max(20).optional(),
+  contactName: z.string().max(160).optional(),
+  contactEmail: optEmail,
+  ...OrgProfile,
+  payWeekStart: z.number().int().min(0).max(6).optional(),                   // weekday a pay week begins on, Monday 0 ... Sunday 6 (Monday when omitted)
+  weekendDays: z.array(z.number().int().min(0).max(6)).min(1).max(3).optional(),   // weekdays that count as the weekend (Saturday and Sunday when omitted)
+  holidayCountry: z.string().length(2).optional(),
+  compliancePack: z.string().max(60).optional(),                             // a ready-made labour-law pack to assign to the whole organisation                           // add this country's public holidays for this year and next
+  mainSiteName: z.string().trim().max(80).optional(),                         // the first site; its time zone, country and address come from the organisation
   adminUser: z.string().min(1).max(60).optional(),
+  adminName: z.string().min(1).max(160).optional(),
+  // When no password is given, a one-time temporary password is generated and must be changed at first sign-in.
   adminPassword: z.string().min(8).optional(),
   adminEmail: z.string().email().optional(),
-  planTier: z.enum(['STARTER', 'PROFESSIONAL', 'ENTERPRISE', 'ENTERPRISE_PLUS', 'CUSTOM']).optional(),
-  maxEmployees: z.number().int().min(1).optional(),
-  maxUsers: z.number().int().min(1).optional(),
+  planTier: z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_]{1,29}$/).optional(),     // a plan code from the catalogue (Settings, Plans)
+  maxEmployees: z.number().int().min(1).optional(),     // employee seats: the one number that is really per customer
+  maxUsers: z.number().int().min(1).optional(),         // users, sites, workspaces and modules come from the plan unless overridden (with a reason)
   maxSites: z.number().int().min(1).optional(),
-  modules: z.array(z.string()).optional(),
+  maxWorkspaces: z.number().int().min(1).optional(),
+  gracePeriodDays: z.number().int().min(0).max(365).optional(),
+  startDate: z.string().max(40).optional(),
+  endDate: z.string().max(40).optional(),
+  termMonths: z.number().int().min(1).max(120).optional(),
+  customReason: z.string().max(300).optional(),
+  modules: z.array(z.enum(ALL_MODULES)).optional(),
 });
 
 const OrgPatch = z.object({
@@ -46,6 +153,7 @@ const OrgPatch = z.object({
   timezone: z.string().min(1).max(80).optional(),
   currency: z.string().min(3).max(3).optional(),
   locale: z.string().min(2).max(20).optional(),
+  ...OrgProfile,
 });
 
 const NewWorkspaceBody = z.object({
@@ -142,6 +250,21 @@ async function logPlatformAudit(params: {
 
 // ---------------------------------------------------------------- Super Admin Authentication
 
+async function completeSignIn(req: any, res: any, admin: { id: string; email: string; status: string }, method: string) {
+  const ip = getClientIp(req);
+  const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+  await logPlatformAudit({ adminId: admin.id, adminEmail: admin.email, action: 'SIGN_IN', targetEntityType: 'PLATFORM_SESSION', ipAddress: ip, userAgent, details: { method }, status: 'SUCCESS' });
+  const sec = await getSecuritySetting();
+  const token = signPlatformToken({ id: admin.id, email: admin.email }, sec.sessionHours);
+  const issued = jwt.decode(token) as jwt.JwtPayload;
+  await raw(
+    `INSERT INTO wfm.platform_sessions (admin_id, jti, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, $4, to_timestamp($5))`,
+    [admin.id, String(issued.jti), ip, userAgent.slice(0, 300), issued.exp]
+  );
+  await raw('UPDATE wfm.platform_admins SET last_login_at = now() WHERE id = $1', [admin.id]);
+  res.json({ token, admin: { id: admin.id, email: admin.email, status: admin.status } });
+}
+
 platform.post('/auth/login', async (req, res) => {
   const b = parse(PlatformLogin, req.body);
   const ip = getClientIp(req);
@@ -196,32 +319,63 @@ platform.post('/auth/login', async (req, res) => {
     throw bad('Invalid email or password');
   }
 
-  await logPlatformAudit({
-    adminId: admin.id,
-    adminEmail: admin.email,
-    action: 'SIGN_IN',
-    targetEntityType: 'PLATFORM_SESSION',
-    ipAddress: ip,
-    userAgent,
-    status: 'SUCCESS',
-  });
+  const [m] = await raw<any>('SELECT totp_enabled FROM wfm.platform_admins WHERE id = $1', [admin.id]);
+  if (m?.totpEnabled ?? m?.totp_enabled) {
+    res.json({ mfaRequired: true, mfaToken: signMfaToken(admin.id) });
+    return;
+  }
+  await completeSignIn(req, res, admin, 'password');
+});
 
-  const token = signPlatformToken({ id: admin.id, email: admin.email });
-  res.json({
-    token,
-    admin: {
-      id: admin.id,
-      email: admin.email,
-      status: admin.status,
-    },
-  });
+// Second step of sign-in for accounts with two-factor on: an authenticator code, or one of the one-time recovery codes.
+platform.post('/auth/login/mfa', async (req, res) => {
+  const b = parse(z.object({ mfaToken: z.string().min(10), code: z.string().trim().min(6).max(24) }), req.body);
+  const adminId = adminFromMfaToken(b.mfaToken);
+  const ip = getClientIp(req);
+  const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+  const [a] = await raw<any>('SELECT id, email, status, totp_secret_enc, recovery_codes FROM wfm.platform_admins WHERE id = $1 AND totp_enabled', [adminId]);
+  if (!a || a.status !== 'ACTIVE') throw bad('That code is not correct.');
+  if (mfaLocked(adminId)) throw bad('Too many wrong codes. Wait 10 minutes and try again.');
+  const hashes: string[] = a.recoveryCodes ?? a.recovery_codes ?? [];
+  let method = '';
+  if (verifyTotp(decrypt(a.totpSecretEnc ?? a.totp_secret_enc), b.code)) method = 'authenticator app';
+  else {
+    const idx = findRecoveryCode(hashes, b.code);
+    if (idx >= 0) {
+      method = 'recovery code';
+      hashes.splice(idx, 1);
+      await raw('UPDATE wfm.platform_admins SET recovery_codes = $2::jsonb WHERE id = $1', [adminId, JSON.stringify(hashes)]);
+    }
+  }
+  if (!method) {
+    mfaFailed(adminId);
+    await logPlatformAudit({ adminId, adminEmail: a.email, action: 'SIGN_IN_FAILED', targetEntityType: 'PLATFORM_SESSION', ipAddress: ip, userAgent, details: { reason: 'Wrong two-factor code' }, status: 'FAILURE' });
+    throw bad('That code is not correct.');
+  }
+  mfaPassed(adminId);
+  await completeSignIn(req, res, a, method);
 });
 
 // All routes below require platform authentication
 platform.use(authenticatePlatform);
 
+// When two-factor sign-in is required, an account without it can only reach its own Account page until it is set up.
+platform.use(async (req, _res, next) => {
+  try {
+    if (req.path.startsWith('/auth/')) return next();
+    if ((await getSecuritySetting()).requireMfa) {
+      const [a] = await raw<any>('SELECT totp_enabled FROM wfm.platform_admins WHERE id = $1', [req.platformAdmin!.id]);
+      if (!(a?.totpEnabled ?? a?.totp_enabled)) throw new HttpError(403, 'MFA_SETUP_REQUIRED', 'Two-factor sign-in is required. Set it up on the Account page to continue.');
+    }
+    next();
+  } catch (e) { next(e); }
+});
+platform.use('/settings', settingsRouter(logPlatformAudit, getClientIp));
+platform.use('/', plansRouter(logPlatformAudit, getClientIp));       // plan catalogue and country templates
+
 platform.post('/auth/logout', async (req, res) => {
   const ip = getClientIp(req);
+  await raw('UPDATE wfm.platform_sessions SET revoked_at = now() WHERE jti = $1 AND revoked_at IS NULL', [req.platformAdmin!.jti]);
   await logPlatformAudit({
     adminId: req.platformAdmin!.id,
     adminEmail: req.platformAdmin!.email,
@@ -235,9 +389,178 @@ platform.post('/auth/logout', async (req, res) => {
 });
 
 platform.get('/auth/me', async (req, res) => {
+  const [a] = await raw<any>(
+    'SELECT id, email, status, display_name, last_login_at, password_changed_at, created_at, totp_enabled FROM wfm.platform_admins WHERE id = $1',
+    [req.platformAdmin!.id]
+  );
   res.json({
-    admin: req.platformAdmin,
+    admin: {
+      ...req.platformAdmin,
+      status: a?.status,
+      displayName: a?.displayName ?? a?.display_name ?? '',
+      lastLoginAt: a?.lastLoginAt ?? a?.last_login_at ?? null,
+      passwordChangedAt: a?.passwordChangedAt ?? a?.password_changed_at ?? null,
+      createdAt: a?.createdAt ?? a?.created_at ?? null,
+      mfaEnabled: !!(a?.totpEnabled ?? a?.totp_enabled),
+      mfaSetupRequired: (await getSecuritySetting()).requireMfa && !(a?.totpEnabled ?? a?.totp_enabled),
+    },
   });
+});
+
+// ---------------------------------------------------------------- Super Admin account: profile, password, sessions
+
+const ProfileBody = z.object({ displayName: z.string().trim().max(120) });
+const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(12, 'Use at least 12 characters').max(200)
+    .regex(/[a-z]/, 'Include a lowercase letter').regex(/[A-Z]/, 'Include an uppercase letter').regex(/[0-9]/, 'Include a number'),
+});
+
+platform.patch('/auth/profile', async (req, res) => {
+  const b = parse(ProfileBody, req.body);
+  await raw('UPDATE wfm.platform_admins SET display_name = $2, updated_at = now() WHERE id = $1', [req.platformAdmin!.id, b.displayName]);
+  await logPlatformAudit({
+    adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'UPDATE_PROFILE', targetEntityType: 'PLATFORM_ADMIN',
+    targetEntityId: req.platformAdmin!.id, ipAddress: getClientIp(req), userAgent: (req.headers['user-agent'] as string) || 'Unknown', status: 'SUCCESS',
+  });
+  res.json({ ok: true, displayName: b.displayName });
+});
+
+platform.post('/auth/change-password', async (req, res) => {
+  const b = parse(ChangePasswordBody, req.body);
+  const ip = getClientIp(req);
+  const userAgent = (req.headers['user-agent'] as string) || 'Unknown';
+  const [a] = await raw<any>('SELECT password_hash FROM wfm.platform_admins WHERE id = $1', [req.platformAdmin!.id]);
+  const hash = a?.passwordHash || a?.password_hash;
+  if (!hash || !(await bcrypt.compare(b.currentPassword, hash))) {
+    await logPlatformAudit({
+      adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'PASSWORD_CHANGE_FAILED', targetEntityType: 'PLATFORM_ADMIN',
+      ipAddress: ip, userAgent, details: { reason: 'Current password incorrect' }, status: 'FAILURE',
+    });
+    throw bad('The current password is not correct');
+  }
+  if (b.newPassword === b.currentPassword) throw bad('Choose a password that is different from the current one');
+  await raw(
+    'UPDATE wfm.platform_admins SET password_hash = $2, password_changed_at = now(), updated_at = now() WHERE id = $1',
+    [req.platformAdmin!.id, await bcrypt.hash(b.newPassword, 12)]
+  );
+  // Every other device is signed out; this one stays signed in.
+  const ended = await raw<{ id: string }>(
+    'UPDATE wfm.platform_sessions SET revoked_at = now() WHERE admin_id = $1 AND jti <> $2 AND revoked_at IS NULL RETURNING id',
+    [req.platformAdmin!.id, req.platformAdmin!.jti]
+  );
+  await logPlatformAudit({
+    adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'PASSWORD_CHANGED', targetEntityType: 'PLATFORM_ADMIN',
+    targetEntityId: req.platformAdmin!.id, ipAddress: ip, userAgent, details: { otherSessionsEnded: ended.length }, status: 'SUCCESS',
+  });
+  res.json({ ok: true, otherSessionsEnded: ended.length });
+});
+
+// ---- two-factor sign-in (authenticator app)
+async function secondFactorOk(adminId: string, code: string, consume = false): Promise<boolean> {
+  const [a] = await raw<any>('SELECT totp_secret_enc, recovery_codes FROM wfm.platform_admins WHERE id = $1 AND totp_enabled', [adminId]);
+  if (!a || mfaLocked(adminId)) return false;
+  if (verifyTotp(decrypt(a.totpSecretEnc ?? a.totp_secret_enc), code)) { mfaPassed(adminId); return true; }
+  const hashes: string[] = a.recoveryCodes ?? a.recovery_codes ?? [];
+  const idx = findRecoveryCode(hashes, code);
+  if (idx >= 0) {
+    if (consume) { hashes.splice(idx, 1); await raw('UPDATE wfm.platform_admins SET recovery_codes = $2::jsonb WHERE id = $1', [adminId, JSON.stringify(hashes)]); }
+    mfaPassed(adminId);
+    return true;
+  }
+  mfaFailed(adminId);
+  return false;
+}
+const passwordOk = async (adminId: string, password: string) => {
+  const [a] = await raw<any>('SELECT password_hash FROM wfm.platform_admins WHERE id = $1', [adminId]);
+  const h = a?.passwordHash || a?.password_hash;
+  return !!h && (await bcrypt.compare(password, h));
+};
+const mfaAudit = (req: any, action: string, status: 'SUCCESS' | 'FAILURE' = 'SUCCESS') =>
+  logPlatformAudit({ adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action, targetEntityType: 'PLATFORM_ADMIN', targetEntityId: req.platformAdmin!.id, ipAddress: getClientIp(req), userAgent: (req.headers['user-agent'] as string) || 'Unknown', status });
+
+platform.post('/auth/mfa/setup', async (req, res) => {
+  const [a] = await raw<any>('SELECT totp_enabled FROM wfm.platform_admins WHERE id = $1', [req.platformAdmin!.id]);
+  if (a?.totpEnabled ?? a?.totp_enabled) throw conflict('Two-factor sign-in is already on for this account.');
+  const secret = newSecret();
+  await raw('UPDATE wfm.platform_admins SET totp_secret_enc = $2 WHERE id = $1', [req.platformAdmin!.id, encrypt(secret)]);
+  res.json({ secret, otpauthUri: otpauthUri(secret, req.platformAdmin!.email, 'Enterprise WFM') });
+});
+
+platform.post('/auth/mfa/enable', async (req, res) => {
+  const b = parse(z.object({ code: z.string().trim().min(6).max(10) }), req.body);
+  const [a] = await raw<any>('SELECT totp_secret_enc, totp_enabled FROM wfm.platform_admins WHERE id = $1', [req.platformAdmin!.id]);
+  const enc = a?.totpSecretEnc ?? a?.totp_secret_enc;
+  if (!enc || (a.totpEnabled ?? a.totp_enabled)) throw bad('Start the setup again to get a new key.');
+  if (mfaLocked(req.platformAdmin!.id) || !verifyTotp(decrypt(enc), b.code)) { mfaFailed(req.platformAdmin!.id); throw bad('That code is not correct. Check the time on your phone and try the next code.'); }
+  mfaPassed(req.platformAdmin!.id);
+  const codes = newRecoveryCodes();
+  await raw('UPDATE wfm.platform_admins SET totp_enabled = true, totp_enabled_at = now(), recovery_codes = $2::jsonb WHERE id = $1', [req.platformAdmin!.id, JSON.stringify(codes.hashes)]);
+  await mfaAudit(req, 'MFA_ENABLED');
+  res.json({ ok: true, recoveryCodes: codes.plain });
+});
+
+platform.post('/auth/mfa/disable', async (req, res) => {
+  const b = parse(z.object({ password: z.string().min(1), code: z.string().trim().min(6).max(24) }), req.body);
+  if ((await getSecuritySetting()).requireMfa) throw bad('Two-factor sign-in is required for all Super Admins, so it cannot be turned off. Ask for the requirement to be lifted first.');
+  if (!(await passwordOk(req.platformAdmin!.id, b.password)) || !(await secondFactorOk(req.platformAdmin!.id, b.code))) { await mfaAudit(req, 'MFA_DISABLE_FAILED', 'FAILURE'); throw bad('The password or the code is not correct.'); }
+  await raw(`UPDATE wfm.platform_admins SET totp_enabled = false, totp_secret_enc = NULL, totp_enabled_at = NULL, recovery_codes = '[]'::jsonb WHERE id = $1`, [req.platformAdmin!.id]);
+  await mfaAudit(req, 'MFA_DISABLED');
+  res.json({ ok: true });
+});
+
+platform.post('/auth/mfa/recovery-codes', async (req, res) => {
+  const b = parse(z.object({ password: z.string().min(1), code: z.string().trim().min(6).max(24) }), req.body);
+  if (!(await passwordOk(req.platformAdmin!.id, b.password)) || !(await secondFactorOk(req.platformAdmin!.id, b.code, true))) { await mfaAudit(req, 'MFA_RECOVERY_FAILED', 'FAILURE'); throw bad('The password or the code is not correct.'); }
+  const codes = newRecoveryCodes();
+  await raw('UPDATE wfm.platform_admins SET recovery_codes = $2::jsonb WHERE id = $1', [req.platformAdmin!.id, JSON.stringify(codes.hashes)]);
+  await mfaAudit(req, 'MFA_RECOVERY_CODES_RENEWED');
+  res.json({ ok: true, recoveryCodes: codes.plain });
+});
+
+platform.get('/auth/sessions', async (req, res) => {
+  const rows = await raw<any>(
+    `SELECT id, jti, ip_address, user_agent, created_at, last_seen_at, expires_at
+     FROM wfm.platform_sessions
+     WHERE admin_id = $1 AND revoked_at IS NULL AND expires_at > now()
+     ORDER BY last_seen_at DESC LIMIT 50`,
+    [req.platformAdmin!.id]
+  );
+  res.json(rows.map((s) => ({
+    id: s.id,
+    current: (s.jti ?? '') === req.platformAdmin!.jti,
+    ipAddress: s.ipAddress ?? s.ip_address ?? null,
+    userAgent: s.userAgent ?? s.user_agent ?? null,
+    createdAt: s.createdAt ?? s.created_at,
+    lastSeenAt: s.lastSeenAt ?? s.last_seen_at,
+    expiresAt: s.expiresAt ?? s.expires_at,
+  })));
+});
+
+platform.post('/auth/sessions/revoke-others', async (req, res) => {
+  const ended = await raw<{ id: string }>(
+    'UPDATE wfm.platform_sessions SET revoked_at = now() WHERE admin_id = $1 AND jti <> $2 AND revoked_at IS NULL RETURNING id',
+    [req.platformAdmin!.id, req.platformAdmin!.jti]
+  );
+  await logPlatformAudit({
+    adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'SESSIONS_REVOKED', targetEntityType: 'PLATFORM_SESSION',
+    ipAddress: getClientIp(req), userAgent: (req.headers['user-agent'] as string) || 'Unknown', details: { count: ended.length }, status: 'SUCCESS',
+  });
+  res.json({ ok: true, ended: ended.length });
+});
+
+platform.delete('/auth/sessions/:id', async (req, res) => {
+  const id = parse(uuid, req.params.id);
+  const ended = await raw<{ id: string }>(
+    'UPDATE wfm.platform_sessions SET revoked_at = now() WHERE id = $1 AND admin_id = $2 AND revoked_at IS NULL RETURNING id',
+    [id, req.platformAdmin!.id]
+  );
+  if (!ended.length) throw notFound('Session');
+  await logPlatformAudit({
+    adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'SESSIONS_REVOKED', targetEntityType: 'PLATFORM_SESSION',
+    targetEntityId: id, ipAddress: getClientIp(req), userAgent: (req.headers['user-agent'] as string) || 'Unknown', details: { count: 1 }, status: 'SUCCESS',
+  });
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- Organizations
@@ -451,8 +774,6 @@ platform.get('/analytics', async (_req, res) => {
       totalIntervals,
       totalConnectors,
       totalAuditLogs,
-      telemetryUptime: '99.98%',
-      telemetryStatus: 'OPTIMAL',
     },
     tenants: tenantMetrics,
     storageDistribution: [
@@ -479,12 +800,54 @@ platform.get('/analytics', async (_req, res) => {
   });
 });
 
+const INVITE_DAYS = 7;
+/** A one-time link to set a password (valid for a week) and, when mail is set up, the email that carries it. The link is only ever shown here and in that email. */
+async function createInvite(
+  u: { tenantId: string; tenantName: string; tenantCode: string; userId: string; username: string; email: string | null; name: string },
+  by?: { id: string; email: string }
+): Promise<{ link: string; expiresAt: string; email: { sent: boolean; error?: string } | null }> {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + INVITE_DAYS * 86400000);
+  await raw(`UPDATE wfm.emergency_password_resets SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`, [u.userId]);   // an older link stops working
+  await raw(
+    `INSERT INTO wfm.emergency_password_resets (tenant_id, user_id, token_hash, created_by_admin_id, created_by_admin_email, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [u.tenantId, u.userId, crypto.createHash('sha256').update(rawToken).digest('hex'), by?.id || null, by?.email || 'platform', expiresAt]
+  );
+  const urls = await getPlatformUrls();
+  const link = `${urls.tenantApp}/reset-password?token=${rawToken}&org=${encodeURIComponent(u.tenantCode)}&invite=1`;
+  let email: { sent: boolean; error?: string } | null = null;
+  if (u.email) {
+    const r = await sendPlatformEmail(
+      u.email,
+      `Your Enterprise WFM account for ${u.tenantName}`,
+      `Hello ${u.name},\n\nAn Enterprise WFM account has been created for you as administrator of ${u.tenantName}.\n\nSet your password here (the link works once and expires in ${INVITE_DAYS} days):\n${link}\n\nYour sign-in name is: ${u.username}\nOrganisation code: ${u.tenantCode}\n\nIf you were not expecting this message, you can ignore it.`
+    );
+    email = { sent: r.ok, error: r.error };
+  }
+  return { link, expiresAt: expiresAt.toISOString(), email };
+}
+
 platform.post('/organizations', async (req, res) => {
   const b = parse(NewOrgBody, req.body);
   const code = b.code.toUpperCase();
   const existing = await raw<{ id: string }>('SELECT id FROM wfm.tenants WHERE upper(code) = $1', [code]);
   if (existing.length) {
     throw conflict(`An organisation with code "${code}" already exists.`);
+  }
+
+  // The plan and its terms are worked out first, so a bad choice is refused before anything is created.
+  let licence: { plan: PlanRow; terms: Terms; start: Date; end: Date; isTrial: boolean; termMonths: number | null } | null = null;
+  if (b.planTier) {
+    const plan = await getPlan(b.planTier);
+    if (!plan) throw bad('Choose a plan from the catalogue.');
+    if (plan.status !== 'ACTIVE') throw bad(`${plan.name} is retired and cannot be given to a new customer.`);
+    const terms = resolveTerms(plan, { maxEmployees: b.maxEmployees, maxUsers: b.maxUsers, maxSites: b.maxSites, maxWorkspaces: b.maxWorkspaces, gracePeriodDays: b.gracePeriodDays, modules: b.modules, reason: b.customReason });
+    const start = b.startDate ? new Date(b.startDate) : new Date();
+    const isTrial = !!b.isTrial;
+    const end = isTrial ? new Date(start.getTime() + plan.trialDays * 86400000) : b.endDate ? new Date(b.endDate) : addMonths(start, b.termMonths ?? 12);
+    if (!(end > start)) throw bad('The licence must end after it starts.');
+    licence = { plan, terms, start, end, isTrial, termMonths: isTrial ? null : b.termMonths ?? null };
   }
 
   const [t] = await raw<any>(
@@ -502,48 +865,83 @@ platform.post('/organizations', async (req, res) => {
 
   // organization settings
   await raw(
-    `INSERT INTO wfm.organization_settings (tenant_id, legal_name, display_name, timezone, currency)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [t.id, b.legalName || b.name, b.name, b.timezone, b.currency]
+    `INSERT INTO wfm.organization_settings (tenant_id, legal_name, display_name, contact_name, contact_email, timezone, currency, locale, onboarded_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [t.id, b.legalName || b.name, b.name, b.contactName || '', b.contactEmail || null, b.timezone, b.currency, b.locale || 'en', req.platformAdmin?.email || '']
   );
+  await saveOrgProfile(t.id, b);
 
-  // provision first-class license & modules only if planTier is explicitly specified
-  if (b.planTier) {
+  // work calendar: the first workspace starts with the chosen pay week and weekend, so the customer's Scheduling Rules screen shows them from day one
+  if (b.payWeekStart !== undefined || b.weekendDays) {
+    await raw(
+      `INSERT INTO wfm.scheduling_policy (tenant_id, workspace_id, defaults, updated_by) VALUES ($1, $2, $3::jsonb, $4)
+       ON CONFLICT (tenant_id, workspace_id) DO UPDATE SET defaults = wfm.scheduling_policy.defaults || EXCLUDED.defaults, updated_at = now()`,
+      [t.id, ws.id, JSON.stringify({ payWeekStart: b.payWeekStart ?? 0, weekendDays: cleanWeekend(b.weekendDays) }), req.platformAdmin?.email || 'platform']
+    );
+  }
+  // labour-law pack for the country: added to the workspace and assigned to the whole organisation, so rotation and schedule checks have rules from the first day
+  const pack = b.compliancePack ? BUILT_INS.find((x) => x.code === b.compliancePack) : undefined;
+  if (pack) {
+    const [row] = await raw<any>(
+      `INSERT INTO wfm.compliance_packs (tenant_id, workspace_id, code, name, region, description, rules, built_in) VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+       ON CONFLICT (tenant_id, workspace_id, code) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
+      [t.id, ws.id, pack.code, pack.name, pack.region, pack.description, JSON.stringify(pack.rules)]);
+    await raw(
+      `INSERT INTO wfm.compliance_assignments (tenant_id, workspace_id, scope_type, scope_id, scope_key, pack_id) VALUES ($1, $2, 'TENANT', NULL, 'tenant', $3) ON CONFLICT DO NOTHING`,
+      [t.id, ws.id, row.id]);
+  }
+  // the main site: where the organisation is, so the first group has a site to belong to and the Multi-Site page has something to show from day one
+  const ra = (b as any).registeredAddress as { line1?: string; line2?: string; city?: string; state?: string; postalCode?: string } | undefined;
+  const mainSiteAddress = [ra?.line1, ra?.line2, ra?.city, ra?.state, ra?.postalCode].filter((x) => x && String(x).trim()).join(', ');
+  const mainSiteName = b.mainSiteName?.trim() || 'Head office';
+  await raw(
+    `INSERT INTO wfm.sites (tenant_id, workspace_id, name, code, timezone, country, address) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [t.id, ws.id, mainSiteName, mainSiteName.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'SITE', b.timezone, b.country ?? '', mainSiteAddress]);
+  let holidaysAdded = 0;
+  if (b.holidayCountry && hasCountry(b.holidayCountry)) {
+    const thisYear = new Date().getUTCFullYear();
+    for (const h of [...publicHolidays(b.holidayCountry, thisYear), ...publicHolidays(b.holidayCountry, thisYear + 1)]) {
+      await raw(
+        `INSERT INTO wfm.special_events (tenant_id, workspace_id, name, kind, start_day, end_day, uplift_pct, lead_days, lag_days) VALUES ($1, $2, $3, 'holiday', $4::date, $5::date, 0, 0, 0)`,
+        [t.id, ws.id, h.name, h.startDay, h.endDay]
+      );
+      holidaysAdded++;
+    }
+  }
+
+  // the licence copies the plan's numbers (or the agreed exceptions), so editing the plan later never changes this customer by itself
+  if (licence) {
     const keyPrefix = `LIC-${code.replace(/[^A-Za-z0-9]/g, '')}-${new Date().getFullYear()}-`;
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const licenseKey = `${keyPrefix}${randomSuffix}`;
-
+    const licenseKey = `${keyPrefix}${Math.floor(1000 + Math.random() * 9000)}`;
+    const L = licence.terms;
     const [lic] = await raw<any>(
       `INSERT INTO wfm.licenses (
-        license_key, tenant_id, plan_tier, edition, status,
-        start_date, end_date, renewal_date, grace_period_days,
-        max_employees, max_users, max_supervisors, max_sites, max_workspaces
-      ) VALUES ($1, $2, $3, 'WFM_ENTERPRISE', 'ACTIVE', now(), now() + interval '1 year', now() + interval '1 year', 14, $4, $5, 25, $6, 5)
+        license_key, tenant_id, plan_tier, edition, status, start_date, end_date, renewal_date, grace_period_days,
+        max_employees, max_users, max_supervisors, max_sites, max_workspaces, custom_terms, custom_reason, is_trial, term_months
+      ) VALUES ($1, $2, $3, 'WFM_ENTERPRISE', 'ACTIVE', $4, $5, $5, $6, $7, $8, 25, $9, $10, $11, $12, $13, $14)
       RETURNING *`,
-      [licenseKey, t.id, b.planTier, b.maxEmployees || 500, b.maxUsers || 100, b.maxSites || 10]
+      [licenseKey, t.id, licence.plan.code, licence.start, licence.end, L.gracePeriodDays, L.maxEmployees, L.maxUsers, L.maxSites, L.maxWorkspaces, L.customTerms, L.customReason, licence.isTrial, licence.termMonths]
     );
-
-    const defaultModules = b.modules && b.modules.length > 0
-      ? b.modules
-      : ['FORECASTING', 'SCHEDULING', 'INTRADAY', 'ADHERENCE', 'TIME_OFF', 'SHIFT_BIDDING', 'EMPLOYEE_SELF_SERVICE', 'REPORTING', 'AI_COPILOT'];
-
-    for (const m of defaultModules) {
+    for (const m of ALL_MODULES) {
       await raw(
-        `INSERT INTO wfm.license_modules (license_id, tenant_id, module_code, enabled)
-         VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`,
-        [lic.id, t.id, m]
+        `INSERT INTO wfm.license_modules (license_id, tenant_id, module_code, enabled) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [lic.id, t.id, m, L.modules.includes(m)]
       );
     }
   }
 
   let initialAdmin: any = null;
-  if (b.adminUser && b.adminPassword) {
-    const hash = await bcrypt.hash(b.adminPassword, 12);
+  let invite: { link: string; expiresAt: string; email: { sent: boolean; error?: string } | null } | null = null;
+  const adminUsername = b.adminUser || (b.adminEmail ? b.adminEmail.toLowerCase() : '');
+  if (adminUsername && (b.adminPassword || b.adminEmail)) {
+    // No password typed by the operator: the account starts locked and the administrator sets their own through a one-time link.
+    const password = b.adminPassword || crypto.randomBytes(32).toString('base64url');
+    const hash = await bcrypt.hash(password, 12);
     const [admin] = await raw<any>(
-      `INSERT INTO wfm.users (tenant_id, username, display_name, email, role, password_hash, default_workspace_id)
-       VALUES ($1, $2, $3, $4, 'WFM_ADMIN', $5, $6)
+      `INSERT INTO wfm.users (tenant_id, username, display_name, email, role, password_hash, default_workspace_id, must_change_password)
+       VALUES ($1, $2, $3, $4, 'WFM_ADMIN', $5, $6, false)
        RETURNING id, username, display_name, email, role, status`,
-      [t.id, b.adminUser, 'Administrator', b.adminEmail || null, hash, ws.id]
+      [t.id, adminUsername, b.adminName || 'Administrator', b.adminEmail || null, hash, ws.id]
     );
     await raw(
       `INSERT INTO wfm.workspace_members (tenant_id, workspace_id, user_id, role, is_default)
@@ -558,6 +956,7 @@ platform.post('/organizations', async (req, res) => {
       role: admin.role,
       status: admin.status,
     };
+    if (!b.adminPassword) invite = await createInvite({ tenantId: t.id, tenantName: t.name, tenantCode: t.code, userId: admin.id, username: admin.username, email: b.adminEmail || null, name: b.adminName || 'Administrator' }, req.platformAdmin);
   }
 
   const ip = getClientIp(req);
@@ -580,6 +979,11 @@ platform.post('/organizations', async (req, res) => {
       timezone: b.timezone,
       currency: b.currency,
       defaultWorkspace: ws.name,
+      payWeekStart: b.payWeekStart ?? null,
+      weekendDays: b.weekendDays ?? null,
+      compliancePack: pack?.code ?? null,
+      mainSite: mainSiteName,
+      holidaysAdded,
       initialAdminUser: initialAdmin?.username || null,
     },
     status: 'SUCCESS',
@@ -602,6 +1006,8 @@ platform.post('/organizations', async (req, res) => {
       isDefault: ws.is_default,
     },
     admin: initialAdmin,
+    invite,
+    holidaysAdded,
   });
 });
 
@@ -635,6 +1041,7 @@ platform.get('/organizations/:id', async (req, res) => {
       currency: s?.currency || t.currency,
       locale: s?.locale || 'en',
       createdAt: t.createdAt || t.created_at,
+      ...profileOut(s),
     },
     workspaces,
     users,
@@ -681,6 +1088,7 @@ platform.patch('/organizations/:id', async (req, res) => {
     ]
   );
 
+  await saveOrgProfile(orgId, b);
   const [updatedT] = await raw<any>('SELECT * FROM wfm.tenants WHERE id = $1', [orgId]);
   const [updatedS] = await raw<any>('SELECT * FROM wfm.organization_settings WHERE tenant_id = $1', [orgId]);
 
@@ -713,6 +1121,7 @@ platform.patch('/organizations/:id', async (req, res) => {
     currency: updatedS?.currency || updatedT.currency,
     locale: updatedS?.locale || 'en',
     createdAt: updatedT.createdAt || updatedT.created_at,
+    ...profileOut(updatedS),
   });
 });
 
@@ -734,6 +1143,12 @@ platform.post('/organizations/:id/workspaces', async (req, res) => {
   if (!t) throw notFound('Organisation');
 
   const b = parse(NewWorkspaceBody, req.body);
+  {
+    const [lim] = await raw<any>(
+      `SELECT l.max_workspaces, (SELECT count(*)::int FROM wfm.workspaces w WHERE w.tenant_id = l.tenant_id AND w.status = 'ACTIVE') AS used FROM wfm.licenses l WHERE l.tenant_id = $1 AND l.status NOT IN ('CANCELLED') ORDER BY l.created_at DESC LIMIT 1`, [orgId]);
+    const max = lim?.maxWorkspaces ?? lim?.max_workspaces;
+    if (lim && lim.used >= max) throw conflict(`This organisation's licence allows ${max} workspaces and it has ${lim.used}. Raise the workspace limit in Licensing first.`);
+  }
   const code = b.code.toUpperCase();
   const existing = await raw<{ id: string }>('SELECT id FROM wfm.workspaces WHERE tenant_id = $1 AND upper(code) = $2', [orgId, code]);
   if (existing.length) throw conflict(`A workspace with code "${code}" already exists in this organisation.`);
@@ -823,6 +1238,24 @@ platform.post('/organizations/:id/admin', async (req, res) => {
       createdAt: u.created_at,
     },
   });
+});
+
+platform.post('/organizations/:id/admin/:userId/invite', async (req, res) => {
+  const orgId = parse(uuid, req.params.id);
+  const userId = parse(uuid, req.params.userId);
+  const [row] = await raw<any>(
+    `SELECT u.id, u.username, u.display_name, u.email, t.name AS tenant_name, t.code AS tenant_code
+     FROM wfm.users u JOIN wfm.tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.tenant_id = $2`,
+    [userId, orgId]
+  );
+  if (!row) throw notFound('User');
+  const invite = await createInvite({ tenantId: orgId, tenantName: row.tenantName ?? row.tenant_name, tenantCode: row.tenantCode ?? row.tenant_code, userId, username: row.username, email: row.email, name: row.displayName ?? row.display_name }, req.platformAdmin);
+  await logPlatformAudit({
+    adminId: req.platformAdmin!.id, adminEmail: req.platformAdmin!.email, action: 'SEND_INVITE', targetTenantId: orgId, targetTenantName: row.tenantName ?? row.tenant_name,
+    targetTenantCode: row.tenantCode ?? row.tenant_code, targetEntityType: 'ORGANISATION_ADMIN', targetEntityId: userId, targetEntityName: row.username,
+    ipAddress: getClientIp(req), userAgent: (req.headers['user-agent'] as string) || 'Unknown', details: { emailSent: invite.email?.sent ?? false }, status: 'SUCCESS',
+  });
+  res.json(invite);
 });
 
 // ---------------------------------------------------------------- Emergency Credential Reset
@@ -1038,14 +1471,17 @@ platform.get('/licenses', async (_req, res) => {
 
 const IssueLicenseBody = z.object({
   tenantId: z.string().uuid(),
-  planTier: z.enum(['STARTER', 'PROFESSIONAL', 'ENTERPRISE', 'ENTERPRISE_PLUS', 'CUSTOM']).default('ENTERPRISE'),
-  maxEmployees: z.number().int().min(1).default(500),
-  maxUsers: z.number().int().min(1).default(100),
-  maxSites: z.number().int().min(1).default(10),
-  maxWorkspaces: z.number().int().min(1).default(5),
-  gracePeriodDays: z.number().int().min(0).default(14),
+  planTier: z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_]{1,29}$/).default('ENTERPRISE'),
+  maxEmployees: z.number().int().min(1).optional(),
+  maxUsers: z.number().int().min(1).optional(),
+  maxSites: z.number().int().min(1).optional(),
+  maxWorkspaces: z.number().int().min(1).optional(),
+  gracePeriodDays: z.number().int().min(0).optional(),
   endDate: z.string().optional(),
-  modules: z.array(z.string()).optional(),
+  termMonths: z.number().int().min(1).max(120).optional(),
+  isTrial: z.boolean().optional(),
+  customReason: z.string().max(300).optional(),
+  modules: z.array(z.enum(ALL_MODULES)).optional(),
   adminUser: z.string().min(1).max(60).optional(),
   adminPassword: z.string().min(8).optional(),
   adminEmail: z.string().email().optional(),
@@ -1056,52 +1492,45 @@ platform.post('/licenses', async (req, res) => {
   const [t] = await raw<any>('SELECT * FROM wfm.tenants WHERE id = $1', [b.tenantId]);
   if (!t) throw notFound('Organisation');
 
-  const [existingLic] = await raw<any>('SELECT id FROM wfm.licenses WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1', [t.id]);
+  const [existingLic] = await raw<any>('SELECT id, plan_tier FROM wfm.licenses WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1', [t.id]);
+  const plan = await getPlan(b.planTier);
+  if (!plan) throw bad('Choose a plan from the catalogue.');
+  if (plan.status !== 'ACTIVE' && (existingLic?.planTier ?? existingLic?.plan_tier) !== plan.code) throw bad(`${plan.name} is retired and cannot be given to a customer.`);
+  const terms = resolveTerms(plan, { maxEmployees: b.maxEmployees, maxUsers: b.maxUsers, maxSites: b.maxSites, maxWorkspaces: b.maxWorkspaces, gracePeriodDays: b.gracePeriodDays, modules: b.modules, reason: b.customReason });
+  const now = new Date();
+  const isTrial = !!b.isTrial;
+  const endDate = isTrial ? new Date(now.getTime() + plan.trialDays * 86400000) : b.endDate ? new Date(b.endDate) : addMonths(now, b.termMonths ?? 12);
+  if (!(endDate > now)) throw bad('The licence must end in the future.');
 
   let lic: any;
   if (existingLic) {
     [lic] = await raw<any>(
       `UPDATE wfm.licenses SET
-         plan_tier = $2,
-         status = 'ACTIVE',
-         max_employees = $3,
-         max_users = $4,
-         max_sites = $5,
-         max_workspaces = $6,
-         grace_period_days = $7,
-         end_date = coalesce($8, end_date),
-         updated_at = now()
+         plan_tier = $2, status = 'ACTIVE', max_employees = $3, max_users = $4, max_sites = $5, max_workspaces = $6, grace_period_days = $7,
+         end_date = $8, custom_terms = $9, custom_reason = $10, is_trial = $11, term_months = $12, updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [existingLic.id, b.planTier, b.maxEmployees, b.maxUsers, b.maxSites, b.maxWorkspaces, b.gracePeriodDays, b.endDate ? new Date(b.endDate) : null]
+      [existingLic.id, plan.code, terms.maxEmployees, terms.maxUsers, terms.maxSites, terms.maxWorkspaces, terms.gracePeriodDays, endDate, terms.customTerms, terms.customReason, isTrial, isTrial ? null : b.termMonths ?? null]
     );
   } else {
     const keyPrefix = `LIC-${t.code.replace(/[^A-Za-z0-9]/g, '')}-${new Date().getFullYear()}-`;
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const licenseKey = `${keyPrefix}${randomSuffix}`;
-    const endDate = b.endDate ? new Date(b.endDate) : new Date(Date.now() + 365 * 86400000);
-
+    const licenseKey = `${keyPrefix}${Math.floor(1000 + Math.random() * 9000)}`;
     [lic] = await raw<any>(
       `INSERT INTO wfm.licenses (
-        license_key, tenant_id, plan_tier, edition, status,
-        start_date, end_date, renewal_date, grace_period_days,
-        max_employees, max_users, max_supervisors, max_sites, max_workspaces
-      ) VALUES ($1, $2, $3, 'WFM_ENTERPRISE', 'ACTIVE', now(), $4, $4, $5, $6, $7, 25, $8, $9)
+        license_key, tenant_id, plan_tier, edition, status, start_date, end_date, renewal_date, grace_period_days,
+        max_employees, max_users, max_supervisors, max_sites, max_workspaces, custom_terms, custom_reason, is_trial, term_months
+      ) VALUES ($1, $2, $3, 'WFM_ENTERPRISE', 'ACTIVE', now(), $4, $4, $5, $6, $7, 25, $8, $9, $10, $11, $12, $13)
       RETURNING *`,
-      [licenseKey, t.id, b.planTier, endDate, b.gracePeriodDays, b.maxEmployees, b.maxUsers, b.maxSites, b.maxWorkspaces]
+      [licenseKey, t.id, plan.code, endDate, terms.gracePeriodDays, terms.maxEmployees, terms.maxUsers, terms.maxSites, terms.maxWorkspaces, terms.customTerms, terms.customReason, isTrial, isTrial ? null : b.termMonths ?? null]
     );
   }
 
-  const defaultModules = b.modules && b.modules.length > 0
-    ? b.modules
-    : ['FORECASTING', 'SCHEDULING', 'INTRADAY', 'ADHERENCE', 'TIME_OFF', 'SHIFT_BIDDING', 'EMPLOYEE_SELF_SERVICE', 'REPORTING', 'AI_COPILOT'];
-
-  for (const m of defaultModules) {
+  for (const m of ALL_MODULES) {
     await raw(
       `INSERT INTO wfm.license_modules (license_id, tenant_id, module_code, enabled)
-       VALUES ($1, $2, $3, true)
-       ON CONFLICT (license_id, module_code) DO UPDATE SET enabled = true`,
-      [lic.id, t.id, m]
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (license_id, module_code) DO UPDATE SET enabled = $4`,
+      [lic.id, t.id, m, terms.modules.includes(m)]
     );
   }
 
@@ -1192,6 +1621,7 @@ const LicensePatch = z.object({
   maxWorkspaces: z.number().int().min(1).optional(),
   gracePeriodDays: z.number().int().min(0).optional(),
   modules: z.record(z.string(), z.boolean()).optional(),
+  customReason: z.string().max(300).optional(),
 });
 
 platform.patch('/licenses/:id', async (req, res) => {
@@ -1200,8 +1630,26 @@ platform.patch('/licenses/:id', async (req, res) => {
   const [existing] = await raw<any>('SELECT * FROM wfm.licenses WHERE id = $1', [id]);
   if (!existing) throw notFound('License');
 
+  // seats must fit the plan, and limits or modules that differ from it are recorded as custom terms with a reason
+  const planCode = b.planTier ?? existing.planTier ?? existing.plan_tier;
+  const plan = await getPlan(planCode);
+  if (b.planTier && !plan) throw bad('Choose a plan from the catalogue.');
+  let flags = { customTerms: !!(existing.customTerms ?? existing.custom_terms), customReason: String(existing.customReason ?? existing.custom_reason ?? '') };
+  if (plan) {
+    const have = (await raw<any>('SELECT module_code FROM wfm.license_modules WHERE license_id = $1 AND enabled', [id])).map((m) => m.moduleCode ?? m.module_code) as string[];
+    const finalModules = new Set(have);
+    for (const [m, on] of Object.entries(b.modules ?? {})) (on ? finalModules.add(m) : finalModules.delete(m));
+    const t = resolveTerms(plan, {
+      maxEmployees: b.maxEmployees ?? existing.maxEmployees ?? existing.max_employees, maxUsers: b.maxUsers ?? existing.maxUsers ?? existing.max_users,
+      maxSites: b.maxSites ?? existing.maxSites ?? existing.max_sites, maxWorkspaces: b.maxWorkspaces ?? existing.maxWorkspaces ?? existing.max_workspaces,
+      modules: [...finalModules], reason: b.customReason ?? flags.customReason,
+    });
+    flags = { customTerms: t.customTerms, customReason: t.customReason };
+  }
+
   const [updated] = await raw<any>(
     `UPDATE wfm.licenses SET
+       custom_terms = $10, custom_reason = $11,
        plan_tier = coalesce($2, plan_tier),
        status = coalesce($3, status),
        end_date = coalesce($4, end_date),
@@ -1213,7 +1661,7 @@ platform.patch('/licenses/:id', async (req, res) => {
        updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [id, b.planTier ?? null, b.status ?? null, b.endDate ? new Date(b.endDate) : null, b.maxEmployees ?? null, b.maxUsers ?? null, b.maxSites ?? null, b.maxWorkspaces ?? null, b.gracePeriodDays ?? null]
+    [id, b.planTier ?? null, b.status ?? null, b.endDate ? new Date(b.endDate) : null, b.maxEmployees ?? null, b.maxUsers ?? null, b.maxSites ?? null, b.maxWorkspaces ?? null, b.gracePeriodDays ?? null, flags.customTerms, flags.customReason]
   );
 
   const tenantId = existing.tenantId || existing.tenant_id;
@@ -1276,6 +1724,7 @@ platform.get('/capacity-requests', async (_req, res) => {
 const DecideCapacityRequest = z.object({
   action: z.enum(['APPROVE', 'REJECT']),
   notes: z.string().max(500).optional(),
+  grant: z.number().int().min(1).max(1_000_000).optional(),     // approve a different amount than was asked for
 });
 
 platform.post('/capacity-requests/:id/decide', async (req, res) => {
@@ -1285,25 +1734,53 @@ platform.post('/capacity-requests/:id/decide', async (req, res) => {
   if (!r) throw notFound('Capacity request');
   if (r.status !== 'PENDING') throw bad(`Request already decided (${r.status})`);
 
-  if (b.action === 'APPROVE') {
-    const [lic] = await raw<any>('SELECT id, max_employees, max_users FROM wfm.licenses WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1', [r.tenantId]);
-    if (lic) {
-      if (r.resourceType === 'EMPLOYEES') {
-        await raw('UPDATE wfm.licenses SET max_employees = max_employees + $2, updated_at = now() WHERE id = $1', [lic.id, r.additionalNeeded]);
-      } else if (r.resourceType === 'USERS') {
-        await raw('UPDATE wfm.licenses SET max_users = max_users + $2, updated_at = now() WHERE id = $1', [lic.id, r.additionalNeeded]);
+  if (b.action === 'APPROVE' && r.resourceType === 'PLAN') {
+    // a plan change: the customer's licence takes the plan's limits and modules (seats and dates stay)
+    const plan = await getPlan(r.requestedPlan ?? r.requested_plan);
+    if (!plan || plan.status !== 'ACTIVE' || plan.isCustom) throw bad('That plan is no longer available. Reject the request, or change the plan on the licence yourself.');
+    const [l] = await raw<any>('SELECT id, max_employees FROM wfm.licenses WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1', [r.tenantId]);
+    if (!l) throw notFound('Licence');
+    const problems = whyNotFit(plan, await usageOf(r.tenantId, l.maxEmployees ?? l.max_employees));
+    if (problems.length) throw bad(`The customer no longer fits this plan. ${problems.join(' ')}`);
+    await applyPlanToLicence(l.id, r.tenantId, plan);
+  }
+
+  let granted = r.additionalNeeded as number;
+  if (b.action === 'APPROVE' && r.resourceType !== 'PLAN') {
+    const [lic] = await raw<any>(`SELECT id FROM wfm.licenses WHERE tenant_id = $1 AND status <> 'CANCELLED' ORDER BY created_at DESC LIMIT 1`, [r.tenantId]);
+    if (!lic) throw notFound('Licence');
+    const column: Record<string, string> = { EMPLOYEES: 'max_employees', USERS: 'max_users', SITES: 'max_sites', WORKSPACES: 'max_workspaces' };
+    const label: Record<string, string> = { EMPLOYEES: 'employee seats', USERS: 'user accounts', SITES: 'sites', WORKSPACES: 'workspaces' };
+    let what = '';
+    if (r.resourceType === 'MODULES') {
+      const mods: string[] = r.requestedModules ?? r.requested_modules ?? [];
+      if (!mods.length) throw bad('This request names no modules.');
+      for (const m of mods) {
+        await raw(`INSERT INTO wfm.license_modules (license_id, tenant_id, module_code, enabled) VALUES ($1, $2, $3, true) ON CONFLICT (license_id, module_code) DO UPDATE SET enabled = true`, [lic.id, r.tenantId, m]);
       }
+      granted = mods.length;
+      what = `Added ${mods.join(', ')}`;
+    } else if (column[r.resourceType]) {
+      granted = b.grant ?? r.additionalNeeded;
+      await raw(`UPDATE wfm.licenses SET ${column[r.resourceType]} = ${column[r.resourceType]} + $2 WHERE id = $1`, [lic.id, granted]);
+      what = `Added ${granted} ${label[r.resourceType]}`;
+    } else {
+      throw bad(`Requests of the kind ${r.resourceType} cannot be approved here.`);
     }
+    // anything beyond the plan is an exception: recorded as custom terms, so applying the plan to customers later does not take it away
+    await raw(`UPDATE wfm.licenses SET custom_terms = true, custom_reason = CASE WHEN custom_reason = '' THEN $2 ELSE custom_reason || '; ' || $2 END, updated_at = now() WHERE id = $1`, [lic.id, `${what} (approved request)`]);
+    await forgetTenant(r.tenantId);
   }
 
   const [updated] = await raw<any>(
     `UPDATE wfm.license_capacity_requests SET
        status = $2,
        reviewed_by_admin = $3,
-       reviewed_at = now()
+       reviewed_at = now(),
+       decision_note = $4
      WHERE id = $1
      RETURNING *`,
-    [id, b.action === 'APPROVE' ? 'APPROVED' : 'REJECTED', req.platformAdmin?.id || null]
+    [id, b.action === 'APPROVE' ? 'APPROVED' : 'REJECTED', req.platformAdmin?.id || null, (b.notes ?? '').trim()]
   );
 
   const ip = getClientIp(req);
@@ -1314,7 +1791,7 @@ platform.post('/capacity-requests/:id/decide', async (req, res) => {
     targetTenantId: r.tenantId,
     targetEntityType: 'CAPACITY_REQUEST',
     targetEntityId: id,
-    details: { request: r, decision: b.action, notes: b.notes },
+    details: { request: r, decision: b.action, notes: b.notes, granted: b.action === 'APPROVE' ? granted : null },
     ipAddress: ip,
     userAgent: (req.headers['user-agent'] as string) || 'Unknown',
     status: 'SUCCESS',

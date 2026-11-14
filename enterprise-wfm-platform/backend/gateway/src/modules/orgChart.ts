@@ -8,6 +8,8 @@ import { withTenant, type Tx } from '../db.ts';
 import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { bad, notFound, parse } from '../http.ts';
+import { parseCsv } from './csv.ts';
+import { parseLines, planAssignments } from './reportingLines.ts';
 
 export const orgChart = Router();     // mounted at /workforce
 const uuid = z.string().uuid();
@@ -105,6 +107,91 @@ orgChart.post('/teams/:id/apply-reports-to', requires('workforce:write'), async 
        WHERE tenant_id = :t AND team_id = $1 AND id <> $2 AND status <> 'TERMINATED' AND ($3::boolean OR reports_to IS NULL) AND reports_to IS DISTINCT FROM $2 RETURNING id`, [id, t.managerId, b.overwrite]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'TEAM', entityId: id, entityName: t.name, reason: b.reason, diffSummary: `${rows.length} people now report to the team's supervisor` });
     return { updated: rows.length };
+  });
+  res.json(out);
+});
+
+// ---------------------------------------------------------------- setting the lines up in bulk
+
+const SCOPE = `AND ($1::uuid IS NULL OR e.primary_group_id = $1 OR $1 = ANY(e.eligible_group_ids))`;
+const currentLines = async (tx: Tx) => new Map((await tx.q<{ id: string; reportsTo: string | null }>(`SELECT id, reports_to FROM employees WHERE tenant_id = :t AND status <> 'TERMINATED'`)).map((r) => [r.id, r.reportsTo]));
+
+/**
+ * What "make each team lead the manager of their team" would do, before doing it: per team with a lead, how many people have no line yet (would be set) and how many report to
+ * someone else (would be changed only if asked); the teams with no lead (their people cannot be set until the team has one); people in no team.
+ */
+orgChart.get('/org-chart/setup', requires('workforce:read'), async (req, res) => {
+  const q = parse(z.object({ groupId: uuid.optional() }), req.query);
+  const out = await withTenant(me(req).tenantId, async (tx) => {
+    const g = q.groupId ?? null;
+    const teams = await tx.q<any>(
+      `SELECT t.id, t.name, t.manager_id, m.first_name || ' ' || m.last_name AS manager_name,
+              count(e.id)::int AS people,
+              count(e.id) FILTER (WHERE e.id IS DISTINCT FROM t.manager_id AND e.reports_to IS NULL)::int AS none,
+              count(e.id) FILTER (WHERE e.id IS DISTINCT FROM t.manager_id AND e.reports_to IS NOT NULL AND e.reports_to IS DISTINCT FROM t.manager_id)::int AS other
+       FROM teams t LEFT JOIN employees m ON m.id = t.manager_id
+       LEFT JOIN employees e ON e.tenant_id = t.tenant_id AND e.team_id = t.id AND e.status <> 'TERMINATED' ${SCOPE}
+       WHERE t.tenant_id = :t AND t.status = 'ACTIVE' GROUP BY t.id, t.name, t.manager_id, m.first_name, m.last_name HAVING count(e.id) > 0 ORDER BY count(e.id) DESC, t.name`, [g]);
+    const noTeam = (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM employees e WHERE e.tenant_id = :t AND e.status <> 'TERMINATED' AND e.team_id IS NULL AND e.reports_to IS NULL ${SCOPE}`, [g]))!.n;
+    const withLead = teams.filter((t) => t.managerId), without = teams.filter((t) => !t.managerId);
+    return {
+      teams: teams.map((t) => ({ id: t.id, name: t.name, leadName: t.managerName ?? null, people: t.people, wouldSet: t.managerId ? t.none : 0, wouldChange: t.managerId ? t.other : 0 })),
+      withLead: { teams: withLead.length, wouldSet: withLead.reduce((n, t) => n + t.none, 0), wouldChange: withLead.reduce((n, t) => n + t.other, 0) },
+      withoutLead: { teams: without.length, people: without.reduce((n, t) => n + t.none, 0) },
+      noTeam,
+    };
+  });
+  res.json(out);
+});
+
+/** Everyone in a team with a lead reports to that lead, across all teams at once. People who already report to somebody are left unless asked; a line that would make a loop is skipped and listed. */
+orgChart.post('/org-chart/apply-teams', requires('workforce:write'), async (req, res) => {
+  const p = me(req), b = parse(z.object({ overwrite: z.boolean().default(false), groupId: uuid.optional(), reason: z.string().trim().min(3, 'is required').max(300) }), req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const rows = await tx.q<{ id: string; name: string; boss: string }>(
+      `SELECT e.id, e.first_name || ' ' || e.last_name AS name, t.manager_id AS boss FROM employees e JOIN teams t ON t.id = e.team_id AND t.tenant_id = e.tenant_id
+       WHERE e.tenant_id = :t AND t.status = 'ACTIVE' AND t.manager_id IS NOT NULL AND e.id <> t.manager_id AND e.status <> 'TERMINATED' AND ($2::boolean OR e.reports_to IS NULL) AND e.reports_to IS DISTINCT FROM t.manager_id ${SCOPE}`, [b.groupId ?? null, b.overwrite]);
+    const plan = planAssignments(await currentLines(tx), rows.map((r) => ({ id: r.id, boss: r.boss })));
+    if (plan.accepted.length) await tx.exec(
+      `UPDATE employees e SET reports_to = x.boss, updated_at = now(), version = version + 1 FROM unnest($1::uuid[], $2::uuid[]) AS x(id, boss) WHERE e.tenant_id = :t AND e.id = x.id`,
+      [plan.accepted.map((a) => a.id), plan.accepted.map((a) => a.boss)]);
+    const names = new Map(rows.map((r) => [r.id, r.name]));
+    await audit(tx, p, req, { action: 'UPDATE', entityType: 'EMPLOYEE', entityId: p.userId, entityName: 'Reporting lines (every team)', reason: b.reason, diffSummary: `${plan.accepted.length} people now report to their team lead${plan.rejected.length ? `; ${plan.rejected.length} skipped (would loop)` : ''}` });
+    return { updated: plan.accepted.length, skipped: plan.rejected.length, skippedPeople: plan.rejected.slice(0, 20).map((r) => ({ id: r.proposal.id, name: names.get(r.proposal.id) ?? '', why: r.why === 'SELF' ? 'cannot report to themselves' : 'would make a loop of reporting lines' })) };
+  });
+  res.json(out);
+});
+
+/** Reporting lines from a file: employee_number and reports_to_number (the file the chart exports works as it is). Always check first with dryRun; rows with a problem are listed and skipped. */
+orgChart.post('/org-chart/import', requires('workforce:write'), async (req, res) => {
+  const p = me(req), b = parse(z.object({ csv: z.string().min(3).max(8_000_000), dryRun: z.boolean().default(true), reason: z.string().trim().max(300).optional() }), req.body);
+  if (!b.dryRun && (b.reason ?? '').length < 3) throw bad('A reason is needed to apply reporting lines (it is kept in the history)');
+  const parsed = parseLines(parseCsv(b.csv));
+  if (parsed.error) throw bad(parsed.error);
+  if (parsed.rows.length > 50_000) throw bad('More than 50,000 rows: split the file');
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const numbers = [...new Set(parsed.rows.flatMap((r) => [r.employee, r.boss]))];
+    const found = await tx.q<{ id: string; employeeNumber: string; status: string; name: string }>(
+      `SELECT id, employee_number, status, first_name || ' ' || last_name AS name FROM employees WHERE tenant_id = :t AND employee_number = ANY($1::text[])`, [numbers]);
+    const by = new Map(found.map((e) => [e.employeeNumber, e]));
+    const problems: { line: number; message: string }[] = [], proposals: { id: string; boss: string; line: number }[] = [];
+    for (const r of parsed.rows) {
+      const e = by.get(r.employee), m = by.get(r.boss);
+      if (!e) problems.push({ line: r.line, message: `No employee has the number "${r.employee}"` });
+      else if (e.status === 'TERMINATED') problems.push({ line: r.line, message: `${e.name} (${r.employee}) has left` });
+      else if (!m) problems.push({ line: r.line, message: `The manager "${r.boss}" is not an employee number (for ${e.name})` });
+      else if (m.status === 'TERMINATED') problems.push({ line: r.line, message: `${m.name} (${r.boss}) has left, so cannot be the manager of ${e.name}` });
+      else proposals.push({ id: e.id, boss: m.id, line: r.line });
+    }
+    const plan = planAssignments(await currentLines(tx), proposals);
+    const lineOf = new Map(proposals.map((x) => [x.id, x.line]));
+    for (const r of plan.rejected) problems.push({ line: lineOf.get(r.proposal.id) ?? 0, message: r.why === 'SELF' ? 'A person cannot report to themselves' : 'This line would make a loop of reporting lines (it would end up reporting to itself)' });
+    problems.sort((x, y) => x.line - y.line);
+    if (!b.dryRun && plan.accepted.length) {
+      await tx.exec(`UPDATE employees e SET reports_to = x.boss, updated_at = now(), version = version + 1 FROM unnest($1::uuid[], $2::uuid[]) AS x(id, boss) WHERE e.tenant_id = :t AND e.id = x.id`, [plan.accepted.map((a) => a.id), plan.accepted.map((a) => a.boss)]);
+      await audit(tx, p, req, { action: 'IMPORT', entityType: 'EMPLOYEE', entityId: p.userId, entityName: 'Reporting lines (file)', reason: b.reason, diffSummary: `${plan.accepted.length} reporting lines set from a file${problems.length ? `; ${problems.length} rows skipped` : ''}` });
+    }
+    return { dryRun: b.dryRun, rows: parsed.rows.length, blank: parsed.blank, willChange: plan.accepted.length, unchanged: plan.unchanged, problemCount: problems.length, problems: problems.slice(0, 50), applied: b.dryRun ? 0 : plan.accepted.length };
   });
   res.json(out);
 });

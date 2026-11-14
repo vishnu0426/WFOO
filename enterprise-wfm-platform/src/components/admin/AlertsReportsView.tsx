@@ -2,11 +2,13 @@
  * Administration › Alerts & Reports. How the platform reaches people outside the app (email, and SMS through your own SMS gateway), which events tell which roles, and
  * reports that arrive on a timetable. Passwords and gateway keys are never shown again after they are saved.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { api, download } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Banner, Btn, Busy, Card, Field, Input, Pill, Select } from '../forecasting/ui';
+import { HelpTip } from '../common/HelpTip';
 
 type Field = { key: string; label: string; secret?: boolean; required?: boolean; help?: string; placeholder?: string; options?: { value: string; label: string }[]; default?: string; advanced?: boolean; multiline?: boolean };
 type Provider = { id: string; label: string; kind: 'SMTP' | 'API' | 'HTTP'; help: string; fields: Field[] };
@@ -28,7 +30,7 @@ export const AlertsReportsView: React.FC = () => {
   const tabs: [typeof tab, string][] = [['CHANNELS', 'Email & SMS'], ['RULES', 'Alert rules'], ['REPORTS', 'Scheduled reports'], ['SENT', 'Sent messages']];
   return (
     <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem)] overflow-y-auto bg-white p-6 space-y-6">
-      <div><h1 className="text-[22px] font-bold text-[#171717]">Alerts & Reports</h1><p className="text-[13px] text-[#6B6B6B]">Reach people by email and SMS, tell the right roles when something happens, and send reports on a timetable.</p></div>
+      <div><h1 className="text-[22px] font-bold text-[#171717]">Alerts & Reports<HelpTip title="Alerts and reports" text="Reach people by email and SMS, tell the right roles when something happens, and send reports on a timetable." /></h1></div>
       <div className="flex gap-1 border-b border-[#E5E5E0]">{tabs.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-3 py-2 text-[13px] font-medium border-b-2 -mb-px ${tab === k ? 'border-[#171717] text-[#171717]' : 'border-transparent text-[#6B6B6B]'}`}>{l}</button>)}</div>
       {tab === 'CHANNELS' && <Channels canWrite={can('users:write')} />}
       {tab === 'RULES' && <Rules canWrite={can('users:write')} />}
@@ -74,7 +76,7 @@ const Channels: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (res.data) setD(res.data); }, [res.data]);
-  if (!d || !cat.data) return res.error || cat.error ? <Banner kind="err">{res.error || cat.error}</Banner> : <Busy text="Loading…" />;
+  if (!d || !cat.data) return res.error || cat.error ? <LoadFailed what="the alert settings" error={res.error || cat.error} reload={res.error ? res.reload : cat.reload} /> : <Waiting what="the alert settings" shape="panel" />;
   const emailP = cat.data.email.find((p) => p.id === d.email.provider) ?? cat.data.email[0], smsP = cat.data.sms.find((p) => p.id === d.sms.provider) ?? cat.data.sms[0];
   // choosing another provider starts its boxes fresh: nothing typed for one provider is sent to another
   const pick = (side: 'email' | 'sms', id: string) => setD({ ...d, [side]: { ...d[side], provider: id, values: {}, saved: {} } });
@@ -134,7 +136,7 @@ const Rules: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   return (
     <Card title="Alert rules" sub="When one of these things happens, the roles you name are told: in the app, by email, by SMS, or any mix. People with no email or phone on record are skipped.">
       {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
-      {(rules.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No rules yet.</p> : (
+      {rules.data === null ? (rules.error ? <LoadFailed what="alert rules" error={rules.error} reload={rules.reload} /> : <Waiting what="alert rules" shape="table" reload={rules.reload} />) : rules.data.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No rules yet.</p> : (
         <table className="w-full text-[12px]"><thead className="text-left text-[#6B6B6B]"><tr><th className="py-1">Rule</th><th>When</th><th>Who</th><th>How</th><th /></tr></thead>
           <tbody>{rules.data!.map((r) => <tr key={r.id} className="border-t border-[#E5E5E0]"><td className="py-1.5 font-semibold">{r.name}</td><td>{label(r.event)}</td><td>{r.roles.map((x) => ROLES.find((y) => y[0] === x)?.[1] ?? x).join(', ')}</td><td>{r.channels.map((c) => c === 'INBOX' ? 'In the app' : c === 'EMAIL' ? 'Email' : 'SMS').join(', ')}</td>
             <td className="text-right">{canWrite && <button className="underline text-[#BC3F3F]" onClick={async () => { try { await api(`/channels/alert-rules/${r.id}`, { method: 'DELETE' }); setTick((n) => n + 1); } catch (e: any) { setErr(e.message); } }}>Remove</button>}</td></tr>)}</tbody></table>
@@ -202,7 +204,7 @@ const Reports: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
       {msg && <Banner kind={msg.kind} onClose={() => setMsg(null)}>{msg.text}</Banner>}
       <Branding canWrite={canWrite} />
       <Card title="Scheduled reports" sub="A report is worked out on the day it runs, for dates such as “last week” or “next 7 days”, then emailed as a CSV file, a PDF, or both, and kept here. Email must be set up first.">
-        {(list.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No scheduled reports yet.</p> : (
+        {list.data === null ? (list.error ? <LoadFailed what="scheduled reports" error={list.error} reload={list.reload} /> : <Waiting what="scheduled reports" shape="table" reload={list.reload} />) : list.data.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No scheduled reports yet.</p> : (
           <div className="space-y-2">{list.data!.map((s) => (
             <div key={s.id} className="border border-[#E5E5E0] rounded-lg p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -255,7 +257,7 @@ const Sent: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   return (
     <Card title="Sent messages" sub="The last hundred emails and texts. A message that fails is tried again with longer waits, then marked failed. Phone numbers are partly hidden.">
       <div><Btn onClick={() => setTick((n) => n + 1)}>Refresh</Btn></div>
-      {(rows.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">Nothing sent yet.</p> : (
+      {rows.data === null ? (rows.error ? <LoadFailed what="sent messages" error={rows.error} reload={rows.reload} /> : <Waiting what="sent messages" shape="table" reload={rows.reload} />) : rows.data.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">Nothing sent yet.</p> : (
         <table className="w-full text-[12px]"><thead className="text-left text-[#6B6B6B]"><tr><th className="py-1">When</th><th>How</th><th>To</th><th>About</th><th>Result</th><th /></tr></thead>
           <tbody>{rows.data!.map((r) => <tr key={r.id} className="border-t border-[#E5E5E0]"><td className="py-1">{when(r.createdAt)}</td><td>{r.channel === 'EMAIL' ? 'Email' : 'SMS'}</td><td>{r.to}</td><td>{r.subject || (r.ref ?? '')}</td>
             <td><Pill tone={tone(r.status)}>{r.status === 'SENT' ? 'Sent' : r.status === 'PENDING' ? `Trying again (${r.attempts})${r.error ? `: ${r.error}` : ''}` : `Failed: ${r.error ?? ''}`}</Pill></td>

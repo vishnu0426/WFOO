@@ -41,7 +41,7 @@ export const MultiSelect: React.FC<{
 
   return (
     <div ref={box} className={`relative inline-block ${className}`}>
-      <button type="button" disabled={disabled} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}
+      <button type="button" disabled={disabled} aria-label={`${summarise(value, options, allLabel, noun)}, ${ariaLabel}`} aria-haspopup="listbox" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}
         className={`w-full min-w-[9rem] flex items-center justify-between gap-2 p-2 border rounded text-[13px] bg-white text-left disabled:bg-[#FAFAF8] disabled:text-[#6B6B6B] ${active ? 'border-[#171717]' : 'border-[#E5E5E0]'}`}>
         <span className="truncate">{summarise(value, options, allLabel, noun)}</span>
         <ChevronDown className="w-3.5 h-3.5 text-[#737373] shrink-0" />

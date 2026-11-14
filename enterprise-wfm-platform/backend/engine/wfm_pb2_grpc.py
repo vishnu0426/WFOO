@@ -5,7 +5,7 @@ import warnings
 
 import wfm_pb2 as wfm__pb2
 
-GRPC_GENERATED_VERSION = '1.83.1'
+GRPC_GENERATED_VERSION = '1.80.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class EngineStub:
+class EngineStub(object):
     """Stateless workforce-planning engine (Python). Called by the Node gateway over gRPC.
     """
 
@@ -65,9 +65,14 @@ class EngineStub:
                 request_serializer=wfm__pb2.SimRequest.SerializeToString,
                 response_deserializer=wfm__pb2.SimResponse.FromString,
                 _registered_method=True)
+        self.Validate = channel.unary_unary(
+                '/wfm.Engine/Validate',
+                request_serializer=wfm__pb2.ValidateRequest.SerializeToString,
+                response_deserializer=wfm__pb2.ValidateResponse.FromString,
+                _registered_method=True)
 
 
-class EngineServicer:
+class EngineServicer(object):
     """Stateless workforce-planning engine (Python). Called by the Node gateway over gRPC.
     """
 
@@ -111,6 +116,13 @@ class EngineServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Validate(self, request, context):
+        """An independent check of a roster, made from first principles and sharing nothing with the solvers: every hard rule, and a report on cover, fairness and contracts.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_EngineServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -144,6 +156,11 @@ def add_EngineServicer_to_server(servicer, server):
                     request_deserializer=wfm__pb2.SimRequest.FromString,
                     response_serializer=wfm__pb2.SimResponse.SerializeToString,
             ),
+            'Validate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Validate,
+                    request_deserializer=wfm__pb2.ValidateRequest.FromString,
+                    response_serializer=wfm__pb2.ValidateResponse.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'wfm.Engine', rpc_method_handlers)
@@ -152,7 +169,7 @@ def add_EngineServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class Engine:
+class Engine(object):
     """Stateless workforce-planning engine (Python). Called by the Node gateway over gRPC.
     """
 
@@ -308,6 +325,33 @@ class Engine:
             '/wfm.Engine/Simulate',
             wfm__pb2.SimRequest.SerializeToString,
             wfm__pb2.SimResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Validate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/wfm.Engine/Validate',
+            wfm__pb2.ValidateRequest.SerializeToString,
+            wfm__pb2.ValidateResponse.FromString,
             options,
             channel_credentials,
             insecure,

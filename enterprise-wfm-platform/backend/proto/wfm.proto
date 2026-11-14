@@ -13,6 +13,8 @@ service Engine {
   rpc ScheduleStream(ScheduleRequest) returns (stream ScheduleEvent);
   // Plays random call arrivals against a schedule's staffing and reports what customers would experience.
   rpc Simulate(SimRequest) returns (SimResponse);
+  // An independent check of a roster, made from first principles and sharing nothing with the solvers: every hard rule, and a report on cover, fairness and contracts.
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,11 @@ message ModelScore {
   double rmse = 7;               // root mean squared error, contacts per day
   double mape = 8;               // mean absolute percentage error over non-zero days
   string stability = 9;          // HIGH | MEDIUM | VARIABLE: how much the error moves between backtest folds
+  double raw_wape = 10;          // the same error measured against what REALLY happened (the raw actuals, outliers and event days included) rather than the cleaned history the model learns from
+  double raw_mase = 11;
+  double raw_bias = 12;
+  double raw_mae = 13;
+  bool raw_scored = 14;          // raw_* are filled in
 }
 
 message SeriesForecast {
@@ -79,6 +86,19 @@ message SeriesForecast {
   repeated string notes = 7;
   int32 cleaned_days = 8;        // outlier / event days replaced before fitting
   double sigma_rel = 9;          // relative forecast error used for the bands
+  string band_method = 10;       // EMPIRICAL (the bands are quantiles of the model's own out-of-sample errors) | NORMAL (too little history for that: a normal band from the error spread)
+  double p10_coverage = 11;      // how often an actual came in at or under P10, in the walk-forward backtest, with each fold's band calibrated on the OTHER folds only (should be about 0.10); -1 = not measured
+  double p90_coverage = 12;      // the same for P90 (should be about 0.90); -1 = not measured
+  int32 band_points = 13;        // how many out-of-sample errors the bands rest on
+  // The model registry: what produced this forecast, enough to explain and reproduce it.
+  string model_version = 14;     // the model with a fingerprint of its configuration and of the libraries it ran on (the same inputs give the same version)
+  string training_start = 15;    // first and last day of the history the model learned from
+  string training_end = 16;
+  int32 training_rows = 17;
+  string data_hash = 18;         // SHA-256 of the history rows it was given (day, volume)
+  string model_config = 19;      // JSON: the settings chosen from the training data (seasonality mode, ARIMA order, ...), the backtest set-up, the cleaning that was done
+  string library_versions = 20;  // JSON: the versions of the numerical libraries it ran on
+  string events_hash = 21;       // SHA-256 of the special events that applied to it
 }
 
 message SeriesResponse {
@@ -95,6 +115,7 @@ message ChannelParams {
   double concurrency = 7;        // chat: simultaneous conversations per agent
   int32 open_slot = 8;           // async work is spread over [open_slot, close_slot)
   int32 close_slot = 9;
+  double chat_efficiency = 11;   // chat: how much of 1/concurrency of a single chat's handle time a concurrent chat really takes (1 = no slowdown). 0 = the engine default, 0.85. From 0.3 to 1
   int32 turnaround_hours = 10;   // back-office only: target turnaround window: workload is smoothed over this many hours instead of requiring same-day completion. 0/unset = same-day (24h)
 }
 
@@ -122,9 +143,15 @@ message StaffOutput {
   double required = 5;           // agents on the schedule (base grossed up for shrinkage)
   double occupancy = 6;
   double service_level = 7;
-  double asa_sec = 8;
+  double asa_sec = 8;            // average wait of EVERYONE who called, callers who gave up included (Erlang C has none; with Erlang A they are in it): not the wait of answered calls only
   double abandon = 9;
   bool warn = 10;                // model assumptions are shaky here (small team / very high occupancy)
+  double offered_load_erlangs = 11;   // the work arriving, in agents kept busy for the whole interval (chat: after concurrency). Async: the day's workload over its opening hours
+  double target_service_level = 12;   // the service level asked for (0 for async work, which is sized by capacity)
+  bool target_met = 13;               // the service level reached (`service_level`) is at least the target, within the limits of the agent search
+  string status = 14;                 // OK | NO_DEMAND | TARGET_NOT_MET (the search stopped at the agent limit before the target was reached) | METHOD_FALLBACK (Erlang A was not numerically reliable here, Erlang C was used: never fewer agents than Erlang A would need)
+  double occupancy_limit = 15;        // the occupancy ceiling that was applied (1 = none)
+  string confidence = 16;             // HIGH | MEDIUM | LOW: how far the Erlang assumptions can be trusted for a pool of this size and load (not the confidence of the forecast)
 }
 
 message StaffingResponse {
@@ -164,7 +191,11 @@ message SchedEmployee {
   int32 prior_week_slots = 12;   // paid slots already worked earlier in day 0's calendar week
   int32 prior_week_days = 13;    // shifts already worked earlier in that week
   int32 prior_lead_days = 14;    // calendar days of that week that fall before day 0 and were looked at (0: no history for this person)
-  int32 prior_weekend = 15;      // weekend shifts worked in the windows solved before this one, so weekend fairness spans the whole plan
+  int32 prior_weekend = 15;      // unsocial slots (weekend and holiday paid slots) worked in the windows solved before this one, so fairness spans the whole plan
+  bool has_anchor = 17;          // the usual start and end this person was given in the weeks solved before this one (a long plan, one week at a time)
+  int32 anchor_start = 18;       // that usual start, in slots
+  int32 anchor_end = 19;         // that usual end, in slots (start + length). A person set to PREFER the same times is charged for shifts away from them; one who must have them is only offered shifts near them
+  repeated int32 ext_paid = 16;  // per day of this request: paid slots this person already works for ANOTHER group that day (0 or absent: none). Counts toward the week's hours and days and toward days in a row; one shift a day across groups, so no option is offered on those days
 }
 
 // A shift this person could work: employee x day x template x start time, already filtered for availability and time off.
@@ -176,6 +207,10 @@ message ShiftOption {
   int32 length_slots = 5;
   int32 preference = 6;          // 1 preferred, 0 neutral, -1 disliked
   int32 paid_slots = 7;          // paid part of the shift (meal excluded); counts toward weekly hours. 0 = whole shift
+  int32 gap_start_slot = 8;      // a stretch inside the shift when the person is not covering the queue (an unpaid meal, or the gap of a split shift), in the same slot counting as start_slot
+  int32 gap_slots = 9;           // its length; 0 = none. The person is on shift but counts for nothing in those slots
+  int32 cost = 10;               // an extra price paid in the objective when this shift is chosen (for example a public holiday the organisation would rather not staff)
+  bool unsocial = 11;            // the day is a public holiday: this shift counts toward the person's unsocial hours (with weekend days) for fairness
 }
 
 message ScheduleRequest {
@@ -198,6 +233,10 @@ message ScheduleRequest {
   repeated SkillRequirement skill_requirements = 17;   // two or more: coverage is judged per skill instead of as one headcount
   bool wrap = 18;                           // assume the period repeats: a last-day shift that runs past midnight covers the first hours of day 0
   int32 week_start = 19;                    // weekday a pay week begins on, Monday = 0 (the default) ... Sunday = 6; weekly hour and day limits follow it
+  int32 weekend_mask = 21;                  // weekdays that count as the weekend, one bit each (Monday = bit 0 ... Sunday = bit 6); 0 = Saturday and Sunday. Weekend fairness follows it
+  int32 w_overtime = 22;                    // price per paid slot beyond a person's contract hours in a week (planned overtime); 0 = overtime costs nothing
+  repeated int32 dst_rest_adjust = 23;      // per day: slots to add to the rest required before that day's shift (+4 where the clocks go forward overnight, -4 where they go back), so rest is real elapsed time
+  bool deterministic = 24;                  // same input, same schedule: one search thread and a limit counted in solver work instead of seconds. Slower than the default, which searches in parallel against the clock and can return a different (equally valid) schedule from run to run
   string backend = 20;                      // solver to use: empty/AUTO = the engine's failover chain; CPSAT | GUROBI | HIGHS | GREEDY | TIMEFOLD, or a comma list tried in order
 }
 
@@ -228,6 +267,30 @@ message ScheduleResponse {
   int32 over_slots = 10;
   string backend = 11;           // which solver produced this answer
   repeated string attempts = 12; // every solver tried, in order, and how each ended ("cpsat: UNKNOWN", "gurobi: error ...")
+  bool windowed = 13;            // the plan was solved one window (week) at a time: each window is the best found for it, but nothing is proven about the plan as a whole
+  double score = 14;             // the roster priced by the one shared evaluator (scoring.py), whichever backend made it: lower is better, comparable between backends
+  bool scored = 15;              // `score` was computed
+  repeated ScoreTerm score_terms = 16;   // what the score is made of (only the terms that are not zero)
+  ScheduleVerdict verdict = 17;  // the independent validator's verdict on this roster, made by the engine before it answers: a caller never has to ask for it, and never receives a roster without it
+  repeated string capability_notes = 18;   // rules a solver that was asked for could not honour, so it was not used
+  string advice = 19;            // in plain words: which solver made this roster, whether that is the one to want, and what would get a better one
+}
+
+// What the validator (validator.py) found in the roster the engine is returning. `checked` false means it could not be run (see note): such a roster is not to be published.
+message ScheduleVerdict {
+  bool checked = 1;
+  bool valid = 2;                // no hard violations
+  string status = 3;             // VALIDATED | VALIDATED_WITH_WARNINGS | INVALID
+  string coverage_status = 4;    // ADEQUATE | UNDERSTAFFED
+  int32 hard_violations = 5;
+  int32 soft_warnings = 6;
+  repeated Finding findings = 7; // the first hard findings (at most 20)
+  string note = 8;               // why it was not checked, or what was checked
+}
+
+message ScoreTerm {
+  string name = 1;               // under | over | heavy | past_end | contract_hours | overtime | consistency | preference | cost | fairness
+  double value = 2;
 }
 
 // Progress of a long solve. The last event has done = true and carries the result.
@@ -254,11 +317,20 @@ message SimInterval {
 message SimRequest {
   repeated SimInterval intervals = 1;   // contiguous, 96 per day
   int32 answer_sec = 2;                 // service level threshold
-  int32 patience_sec = 3;               // how long a caller waits before giving up (mean)
+  int32 patience_sec = 3;               // how long a caller waits before giving up (mean). 0 = unset = 120. -1 = nobody gives up (the case Erlang C assumes)
   int32 replications = 4;               // independent random runs of the whole stretch
   double volume_cv = 5;                 // forecast error: the stretch's volume is scaled by a random factor with this spread (0 = the forecast is exact)
   int32 seed = 6;
   int32 slots_per_day = 7;              // 96 by default; used to report per day
+  string handle_dist = 9;               // handling time: EXPONENTIAL (the default) | LOGNORMAL (with handle_cv) | FIXED
+  double handle_cv = 10;                // spread of a LOGNORMAL handling time as a share of its mean (0.5 to 2 is typical of a contact centre; 1 is as spread out as EXPONENTIAL)
+  string patience_dist = 11;            // how long callers wait before giving up: EXPONENTIAL (the default) | LOGNORMAL (spread patience_cv) | EMPIRICAL (resampled from patience_samples)
+  double patience_cv = 12;
+  repeated double patience_samples = 13;   // observed times, in seconds, at which callers gave up (and for EMPIRICAL, how long the ones who stayed waited): the real shape of abandonment
+  int32 after_call_work_sec = 14;       // an agent is busy this long after each call before taking the next (included in occupancy)
+  repeated double volume_scales = 15;   // the forecast's own past errors as ratios of actual to forecast (1.1 = 10% more calls than forecast): each replication draws one, instead of a normal spread from volume_cv
+  double priority_share = 16;           // share of calls that are high priority: always served ahead of the others, first come first served within each class
+  int32 interval_sec = 8;               // length of one interval in seconds (60 to 3600); 0 = 900, the 15 minutes earlier callers assumed. Independent of slots_per_day, which only groups intervals into days
 }
 
 message SimIntervalResult {
@@ -268,6 +340,8 @@ message SimIntervalResult {
   double abandon = 4;            // share of callers who gave up
   double occupancy = 5;
   double offered = 6;            // average calls offered
+  double sl_ci_low = 7;          // 95% confidence interval for the true mean service level (it narrows as replications grow)
+  double sl_ci_high = 8;
 }
 
 message SimDay {
@@ -276,6 +350,8 @@ message SimDay {
   double abandon = 3;
   double occupancy = 4;
   double offered = 5;
+  double sl_ci_low = 6;
+  double sl_ci_high = 7;
 }
 
 message SimResponse {
@@ -288,4 +364,113 @@ message SimResponse {
   int32 replications = 7;
   double wall_sec = 8;
   repeated double sl_by_rep = 9;  // service level of each replication over the whole stretch
+  double sl_ci_low = 10;          // 95% confidence interval for the mean service level over the stretch
+  double sl_ci_high = 11;
+  double abandon_ci_low = 12;     // 95% confidence interval for the abandonment share
+  double abandon_ci_high = 13;
+  double priority_sl_mean = 14;   // service level of the high-priority calls (when priority_share is set)
+  double normal_sl_mean = 15;     // and of the rest
+  int32 replications_requested = 16;   // what was asked for: `replications` is what ran (a very large stretch has its replications reduced to keep the work bounded)
+}
+
+// ---------------------------------------------------------------- the schedule validator
+
+// What a person does inside a shift. The type says what it is and, unless `explicit`, whether it is paid and whether the person answers contacts during it (see validator.py).
+message ValidateActivity {
+  string type = 1;               // WORK | MEAL | BREAK | TEA_BREAK | TRAINING | COACHING | MEETING | SYSTEM_DOWNTIME | PERSONAL_TIME | OVERTIME | SPLIT_GAP
+  int32 start_slot = 2;          // in the slots of the shift's own day (a night shift's later hours are past slot 96)
+  int32 slots = 3;
+  bool explicit = 4;             // use `paid` and `productive` as given instead of the type's usual meaning
+  bool paid = 5;
+  bool productive = 6;           // counts toward staffing coverage
+}
+
+message ValidateShift {
+  int32 employee = 1;
+  int32 day = 2;                 // 0-based day of the period
+  int32 start_slot = 3;
+  int32 length_slots = 4;
+  int32 paid_slots = 5;          // 0 = worked out from the shift and its unpaid activities
+  repeated ValidateActivity activities = 6;
+  bool unsocial = 7;             // a public holiday: counts toward unsocial hours with weekend days
+  string ref = 8;                // the caller's own id for the shift, echoed in findings
+}
+
+// What a person is already committed to that is not one of the shifts being checked: shifts for other groups, approved leave, training, times they are unavailable. The ledger across the whole company.
+message Commitment {
+  int32 employee = 1;
+  int32 day = 2;
+  int32 start_slot = 3;
+  int32 length_slots = 4;
+  string kind = 5;               // SHIFT (work for another group: counts toward hours, days in a row and rest) | LEAVE | TRAINING | UNAVAILABLE
+  string label = 6;              // for the message: the other group's name, the kind of leave
+  int32 paid_slots = 7;          // for a SHIFT: the paid time in it (its length less an unpaid meal); 0 = all of it
+}
+
+message ValidateEmployee {
+  SchedEmployee limits = 1;      // the same limits the solvers use (the id is the key shifts and commitments refer to)
+  int32 max_day_slots = 2;       // most paid slots in one day; 0 = no limit
+  bool allow_overnight = 3;      // false: a shift running past midnight is a violation
+  bool allow_weekend = 4;
+  string name = 5;
+}
+
+message ValidateRequest {
+  int32 days = 1;
+  int32 first_dow = 2;           // weekday of day 0, Monday = 0
+  int32 week_start = 3;          // weekday a pay week starts on
+  int32 weekend_mask = 4;        // 0 = Saturday and Sunday
+  repeated ValidateEmployee employees = 5;
+  repeated ValidateShift shifts = 6;
+  repeated Commitment commitments = 7;
+  repeated int32 required = 8;   // people needed per slot
+  repeated SkillRequirement skill_requirements = 9;
+  bool wrap = 10;                // the period repeats
+  repeated int32 dst_rest_adjust = 11;   // per day, slots to add to the rest before that day's shift where the clocks change overnight
+  double target_coverage = 12;   // 0..1: a day covered less than this is a warning (0 = any shortfall)
+  int32 fairness_tolerance_hours = 13;   // unsocial hours between the most and least loaded person beyond which fairness is reported (0 = 16)
+  int32 consistency_mode = 14;   // the default for people whose own limits.consist_mode is 0: 0 off, 1 prefer, 2 require
+  int32 start_tol_slots = 15;    // how far a shift's start may be from the person's usual start
+  int32 end_tol_slots = 16;      // and its end from the usual end
+}
+
+message Finding {
+  string severity = 1;           // HARD: must stop publication | SOFT: can go ahead where policy allows, with the reason on record
+  string code = 2;
+  int32 employee = 3;
+  int32 day = 4;
+  string message = 5;
+  string ref = 6;                // the shift it is about, when it is about one
+}
+
+message DayCover {
+  int32 day = 1;
+  int32 required_slots = 2;
+  int32 under_slots = 3;
+  int32 over_slots = 4;
+  double coverage_percent = 5;
+}
+
+message EmployeeLoad {
+  int32 employee = 1;
+  int32 shifts = 2;
+  int32 paid_slots = 3;
+  int32 unsocial_hours = 4;
+  int32 overtime_slots = 5;      // paid time beyond the full contract in weeks the period covers completely
+}
+
+message ValidateResponse {
+  bool valid = 1;                // no hard violations: the roster obeys every rule
+  string status = 2;             // VALIDATED | VALIDATED_WITH_WARNINGS | INVALID
+  string coverage_status = 3;    // ADEQUATE | UNDERSTAFFED: a roster can obey every rule and still not have enough people; that is not a perfect schedule
+  int32 hard_violations = 4;
+  int32 soft_warnings = 5;
+  repeated Finding findings = 6;   // hard first; at most 500 (the counts are complete)
+  int32 under_slots = 7;
+  int32 over_slots = 8;
+  double coverage_percent = 9;
+  repeated DayCover days = 10;
+  repeated EmployeeLoad loads = 11;
+  int32 fairness_spread_hours = 12;
+  double wall_sec = 13;
 }

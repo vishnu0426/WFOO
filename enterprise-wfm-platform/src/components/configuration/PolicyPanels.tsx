@@ -3,6 +3,7 @@
  * Rules apply to every schedule alongside each person's own contract (the stricter one wins); weights are the starting
  * point on the Generate Schedule screen.
  */
+import { Waiting } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { api, SchedulingPolicy } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
@@ -25,7 +26,8 @@ function usePolicy() {
     const { updatedAt, updatedBy, ...body } = draft;
     try { await api('/config/scheduling-policy', { method: 'PUT', body }); setSaved(true); setTick((t) => t + 1); } catch (e: any) { setError(e.message); }
   };
-  return { draft, setDraft, save, error, saved, loading: res.loading && !draft, loadError: res.error, canWrite: can('config:write'), current: res.data };
+  const discard = () => { if (res.data) setDraft(res.data); setSaved(false); setError(''); };
+  return { draft, setDraft, save, discard, changed: !!draft && !!res.data && JSON.stringify(draft) !== JSON.stringify(res.data), error, saved, loading: res.loading && !draft, loadError: res.error, canWrite: can('config:write'), current: res.data };
 }
 
 const LIMITS: { k: 'minRestHours' | 'maxWeeklyHours' | 'maxConsecutiveDays' | 'maxDaysPerWeek'; label: string; hint: string; unit: string; min: number; max: number; step: number }[] = [
@@ -37,7 +39,7 @@ const LIMITS: { k: 'minRestHours' | 'maxWeeklyHours' | 'maxConsecutiveDays' | 'm
 
 export const SchedulingRulesPanel: React.FC = () => {
   const p = usePolicy();
-  if (p.loading) return <Busy text="Loading rules…" />;
+  if (p.loading) return <Waiting what="the scheduling rules" shape="lines" />;
   if (!p.draft) return <Banner kind="err">{p.loadError || 'Could not load the scheduling rules.'}</Banner>;
   const d = p.draft;
   const setLimit = (k: (typeof LIMITS)[number]['k'], raw: string) => p.setDraft({ ...d, [k]: raw === '' ? null : Number(raw) });
@@ -83,12 +85,10 @@ export const SchedulingRulesPanel: React.FC = () => {
       </div>
       <div className="max-w-3xl border-t border-[#E5E5E0] pt-4 space-y-3">
         <div className="text-[13px] font-semibold text-[#171717]">Quality checks</div>
+        <p className="text-[12px] text-[#6B6B6B] -mt-1">The pay week, weekend days and holidays are in Configuration › Work Calendar.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Coverage target" hint="How much of the required people-time a schedule should cover. Below it, the shortage analysis flags the schedule.">
             <div className="flex items-center gap-2"><Input type="number" min={50} max={100} disabled={!p.canWrite} value={d.scheduling.targetCoverage} onChange={(e) => setSched({ targetCoverage: Math.max(50, Math.min(100, Math.round(Number(e.target.value) || 90))) })} /><span className="text-[12px] text-[#6B6B6B]">%</span></div>
-          </Field>
-          <Field label="Pay week starts on" hint="Weekly hours, days per week and overtime are counted from this day. A WFM group can use its own day (Configuration › WFM Groups). A schedule keeps the pay week it was built with.">
-            <Select disabled={!p.canWrite} value={d.scheduling.payWeekStart ?? 0} onChange={(e) => setSched({ payWeekStart: Number(e.target.value) })}>{['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((n, i) => <option key={n} value={i}>{n}</option>)}</Select>
           </Field>
           <Field label="Part-time and contract staff: hours past contract" hint="Part-time, contract and temporary people are scheduled for their contract hours plus at most this much. More than that has to be an extra shift you approve. Full-time people keep their own weekly maximum. Give part-timers shifts of 4 to 6 hours so their contract can be met exactly.">
             <Select disabled={!p.canWrite} value={d.scheduling.partTimeToleranceHours === null ? 'off' : String(d.scheduling.partTimeToleranceHours ?? 1)} onChange={(e) => setSched({ partTimeToleranceHours: e.target.value === 'off' ? null : Number(e.target.value) })}>
@@ -96,10 +96,25 @@ export const SchedulingRulesPanel: React.FC = () => {
               <option value="off">No limit except their weekly maximum</option>
             </Select>
           </Field>
+          <Field label="Overtime" hint="Hours past a person's contract in a week. Allowed freely: up to their weekly maximum, no extra cost to the scheduler. Only to fill a shortage: used when the cover is worth it. Never: the contract is the ceiling.">
+            <Select disabled={!p.canWrite} value={d.scheduling.overtime ?? 'FREE'} onChange={(e) => setSched({ overtime: e.target.value as 'FREE' | 'WHEN_SHORT' | 'NEVER' })}>
+              <option value="FREE">Allowed freely, up to the weekly maximum</option><option value="WHEN_SHORT">Only to fill a shortage</option><option value="NEVER">Never planned</option>
+            </Select>
+          </Field>
+          <Field label="Public holidays" hint="Staffed like any day, staffed only where the cover is really needed (and shared fairly, like weekends), or not staffed at all.">
+            <Select disabled={!p.canWrite} value={d.scheduling.holidays ?? 'ALLOW'} onChange={(e) => setSched({ holidays: e.target.value as 'ALLOW' | 'AVOID' | 'CLOSED' })}>
+              <option value="ALLOW">Staffed like any other day</option><option value="AVOID">Only where the cover is really needed</option><option value="CLOSED">Not staffed</option>
+            </Select>
+          </Field>
+          <Field label="Notice for shift changes" hint="A published shift that changes with less notice than this is flagged before publishing, and the person is told it was a short-notice change.">
+            <div className="flex items-center gap-2"><Input type="number" min={0} max={720} disabled={!p.canWrite} value={d.scheduling.changeNoticeHours ?? 48} onChange={(e) => setSched({ changeNoticeHours: Math.max(0, Math.min(720, Math.round(Number(e.target.value) || 0))) })} /><span className="text-[12px] text-[#6B6B6B]">hours</span></div>
+          </Field>
           <Field label="Meal and break window" hint="How far a meal or break may move from where the template puts it, to cover the phones better.">
             <div className="flex items-center gap-2"><Select disabled={!p.canWrite} value={d.scheduling.breakSlackMin} onChange={(e) => setSched({ breakSlackMin: Number(e.target.value) })}>{[0, 30, 60, 90, 120].map((m) => <option key={m} value={m}>{m === 0 ? 'Template flex only' : `±${m} minutes`}</option>)}</Select></div>
           </Field>
         </div>
+        <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" className="mt-0.5" disabled={!p.canWrite} checked={!!d.scheduling.requireApproval} onChange={(e) => setSched({ requireApproval: e.target.checked })} />
+          <span><span className="font-medium">A schedule must be approved before it is published.</span> <span className="text-[#6B6B6B]">The planner submits the draft, an approver approves it or sends it back with a reason, and only then can it be published. Changing the draft after it was reviewed puts it back to needing review. If the four-eyes rule is on, the person who submitted it cannot approve it.</span></span></label>
         <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" className="mt-0.5" disabled={!p.canWrite} checked={d.scheduling.enforcePublishChecks} onChange={(e) => setSched({ enforcePublishChecks: e.target.checked })} />
           <span><span className="font-medium">Ask for a reason before publishing with open checks.</span> <span className="text-[#6B6B6B]">When coverage is under the target, or the forecast has changed since the schedule was built, publishing needs a written reason, which is kept with the schedule. Off: the checks are shown as warnings only.</span></span></label>
       </div>
@@ -116,14 +131,14 @@ export const SchedulingRulesPanel: React.FC = () => {
       <p className="text-[12px] text-[#6B6B6B]">Availability, approved time off, one shift a day and shift template days are always enforced as well.</p>
       {p.error && <Banner kind="err">{p.error}</Banner>}
       {p.saved && <Banner kind="ok">Rules saved. They apply the next time a schedule is generated or checked.</Banner>}
-      {p.canWrite && <div><Btn variant="primary" onClick={p.save}>Save rules</Btn></div>}
+      {p.canWrite && <div className="flex gap-2"><Btn variant="primary" onClick={p.save}>Save rules</Btn><Btn disabled={!p.changed} onClick={p.discard}>Discard changes</Btn></div>}
     </Card>
   );
 };
 
 export const OptimizationPanel: React.FC = () => {
   const p = usePolicy();
-  if (p.loading) return <Busy text="Loading weights…" />;
+  if (p.loading) return <Waiting what="the scoring weights" shape="lines" />;
   if (!p.draft) return <Banner kind="err">{p.loadError || 'Could not load the optimization weights.'}</Banner>;
   const d = p.draft;
   return (
@@ -140,7 +155,7 @@ export const OptimizationPanel: React.FC = () => {
       <p className="text-[12px] text-[#6B6B6B]">Hard rules (rest, weekly maximum, days in a row, availability, approved time off) are never traded off.</p>
       {p.error && <Banner kind="err">{p.error}</Banner>}
       {p.saved && <Banner kind="ok">Weights saved.</Banner>}
-      {p.canWrite && <div><Btn variant="primary" onClick={p.save}>Save weights</Btn></div>}
+      {p.canWrite && <div className="flex gap-2"><Btn variant="primary" onClick={p.save}>Save weights</Btn><Btn disabled={!p.changed} onClick={p.discard}>Discard changes</Btn></div>}
     </Card>
   );
 };

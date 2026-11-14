@@ -6,18 +6,20 @@ import React, { useMemo, useState } from 'react';
 import { api, Employee, GroupDto, Team } from '../../../services/api';
 import { Banner, Btn, Card, Field, Input, Select } from '../../forecasting/ui';
 import { PersonPicker } from '../../common/PersonPicker';
+import { useApi } from '../../forecasting/hooks';
+import { CATEGORIES, LIBRARY, type SavedTemplate } from '../../scheduling/rotationLibrary';
 import { DAYS_LONG, GroupImpact, IMPACT_LABEL, Section, Site, useDebounced } from './shared';
 
 export type GroupFormValues = {
-  name: string; description: string; siteId: string | null; managerId: string | null; timezone: string; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number;
-  shrinkagePercent: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; payWeekStart: number | null;
+  name: string; description: string; siteId: string | null; managerId: string | null; timezone: string; defaultRotationRef: string | null; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number;
+  shrinkagePercent: number; chatEfficiency: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; payWeekStart: number | null;
 };
 export const DEFAULTS: GroupFormValues = {
-  name: '', description: '', siteId: null, managerId: null, timezone: 'UTC', serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40, payWeekStart: null,
+  name: '', description: '', siteId: null, managerId: null, timezone: 'UTC', defaultRotationRef: null, serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, chatEfficiency: 0.85, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40, payWeekStart: null,
 };
 export const valuesOf = (g: GroupDto): GroupFormValues => ({
-  name: g.name, description: g.description ?? '', siteId: g.siteId ?? null, managerId: g.managerId ?? null, timezone: g.timezone, serviceLevelGoal: g.serviceLevelGoal, serviceLevelThresholdSec: g.serviceLevelThresholdSec, targetOccupancy: g.targetOccupancy,
-  shrinkagePercent: g.shrinkagePercent, method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: g.payWeekStart ?? null,
+  name: g.name, description: g.description ?? '', siteId: g.siteId ?? null, managerId: g.managerId ?? null, timezone: g.timezone, defaultRotationRef: g.defaultRotationRef ?? null, serviceLevelGoal: g.serviceLevelGoal, serviceLevelThresholdSec: g.serviceLevelThresholdSec, targetOccupancy: g.targetOccupancy,
+  shrinkagePercent: g.shrinkagePercent, chatEfficiency: g.chatEfficiency ?? 0.85, method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: g.payWeekStart ?? null,
 });
 
 /** Plain-language names of the staffing and pay settings this edit moves. */
@@ -30,7 +32,7 @@ export function problemsOf(f: GroupFormValues): string[] {
   if (!f.name.trim()) out.push('Give the group a name.');
   const range = (v: number, lo: number, hi: number, what: string) => { if (!Number.isFinite(v) || v < lo || v > hi) out.push(`${what} must be between ${lo} and ${hi}.`); };
   range(f.serviceLevelGoal, 1, 99, 'Service level goal'); range(f.serviceLevelThresholdSec, 1, 600, 'Answer within'); range(f.targetOccupancy, 31, 100, 'Occupancy cap');
-  range(f.shrinkagePercent, 0, 90, 'Shrinkage'); range(f.fteHoursWeek, 10, 60, 'Full-time hours');
+  range(f.shrinkagePercent, 0, 90, 'Shrinkage'); range(f.chatEfficiency, 0.3, 1, 'Chat efficiency'); range(f.fteHoursWeek, 10, 60, 'Full-time hours');
   if (f.method === 'erlang_a') range(f.patienceSec, 10, 3600, 'Customer patience');
   return out;
 }
@@ -95,6 +97,7 @@ export const GroupForm: React.FC<{
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [impact, setImpact] = useState<GroupImpact | null>(null);
+  const library = useApi<SavedTemplate[]>('/scheduling/rotations/templates');
   const zones = useMemo(() => { try { return (Intl as any).supportedValuesOf('timeZone') as string[]; } catch { return ['UTC', 'Asia/Kolkata', 'Europe/London', 'America/New_York']; } }, []);
   const set = <K extends keyof GroupFormValues>(k: K, v: GroupFormValues[K]) => setF((s) => ({ ...s, [k]: v }));
   const num = (k: keyof GroupFormValues) => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value) as never);
@@ -117,9 +120,17 @@ export const GroupForm: React.FC<{
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
             <Field label="Name"><Input value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} autoFocus={!id} /></Field>
             <Field label="Site" hint="Where this group's people work">
-              <Select value={f.siteId ?? ''} onChange={(e) => set('siteId', e.target.value || null)}><option value="">No site</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
+              <Select value={f.siteId ?? ''} onChange={(e) => set('siteId', e.target.value || null)}><option value="">No site</option>{sites.filter((s) => s.status !== 'CLOSED' || s.id === f.siteId).map((s) => <option key={s.id} value={s.id}>{s.name}{s.regionName ? ` (${s.regionName})` : ''}{s.status === 'CLOSED' ? ' - closed' : ''}</option>)}</Select>
             </Field>
             <Field label="Group manager" hint="Gets what is escalated above the team supervisors"><PersonPicker ariaLabel="Group manager" value={f.managerId ?? ''} statuses="ONBOARDING,ACTIVE,LEAVE" only="manager" placeholder="Choose the manager (optional)" onChange={(id) => set('managerId', id || null)} /></Field>
+            <Field label="Rotation pattern" hint="Optional. The pattern this group normally follows. Rotation Patterns and Generate Schedule start from it; the group still has its own people and roster.">
+              <Select value={f.defaultRotationRef ?? ''} onChange={(e) => set('defaultRotationRef', e.target.value || null)}>
+                <option value="">None</option>
+                {CATEGORIES.filter((c) => c.id !== 'CUSTOM').map((c) => { const inCat = LIBRARY.filter((p) => (p.category ?? 'STANDARD') === c.id); return inCat.length ? <optgroup key={c.id} label={c.label}>{inCat.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</optgroup> : null; })}
+                {(library.data ?? []).length > 0 && <optgroup label="Your library">{(library.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>}
+                {f.defaultRotationRef && !LIBRARY.some((p) => p.id === f.defaultRotationRef) && !(library.data ?? []).some((t) => t.id === f.defaultRotationRef) && <option value={f.defaultRotationRef}>A pattern that is no longer in the library</option>}
+              </Select>
+            </Field>
             <div className="md:col-span-2"><Field label="Description"><Input value={f.description} maxLength={500} onChange={(e) => set('description', e.target.value)} /></Field></div>
           </div>
         </Section>
@@ -130,6 +141,7 @@ export const GroupForm: React.FC<{
             <Field label="Answer within (seconds)" hint="The time that goal is measured against"><Input type="number" min={1} max={600} value={f.serviceLevelThresholdSec} onChange={num('serviceLevelThresholdSec')} /></Field>
             <Field label="Occupancy cap (%)" hint="Most time agents should be busy"><Input type="number" min={31} max={100} value={f.targetOccupancy} onChange={num('targetOccupancy')} /></Field>
             <Field label="Shrinkage (%)" hint="Breaks, training, absence"><Input type="number" min={0} max={90} value={f.shrinkagePercent} onChange={num('shrinkagePercent')} /></Field>
+            <Field label="Chat efficiency" hint="How well agents handle chats at once: 1 means three chats at once take a third of the time of one each; lower means they take longer. Measure it from your own chat productivity (0.3 to 1)"><Input type="number" min={0.3} max={1} step={0.01} value={f.chatEfficiency} onChange={num('chatEfficiency')} /></Field>
           </div>
         </Section>
 

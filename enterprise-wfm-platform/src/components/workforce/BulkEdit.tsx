@@ -22,8 +22,10 @@ const Row: React.FC<{ on: boolean; toggle: () => void; label: string; hint?: str
 export const BulkEdit: React.FC<{
   people: { id: string; name: string }[]; groups: { id: string; name: string }[]; teams: Team[]; skills: Skill[]; templates: ShiftTemplate[];
   onDone: (text: string) => void; onCancel: () => void;
-}> = ({ people, groups, teams, skills, templates, onDone, onCancel }) => {
-  const [on, setOn] = useState<Record<string, boolean>>({});
+  /** One change already ticked, for the quick buttons of the bulk bar (assign team, group, skill, contract). */
+  preset?: 'team' | 'primaryGroup' | 'addSkills' | 'contract';
+}> = ({ people, groups, teams, skills, templates, onDone, onCancel, preset }) => {
+  const [on, setOn] = useState<Record<string, boolean>>(preset ? { [preset]: true } : {});
   const flip = (k: string) => setOn((s) => ({ ...s, [k]: !s[k] }));
   const [v, setV] = useState({
     teamId: '', primaryGroupId: '', status: 'ACTIVE' as EmployeeStatus, employmentType: 'FULL_TIME' as EmploymentType, weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6,

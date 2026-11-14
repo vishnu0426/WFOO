@@ -41,6 +41,7 @@ export interface Limits { minRestHours?: number | null; maxWeeklyHours?: number 
 export interface AnalysisInput {
   cycleDays: number; sequence: (string | null)[]; crews: { name: string; offsetDays: number }[];
   anchorDow: number;                     // weekday of day 0, Monday = 0
+  weekend?: number[];                    // weekdays that count as the weekend, Monday = 0 (Saturday and Sunday when omitted)
   templates: Map<string, TemplateLite>; limits: Limits; contractHours?: number | null;
 }
 export interface Finding { level: 'WARN' | 'INFO' | 'OK'; text: string }
@@ -83,11 +84,12 @@ export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findin
       rest = rest === null ? gap : Math.min(rest, gap);
     }
     // weekends, over as many days as it takes for the cycle and the week to line up
+    const wk = a.weekend?.length ? a.weekend : [5, 6], wkLast = Math.max(...wk);
     let wkendDays = 0, offWeekends = 0, weeks = 0;
     for (let d = 0; d < lcm; d++) {
       const dow = mod(a.anchorDow + d, 7);
-      if (dow >= 5 && worked(d)) wkendDays++;
-      if (dow === 6) { weeks++; if (!worked(d) && !worked(d - 1)) offWeekends++; }
+      if (wk.includes(dow) && worked(d)) wkendDays++;
+      if (dow === wkLast) { weeks++; if (wk.every((w) => !worked(d - (wkLast - w)))) offWeekends++; }   // the whole weekend off
     }
     return {
       name: c.name, offsetDays: c.offsetDays, shiftsPerCycle: shifts, paidHoursPerCycle: r1(paid / 4), averageWeeklyHours: r1((paid / 4) * 7 / n),

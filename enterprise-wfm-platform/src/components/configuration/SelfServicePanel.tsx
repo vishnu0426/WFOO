@@ -3,6 +3,7 @@
  * time off (notice, balances, how many colleagues may be off at once), availability, and shift swaps.
  * A request that passes every rule is approved on the spot; anything else waits for a person.
  */
+import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useState } from 'react';
 import { api } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
@@ -47,7 +48,7 @@ const TimeOffRules: React.FC = () => {
   return (
     <Card title="Blackout dates and daily limits" sub="Dates when leave cannot be taken, or only a few people may be off at once, for everyone or one WFM group. A request that hits a rule goes to a manager with the reason, or is refused outright if you choose. Sick leave is never held up.">
       {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
-      {(rules.data ?? []).length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No rules yet.</p> : (
+      {rules.data === null ? (rules.error ? <LoadFailed what="the rules" error={rules.error} reload={rules.reload} /> : <Waiting what="the rules" shape="table" reload={rules.reload} />) : rules.data.length === 0 ? <p className="text-[12px] text-[#6B6B6B]">No rules yet.</p> : (
         <table className="w-full text-[12px]">
           <thead className="text-left text-[#6B6B6B]"><tr><th className="py-1">Rule</th><th>Dates</th><th>Applies to</th><th>If someone asks</th><th /></tr></thead>
           <tbody>{rules.data!.map((r) => (
@@ -83,7 +84,7 @@ const OfferRules: React.FC = () => {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   useEffect(() => { if (res.data) setD(res.data); }, [res.data]);
-  if (!d) return res.error ? <Banner kind="err">{res.error}</Banner> : <Busy text="Loading…" />;
+  if (!d) return res.error ? <LoadFailed what="the offer rules" error={res.error} reload={res.reload} /> : <Waiting what="the offer rules" shape="lines" />;
   const canWrite = can('config:write');
   const set = <K extends keyof OfferPolicy>(k: K, v: OfferPolicy[K]) => { setD({ ...d, [k]: v }); setMsg(''); };
   const save = async () => { setErr(''); try { await api('/self-service/offer-policy', { method: 'PUT', body: d }); setMsg('Saved. New offers use these rules.'); } catch (e: any) { setErr(e.message); } };
@@ -112,8 +113,8 @@ export const SelfServicePanel: React.FC = () => {
   const [saved, setSaved] = useState(false);
   const canWrite = can('config:write');
   useEffect(() => { if (res.data) setD(res.data); }, [res.data]);
-  if (res.loading && !d) return <Busy text="Loading…" />;
-  if (!d) return <Banner kind="err">{res.error || 'Could not load the self-service rules.'}</Banner>;
+  if (res.loading && !d) return <Waiting what="the self-service rules" shape="lines" reload={res.reload} />;
+  if (!d) return <LoadFailed what="the self-service rules" error={res.error || 'Try again in a moment.'} reload={res.reload} />;
 
   const set = <K extends keyof Policy>(k: K, v: Policy[K]) => { setD({ ...d, [k]: v }); setSaved(false); };
   const setEnt = (t: string, raw: string) => { const e = { ...d.entitlements }; if (raw === '') delete e[t]; else e[t] = Number(raw); set('entitlements', e); };

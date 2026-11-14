@@ -3,6 +3,12 @@
  */
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { HelpTip } from '../common/HelpTip';
+import type { HelpTopic } from '../../help/glossary';
+
+/** Hints and subtitles longer than this move behind an info icon, so screens stay clean. Short or live text stays visible. */
+export const LONG_HINT = 60;
+const isLong = (t: unknown): t is string => typeof t === 'string' && t.length > LONG_HINT;
 
 export const Card: React.FC<{
   title?: React.ReactNode;
@@ -15,8 +21,8 @@ export const Card: React.FC<{
     {(title || actions) && (
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          {title && <h2 className="text-[16px] font-semibold text-[#171717]">{title}</h2>}
-          {sub && <p className="text-[12px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
+          {title && <h2 className="text-[16px] font-semibold text-[#171717]">{title}{isLong(sub) && <HelpTip text={sub} title={typeof title === 'string' ? title : undefined} />}</h2>}
+          {sub && !isLong(sub) && <p className="text-[12px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
@@ -89,13 +95,25 @@ export const Seg: React.FC<{ options: { id: string; label: string }[]; value: st
   </div>
 );
 
-export const Field: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
-  <label className="block text-[12px] font-semibold text-[#171717]">
-    {label}
-    <div className="mt-1 font-normal">{children}</div>
-    {hint && <div className="text-[12px] font-normal text-[#6B6B6B] mt-0.5">{hint}</div>}
-  </label>
-);
+/** A labelled input. `topic` shows the shared definition behind an info icon; a long `hint` moves behind one too, unless `keepHint` (for live text). */
+export const Field: React.FC<{ label: string; hint?: string; topic?: HelpTopic; tip?: string; keepHint?: boolean; children: React.ReactNode }> = ({ label, hint, topic, tip: tipText, keepHint, children }) => {
+  const tip = !keepHint && isLong(hint);
+  // the label sits beside its control, not around it: give the control the label as its name, so a screen reader announces what it is for
+  const box = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    box.current?.querySelectorAll<HTMLElement>('input:not([type=hidden]), select, textarea').forEach((el) => {
+      const named = el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby') || !!el.closest('label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`));
+      if (!named) el.setAttribute('aria-label', label);
+    });
+  });
+  return (
+    <div className="block text-[12px] font-semibold text-[#171717]">
+      <label>{label}</label>{topic ? <HelpTip topic={topic} /> : tipText ? <HelpTip text={tipText} title={label} /> : tip ? <HelpTip text={hint} title={label} /> : null}
+      <div className="mt-1 font-normal" ref={box}>{children}</div>
+      {hint && !tip && <div className="text-[12px] font-normal text-[#6B6B6B] mt-0.5">{hint}</div>}
+    </div>
+  );
+};
 
 export const inputCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#6B6B6B]';
 
@@ -118,15 +136,15 @@ export const Table: React.FC<{ head: React.ReactNode[]; children: React.ReactNod
   </div>
 );
 
-export const PageHeader: React.FC<{ title: string; badge?: React.ReactNode; sub?: string; actions?: React.ReactNode }> = ({ title, badge, sub, actions }) => (
-  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E5E5E0] pb-4">
+export const PageHeader: React.FC<{ title: string; badge?: React.ReactNode; sub?: string; actions?: React.ReactNode; help?: React.ReactNode; /** one slim line: the sub-title moves into a help mark, for screens that need the room */ compact?: boolean }> = ({ title, badge, sub, actions, help, compact }) => (
+  <div className={`flex flex-wrap items-center justify-between gap-4 border-b border-[#E5E5E0] ${compact ? 'pb-2' : 'pb-4'}`}>
     <div>
       <div className="flex items-center gap-2">
-        <h1 className="text-[22px] font-semibold text-[#171717]">{title}</h1>
+        <h1 className={`${compact ? 'text-[18px]' : 'text-[22px]'} font-semibold text-[#171717]`}>{title}{sub && (compact || isLong(sub)) && <HelpTip text={sub} title={title} />}</h1>
         {badge}
       </div>
-      {sub && <p className="text-[13px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
+      {sub && !compact && !isLong(sub) && <p className="text-[13px] text-[#6B6B6B] mt-0.5 max-w-3xl">{sub}</p>}
     </div>
-    {actions && <div className="flex items-center gap-2.5 flex-wrap">{actions}</div>}
+    {(actions || help) && <div className="flex items-center gap-2.5 flex-wrap">{actions}{help}</div>}
   </div>
 );

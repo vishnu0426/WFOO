@@ -56,3 +56,25 @@ export function clockChanges(days: string[], tz: string): ClockChange[] {
   for (const d of days) { const c = clockChangeOn(d, tz); if (c) out.push(c); }
   return out;
 }
+
+/**
+ * A shift planned on one group's wall clock, as it falls on another group's wall clock. The same person can work for groups in different zones; "9 to 5 in London" is a night
+ * in Manila. Without this a shared person's shift elsewhere was compared by its own zone's numbers, so a clash or a too-short rest was missed (or invented).
+ * The day and start slot come back in the target zone; the length is the real elapsed time, so a shift over a clock change is as long as it really is.
+ */
+export function convertShift(day: string, startSlot: number, lengthSlots: number, fromTz: string, toTz: string): { day: string; startSlot: number; lengthSlots: number } {
+  if (fromTz === toTz) return { day, startSlot, lengthSlots };
+  const a = wallToUtcMs(day, startSlot * SLOT_MIN, fromTz), b = wallToUtcMs(day, (startSlot + lengthSlots) * SLOT_MIN, fromTz);
+  const local = a + offsetMinutes(toTz, a) * 60_000;
+  const dayMs = Math.floor(local / 86_400_000) * 86_400_000;
+  return { day: new Date(dayMs).toISOString().slice(0, 10), startSlot: Math.round((local - dayMs) / 60_000 / SLOT_MIN), lengthSlots: Math.max(1, Math.round((b - a) / 60_000 / SLOT_MIN)) };
+}
+
+/**
+ * For each day of a schedule, how many slots the rest before that day's shift must be moved by so it is real elapsed time: +4 where the clocks go forward in the night before
+ * (an hour less passes on the wall clock than it shows), -4 where they go back. Zero on every ordinary day, so the engine ignores a schedule that has no change in it.
+ */
+export function restAdjust(days: string[], tz: string): number[] {
+  const off = (d: string) => offsetMinutes(tz, wallToUtcMs(d, 12 * 60, tz));
+  return days.map((d) => Math.round((off(d) - off(addDay(d, -1))) / SLOT_MIN));
+}

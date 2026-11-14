@@ -4,7 +4,7 @@
  * start/end time or paid hours, to slots where the person is less needed elsewhere right now.
  */
 export const SPD = 96;
-export interface Activity { type: 'MEAL' | 'BREAK'; startSlot: number; slots: number }
+export interface Activity { type: 'MEAL' | 'BREAK'; startSlot: number; slots: number; split?: boolean }
 export interface ShiftActs { id: string; employeeId: string; name: string; startSlot: number; lengthSlots: number; activities: Activity[] }
 export interface Suggestion { shiftId: string; employeeName: string; type: 'MEAL' | 'BREAK'; fromSlot: number; toSlot: number; deficitReduction: number }
 
@@ -38,6 +38,7 @@ export function suggestBreakMoves(shifts: ShiftActs[], required: number[], nowSl
   for (const s of shifts) {
     for (const act of s.activities) {
       if (act.startSlot <= nowSlot) continue; // already started or past: leave it
+      if (act.split) continue;                // the gap of a split shift is part of the shift's design: it stays where it is
       const currentCost = windowCost(baseline, required, act.startSlot, act.slots);
       if (currentCost <= 0) continue; // this person is not needed more anywhere nearby right now
       let best: { start: number; cost: number } | null = null;

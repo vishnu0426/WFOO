@@ -7,6 +7,7 @@
  * Nothing is seeded: every screen says what is missing and where to add it.
  */
 
+import { Waiting, LoadFailed, StaleNote } from '../common/loading';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ColDef, ICellRendererParams } from 'ag-grid-community';
 import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
@@ -76,8 +77,8 @@ const CoverageScreen: React.FC<{ groupId: string; day: string }> = ({ groupId, d
       cellRenderer: (p: ICellRendererParams<CoverageSlot>) => { const v = p.value as number | null; return v === null ? null : <span className={v <= -1 ? 'text-[#BC3F3F] font-semibold' : v >= 2 ? 'text-[#8F6200] font-semibold' : 'text-[#2A7553]'}>{signed(v)}</span>; } },
   ], []);
 
-  if (cov.loading && !c) return <Busy text="Loading coverage…" />;
-  if (cov.error) return <Banner kind="err">{cov.error}</Banner>;
+  if (cov.loading && !c) return <Waiting what="coverage" shape="table" reload={cov.reload} />;
+  if (cov.error && !c) return <LoadFailed what="coverage" error={cov.error} reload={cov.reload} />;
   if (!c) return null;
   if (c.ready === false) return <Empty title="Nothing to compare yet">{c.reason}</Empty>;
 
@@ -92,6 +93,7 @@ const CoverageScreen: React.FC<{ groupId: string; day: string }> = ({ groupId, d
 
   return (
     <div className="space-y-6">
+      <StaleNote state={cov} what="coverage" />
       {!c.hasActuals && isToday && <Banner kind="info">No live contact counts have arrived for today. Send them from your phone system to the live feed (Data Management) and this screen will start comparing them with the forecast.</Banner>}
       {!c.hasSchedule && <Banner kind="warn">There is no published schedule for this day, so scheduled staff shows as zero. Publish one under Scheduling.</Banner>}
       <KpiRow>
@@ -147,14 +149,15 @@ const nextTime = (slot: number) => { const m = ((slot + 1) * 15) % 1440; return 
 const ActionsScreen: React.FC<{ groupId: string; day: string }> = ({ groupId, day }) => {
   const cov = useCoverage(groupId, day);
   const c = cov.data;
-  if (cov.loading && !c) return <Busy text="Working out the coming intervals…" />;
-  if (cov.error) return <Banner kind="err">{cov.error}</Banner>;
+  if (cov.loading && !c) return <Waiting what="the coming intervals" shape="table" reload={cov.reload} />;
+  if (cov.error && !c) return <LoadFailed what="the coming intervals" error={cov.error} reload={cov.reload} />;
   if (!c) return null;
   if (c.ready === false) return <Empty title="Nothing to recommend yet">{c.reason}</Empty>;
   if (c.nowTime === null) return <Empty title="Pick today">Recommendations look ahead from now, so they only make sense for today.</Empty>;
   const ws = windows(c.gaps);
   return (
     <div className="space-y-4">
+      <StaleNote state={cov} what="the coming intervals" />
       {!c.reforecast.applied && <Banner kind="info">Contacts have not started arriving yet, so these use the published forecast. They sharpen once live counts come in.</Banner>}
       {ws.length === 0
         ? <Card><div className="flex items-center gap-2 text-[14px]"><CheckCircle2 className="w-5 h-5 text-[#2A7553]" />The rest of the day looks covered: no stretch of 30 minutes or more is short by one person or over by two.</div></Card>
@@ -269,8 +272,8 @@ const BreakOptimizerScreen: React.FC<{ groupId: string }> = ({ groupId }) => {
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
-  if (res.loading && !s) return <Busy text="Looking for a better spot for upcoming breaks…" />;
-  if (res.error) return <Banner kind="err">{res.error}</Banner>;
+  if (res.loading && !s) return <Waiting what="break suggestions" shape="table" reload={res.reload} />;
+  if (res.error && !s) return <LoadFailed what="break suggestions" error={res.error} reload={res.reload} />;
   if (!s) return null;
   if (!s.ready) return <Empty title="Nothing to optimize yet">{s.reason}</Empty>;
   if (!s.suggestions.length) return (
