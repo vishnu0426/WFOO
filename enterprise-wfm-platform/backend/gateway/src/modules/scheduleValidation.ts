@@ -56,7 +56,7 @@ export async function validationRequest(tenantId: string, live: { ctx: any; shif
   const adjust = restAdjust(days, ctx.tz ?? 'UTC');
   return {
     request: {
-      days: days.length, first_dow: dowOf(days[0]), week_start: ctx.weekStart ?? 0, weekend_mask: weekendMask(cleanWeekend(pol.scheduling.weekendDays)), employees, shifts: outShifts, commitments,
+      days: days.length, first_dow: dowOf(days[0]), week_start: ctx.weekStart ?? 0, weekend_mask: weekendMask(ctx.weekendDays ?? cleanWeekend(pol.scheduling.weekendDays)), employees, shifts: outShifts, commitments,
       required: live.required, dst_rest_adjust: adjust.some((v) => v !== 0) ? adjust : [], target_coverage: pol.scheduling.targetCoverage / 100,
       // the company's rule on usual start and end times; a person who must have them is held to them (their own setting, above, overrides this one)
       consistency_mode: { OFF: 0, PREFER: 1, REQUIRE: 2 }[pol.scheduling.consistentTimes.mode as 'OFF'] ?? 0, start_tol_slots: Math.round(pol.scheduling.consistentTimes.startToleranceMin / 15), end_tol_slots: Math.round(pol.scheduling.consistentTimes.endToleranceMin / 15),

@@ -16,7 +16,7 @@ import { dropCache, engine, publish } from '../infra.ts';
 import { addDays, dayRange, loadGroup, versionRecords, riskRequired, todayIn, synthesizeLongRangeRequirement } from './forecast/service.ts';
 import { hhmm } from './workforceRoutes.ts';
 import { loadPolicy } from './policyRoutes.ts';
-import { cleanWeekend, payWeekFor, weekendMask } from './payWeek.ts';
+import { cleanWeekend, payWeekFor, weekendDaysFor, weekendMask } from './payWeek.ts';
 import { clockChanges, convertShift, restAdjust, shiftDelta } from './clockChange.ts';
 import { approvalOf, computeImpact, notifyImpact, requireApproved } from './scheduleApproval.ts';
 import { independentCheck, requireValid } from './scheduleValidation.ts';
@@ -173,7 +173,7 @@ scheduling.delete('/templates/:id', requires('workforce:write'), async (req, res
 
 // ---------------------------------------------------------------- what the scheduler knows
 
-export interface Ctx { group: any; employees: any[]; templates: any[]; timeOff: any[]; avail: any[]; tz: string; rules: RuleSets; skillBased: boolean; weekStart: number; holidays?: Set<string>; holidayMode?: 'ALLOW' | 'AVOID' | 'CLOSED'; held?: Map<string, Set<string>>; others: { employeeId: string; day: string; startSlot: number; lengthSlots: number; groupName: string; paidSlots?: number }[] }
+export interface Ctx { group: any; employees: any[]; templates: any[]; timeOff: any[]; avail: any[]; tz: string; rules: RuleSets; skillBased: boolean; weekStart: number; weekendDays?: number[]; holidays?: Set<string>; holidayMode?: 'ALLOW' | 'AVOID' | 'CLOSED'; held?: Map<string, Set<string>>; others: { employeeId: string; day: string; startSlot: number; lengthSlots: number; groupName: string; paidSlots?: number }[] }
 
 /** Who can work for a group ($1 is the group): a group with required skills draws on everyone who has them all at the level asked, in any group; otherwise on its own and eligible people. */
 export const POOL_WHERE = `(
@@ -252,7 +252,7 @@ export async function loadCtx(tx: Tx, groupId: string, from: string, to: string)
     .map((o: any) => ({ ...o, ...convertShift(o.day, o.startSlot, o.lengthSlots, o.tz ?? group.timezone ?? 'UTC', group.timezone ?? 'UTC'), paidSlots: paidSlots(tplById.get(o.templateId), o.lengthSlots) }));      // on this group's clock, not the other group's
   mark('time off+availability+others');
   const holidays = await holidayDays(tx, groupId, from, to);
-  const out = { group, employees, templates, timeOff, avail, tz: group.timezone, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, holidays, holidayMode: pol.scheduling.holidays, others };
+  const out = { group, employees, templates, timeOff, avail, tz: group.timezone, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, weekendDays: await weekendDaysFor(tx, groupId), holidays, holidayMode: pol.scheduling.holidays, others };
   if (Date.now() - t0 > 1000) console.log(`[loadCtx] ${employees.length} people: ${marks.join(', ')}, done ${((Date.now() - t0) / 1000).toFixed(2)} (seconds, running)`);
   return out;
 }
@@ -714,7 +714,7 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   }));
   const weekStart = b.weekStart ?? baseCtx.weekStart;   // asked for, else the group's pay week, else the company's
   const ctx: Ctx = { ...baseCtx, weekStart };
-  const weekendBits = weekendMask(cleanWeekend(pol.scheduling.weekendDays));   // the weekend days the engine's weekend fairness follows
+  const weekendBits = weekendMask(baseCtx.weekendDays ?? cleanWeekend(pol.scheduling.weekendDays));   // this group's weekend days (else the company's): the engine's weekend fairness follows
   lap('load people and rules');
   // same start and end every day: the request wins, else the company default; a person's own setting then wins over both
   const consist = b.consistentTimes ?? pol.scheduling.consistentTimes;

@@ -385,7 +385,10 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
   const spd = b.kind === 'SHORT' ? 96 : 0;
 
   // 2) the engine (can take several seconds; no transaction is held open)
-  const resp = await engine.forecastSeries({ queues: prep.queues, dates, slots_per_day: spd, events: prep.events, model, reconcile: true });
+  // Up to 270 s, not the usual 2 minutes: a long-term forecast or a big group is slower, and the web server in front gives up at 300 s. The time taken is logged so slow groups can be seen.
+  const t0 = Date.now();
+  const resp = await engine.forecastSeries({ queues: prep.queues, dates, slots_per_day: spd, events: prep.events, model, reconcile: true }, 270_000);
+  console.log(`[forecast] ${b.kind} ${dates.length} days, ${prep.queues.length} queue series, model ${model}: engine took ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   // what the models learned from earlier misses: scale each queue's weekdays by the learned multiplier, and say so
   const applied: Record<string, number[]> = {};
   for (const s of resp.series) {

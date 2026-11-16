@@ -133,11 +133,11 @@ rotations.post('/analyse', requires('schedule:read'), async (req, res) => {
     const pol = await loadPolicy(tx);
     const pay = await payWeekFor(tx, b.wfmGroupId);
     const a = analysePattern({
-      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), weekend: await weekendDaysFor(tx), templates,
+      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), weekend: await weekendDaysFor(tx, b.wfmGroupId), templates,
       limits: { minRestHours: pol.minRestHours, maxWeeklyHours: pol.maxWeeklyHours, maxConsecutiveDays: pol.maxConsecutiveDays, maxDaysPerWeek: pol.maxDaysPerWeek },
       contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null,
     });
-    const extra = await legalAndFairness(tx, b, rows, pay.start, await weekendDaysFor(tx));
+    const extra = await legalAndFairness(tx, b, rows, pay.start, await weekendDaysFor(tx, b.wfmGroupId));
     return { ...a, payWeekStart: pay.start, contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null, ...extra };
   });
   res.json(out);

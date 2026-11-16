@@ -157,8 +157,8 @@ groupAdmin.post('/groups/:id/clone', requires('config:write'), async (req, res) 
     let newCode = code(b.name);
     for (let n = 2; await tx.one('SELECT 1 FROM wfm_groups WHERE tenant_id = :t AND code = $1', [newCode]); n++) newCode = `${code(b.name).slice(0, 26)}-${n}`;
     const g = await tx.one<{ id: string }>(
-      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, chat_efficiency)
-       SELECT tenant_id, $2, $3, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, chat_efficiency
+      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, chat_efficiency, weekend_days)
+       SELECT tenant_id, $2, $3, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, chat_efficiency, weekend_days
        FROM wfm_groups WHERE tenant_id = :t AND id = $1 RETURNING id`, [id, b.name, newCode]);
     const gid = g!.id;
     if (b.shrinkage) await tx.exec('INSERT INTO shrinkage_categories (tenant_id, wfm_group_id, name, pct, sort) SELECT tenant_id, $2, name, pct, sort FROM shrinkage_categories WHERE tenant_id = :t AND wfm_group_id = $1', [id, gid]);

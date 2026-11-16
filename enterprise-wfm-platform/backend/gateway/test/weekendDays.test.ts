@@ -33,3 +33,28 @@ describe('rotation analysis follows the weekend', () => {
     assert.equal(c.weekendsFullyOff, 0);                         // so the weekend is never fully off
   });
 });
+
+describe('a group can name its own weekend', () => {
+  // a stand-in for the database: one company policy and a few groups
+  const fakeTx = (company: unknown, groups: Record<string, number[] | null>) => ({
+    one: async (sql: string, args: any[] = []) => (/FROM wfm_groups/.test(sql) ? (args[0] in groups ? { weekendDays: groups[args[0]] } : null) : { defaults: { weekendDays: company } }),
+  }) as any;
+  it('uses the group\'s weekend when it has one, whatever the company says', async () => {
+    const { weekendDaysFor } = await import('../src/modules/payWeek.ts');
+    const tx = fakeTx([5, 6], { gulf: [4, 5], india: null });
+    assert.deepEqual(await weekendDaysFor(tx, 'gulf'), [4, 5]);        // Friday and Saturday
+  });
+  it('falls back to the company weekend, then to Saturday and Sunday', async () => {
+    const { weekendDaysFor } = await import('../src/modules/payWeek.ts');
+    assert.deepEqual(await weekendDaysFor(fakeTx([6], { india: null }), 'india'), [6]);
+    assert.deepEqual(await weekendDaysFor(fakeTx([6], {}), 'unknown'), [6]);
+    assert.deepEqual(await weekendDaysFor(fakeTx([6], {}), null), [6]);
+    assert.deepEqual(await weekendDaysFor(fakeTx(undefined, {}), 'x'), DEFAULT_WEEKEND);
+  });
+  it('asks for a reason when a group\'s weekend changes, and not when it is sent back unchanged', async () => {
+    const { impactChanges } = await import('../src/modules/groupRules.ts');
+    assert.deepEqual(impactChanges({ weekendDays: null }, { weekendDays: [4, 5] }), ['weekend days']);
+    assert.deepEqual(impactChanges({ weekendDays: [4, 5] }, { weekendDays: [4, 5] }), []);
+    assert.deepEqual(impactChanges({ weekendDays: [4, 5] }, { weekendDays: null }), ['weekend days']);
+  });
+});

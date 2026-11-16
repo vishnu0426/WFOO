@@ -343,7 +343,7 @@ export const NewOrganisationForm: React.FC<Props> = ({ existingCodes, timezones,
                 );
               })}
             </div>
-            <p className="text-[11px] text-[#737373] mt-1">Used for weekend pay, fair sharing of weekend shifts, and paid leave. Choose one to three days.</p>
+            <p className="text-[11px] text-[#737373] mt-1">Used for weekend pay, fair sharing of weekend shifts, and paid leave. It does not close anything: a 24x7 call centre is still scheduled on these days. Choose one to three days. A WFM group can use its own weekend later.</p>
           </div>
           <Field label="Labour-law pack" htmlFor="f-compliancePack" hint="Rules every schedule and rotation pattern is checked against. Suggested from the country; the customer can change it under Compliance Packs." wide>
             <select id="f-compliancePack" className={inputCls} value={f.compliancePack} onChange={(e) => setRegional('compliancePack', e.target.value)}>

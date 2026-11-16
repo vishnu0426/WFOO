@@ -6,14 +6,14 @@
 /** Changing any of these changes staffing numbers, weekly hour counts or what existing schedules mean, so the person must say why. */
 export const IMPACT_FIELDS = {
   serviceLevelGoal: 'service level goal', serviceLevelThresholdSec: 'answer-within time', targetOccupancy: 'occupancy cap', shrinkagePercent: 'shrinkage',
-  method: 'staffing method', patienceSec: 'customer patience', blended: 'blended pool', fteHoursWeek: 'full-time hours', payWeekStart: 'pay week start',
+  method: 'staffing method', patienceSec: 'customer patience', blended: 'blended pool', fteHoursWeek: 'full-time hours', payWeekStart: 'pay week start', weekendDays: 'weekend days',
   timezone: 'time zone', status: 'status', chatEfficiency: 'chat efficiency',
 } as const;
 
 /** Plain-language names of the impact fields this edit really changes (a value sent back unchanged does not count). */
 export function impactChanges(before: Record<string, unknown>, patch: Record<string, unknown>): string[] {
   return (Object.entries(IMPACT_FIELDS) as [string, string][])
-    .filter(([k]) => k in patch && patch[k] !== undefined && (patch[k] ?? null) !== (before[k] ?? null))
+    .filter(([k]) => k in patch && patch[k] !== undefined && JSON.stringify(patch[k] ?? null) !== JSON.stringify(before[k] ?? null))
     .map(([, label]) => label);
 }
 

@@ -76,9 +76,10 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
   if (dayRange(from, to, 400).length > 62) throw bad('Run up to 62 days (two months) at a time.');
   const st = await loadPaySettings(tx);
   const weekStart = (await payWeekFor(tx, groupId)).start;
-  const weekend = new Set(await weekendDaysFor(tx));
+  const companyWeekend = await weekendDaysFor(tx);
+  const groupWeekend = new Map<string, Set<number>>((await tx.q<any>('SELECT id, weekend_days FROM wfm_groups WHERE tenant_id = :t AND weekend_days IS NOT NULL')).map((g: any) => [g.id, new Set<number>(g.weekendDays.map(Number))]));      // a group can name its own weekend
   const emps = await tx.q<any>(
-    `SELECT e.id, e.employee_number, e.first_name || ' ' || e.last_name AS name, e.weekly_contract_hours, e.work_days_per_week, coalesce(t.name, '') AS department, coalesce(g.timezone, 'UTC') AS tz
+    `SELECT e.id, e.employee_number, e.first_name || ' ' || e.last_name AS name, e.weekly_contract_hours, e.work_days_per_week, coalesce(t.name, '') AS department, coalesce(g.timezone, 'UTC') AS tz, e.primary_group_id
        FROM employees e LEFT JOIN teams t ON t.id = e.team_id LEFT JOIN wfm_groups g ON g.id = e.primary_group_id
       WHERE e.tenant_id = :t AND e.status <> 'ONBOARDING' AND ($1::uuid IS NULL OR e.primary_group_id = $1 OR e.eligible_group_ids @> ARRAY[$1::uuid]) ORDER BY e.last_name, e.first_name`, [groupId]);
   const ids = emps.map((e) => e.id), warnings: { kind: string; employeeNumber?: string; name?: string; day?: string; text: string }[] = [];
@@ -97,6 +98,7 @@ export async function computeRun(tx: Tx, groupId: string | null, from: string, t
 
   const lines: Line[] = [], daily: any[] = [];
   for (const e of emps) {
+    const weekend = groupWeekend.get(e.primaryGroupId) ?? new Set(companyWeekend);      // this person's group's weekend, else the company's
     const byDay = new Map<string, { hours: number; night: number }>();
     const add = (day: string, minutes: number, night: number) => { if (day < from || day > to) return; const c = byDay.get(day) ?? { hours: 0, night: 0 }; c.hours += minutes / 60; c.night += night / 60; byDay.set(day, c); };
     const punched = new Set<string>();

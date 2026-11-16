@@ -319,6 +319,8 @@ export type GroupDto = {
   shrinkageEffectivePercent?: number; shrinkageSource?: 'CATEGORIES' | 'FLAT'; shrinkageCategories?: { name: string; pct: number }[]; historyStaleDays?: number;
   /** Weekday a pay week begins on (Monday 0 ... Sunday 6) for this group; null = the company setting. */
   payWeekStart?: number | null;
+  /** Weekdays that count as the weekend for this group (Monday 0 ... Sunday 6); null = the company setting. */
+  weekendDays?: number[] | null;
   /** The site this group's people work at. */
   siteId?: string | null;
   /** Who manages the group (a person marked as a manager). */

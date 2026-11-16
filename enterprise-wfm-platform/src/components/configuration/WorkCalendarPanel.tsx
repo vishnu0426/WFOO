@@ -1,6 +1,6 @@
 /**
  * Configuration › Work Calendar. When the working week starts and which days are the weekend (used by payroll, leave, weekend fairness and rotation analysis),
- * and the holidays the organisation does not work or pays at the holiday rate. The week and weekend are defaults for this workspace; a WFM group can use its own pay week.
+ * and the holidays the organisation does not work or pays at the holiday rate. The week and weekend are defaults for this workspace; a WFM group can use its own pay week and weekend.
  * Holidays are the "holiday" special events forecasting learns from; a country's public holidays are a starting point to add, not something applied behind anyone's back.
  */
 import { Waiting } from '../common/loading';

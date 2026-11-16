@@ -23,7 +23,10 @@ export const cleanWeekend = (v: unknown): number[] => {
   const days = Array.isArray(v) ? [...new Set(v.filter((x): x is number => Number.isInteger(x) && x >= 0 && x <= 6))].sort((a, b) => a - b) : [];
   return days.length >= 1 && days.length <= 3 ? days : DEFAULT_WEEKEND;
 };
-export async function weekendDaysFor(tx: Tx): Promise<number[]> {
+/** A WFM group can name its own weekend; otherwise the company's applies; otherwise Saturday and Sunday. */
+export async function weekendDaysFor(tx: Tx, groupId?: string | null): Promise<number[]> {
+  const g = groupId ? await tx.one<any>('SELECT weekend_days FROM wfm_groups WHERE tenant_id = :t AND id = $1', [groupId]) : null;
+  if (Array.isArray(g?.weekendDays) && g.weekendDays.length) return cleanWeekend(g.weekendDays.map(Number));
   const pol = await tx.one<any>('SELECT defaults FROM scheduling_policy WHERE tenant_id = :t');
   return cleanWeekend(pol?.defaults?.weekendDays);
 }

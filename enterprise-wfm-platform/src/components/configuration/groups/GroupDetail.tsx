@@ -115,6 +115,7 @@ export const GroupDetail: React.FC<{
             </div></Card>
             <Card title="Working week"><div>
               <Row k="Pay week starts on" v={group.payWeekStart == null ? 'Company setting' : DAYS_LONG[group.payWeekStart]} />
+              <Row k="Weekend days" v={group.weekendDays?.length ? group.weekendDays.map((d) => DAYS_LONG[d].slice(0, 3)).join(', ') : 'Company setting'} />
               <Row k="Full-time hours" v={`${group.fteHoursWeek} h a week`} />
               <Row k="Time zone" v={group.timezone} />
               <Row k="Group manager" v={group.managerName ?? <span className="text-[#A3A3A3]">None</span>} />

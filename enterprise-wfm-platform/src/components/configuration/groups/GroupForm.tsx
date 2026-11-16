@@ -12,19 +12,19 @@ import { DAYS_LONG, GroupImpact, IMPACT_LABEL, Section, Site, useDebounced } fro
 
 export type GroupFormValues = {
   name: string; description: string; siteId: string | null; managerId: string | null; timezone: string; defaultRotationRef: string | null; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number;
-  shrinkagePercent: number; chatEfficiency: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; payWeekStart: number | null;
+  shrinkagePercent: number; chatEfficiency: number; method: 'erlang_c' | 'erlang_a'; patienceSec: number; blended: boolean; model: string; fteHoursWeek: number; payWeekStart: number | null; weekendDays: number[] | null;
 };
 export const DEFAULTS: GroupFormValues = {
-  name: '', description: '', siteId: null, managerId: null, timezone: 'UTC', defaultRotationRef: null, serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, chatEfficiency: 0.85, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40, payWeekStart: null,
+  name: '', description: '', siteId: null, managerId: null, timezone: 'UTC', defaultRotationRef: null, serviceLevelGoal: 80, serviceLevelThresholdSec: 20, targetOccupancy: 85, shrinkagePercent: 30, chatEfficiency: 0.85, method: 'erlang_c', patienceSec: 120, blended: false, model: 'auto', fteHoursWeek: 40, payWeekStart: null, weekendDays: null,
 };
 export const valuesOf = (g: GroupDto): GroupFormValues => ({
   name: g.name, description: g.description ?? '', siteId: g.siteId ?? null, managerId: g.managerId ?? null, timezone: g.timezone, defaultRotationRef: g.defaultRotationRef ?? null, serviceLevelGoal: g.serviceLevelGoal, serviceLevelThresholdSec: g.serviceLevelThresholdSec, targetOccupancy: g.targetOccupancy,
-  shrinkagePercent: g.shrinkagePercent, chatEfficiency: g.chatEfficiency ?? 0.85, method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: g.payWeekStart ?? null,
+  shrinkagePercent: g.shrinkagePercent, chatEfficiency: g.chatEfficiency ?? 0.85, method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: g.payWeekStart ?? null, weekendDays: g.weekendDays ?? null,
 });
 
 /** Plain-language names of the staffing and pay settings this edit moves. */
 export const movedBy = (before: GroupFormValues, now: GroupFormValues): string[] =>
-  Object.entries(IMPACT_LABEL).filter(([k]) => (before as any)[k] !== (now as any)[k]).map(([, label]) => label);
+  Object.entries(IMPACT_LABEL).filter(([k]) => JSON.stringify((before as any)[k]) !== JSON.stringify((now as any)[k])).map(([, label]) => label);
 
 /** What is wrong with the form, in words; empty when it can be saved. */
 export function problemsOf(f: GroupFormValues): string[] {
@@ -33,6 +33,7 @@ export function problemsOf(f: GroupFormValues): string[] {
   const range = (v: number, lo: number, hi: number, what: string) => { if (!Number.isFinite(v) || v < lo || v > hi) out.push(`${what} must be between ${lo} and ${hi}.`); };
   range(f.serviceLevelGoal, 1, 99, 'Service level goal'); range(f.serviceLevelThresholdSec, 1, 600, 'Answer within'); range(f.targetOccupancy, 31, 100, 'Occupancy cap');
   range(f.shrinkagePercent, 0, 90, 'Shrinkage'); range(f.chatEfficiency, 0.3, 1, 'Chat efficiency'); range(f.fteHoursWeek, 10, 60, 'Full-time hours');
+  if (f.weekendDays && (f.weekendDays.length < 1 || f.weekendDays.length > 3)) out.push('Choose one to three weekend days, or use the company setting.');
   if (f.method === 'erlang_a') range(f.patienceSec, 10, 3600, 'Customer patience');
   return out;
 }
@@ -104,7 +105,7 @@ export const GroupForm: React.FC<{
   const moved = id ? movedBy(initial, f) : [];
   const problems = problemsOf(f);
   const needsReason = moved.length > 0;
-  const touchesSchedules = id && (f.payWeekStart !== initial.payWeekStart || f.timezone !== initial.timezone);
+  const touchesSchedules = id && (f.payWeekStart !== initial.payWeekStart || JSON.stringify(f.weekendDays) !== JSON.stringify(initial.weekendDays) || f.timezone !== initial.timezone);
 
   React.useEffect(() => { if (id && touchesSchedules && !impact) api<GroupImpact>(`/config/groups/${id}/impact`).then(setImpact).catch(() => undefined); }, [id, touchesSchedules, impact]);
 
@@ -158,6 +159,19 @@ export const GroupForm: React.FC<{
             <Field label="Time zone" hint="The clock this group's days, schedules and adherence run on"><Select value={f.timezone} onChange={(e) => set('timezone', e.target.value)}>{(zones.includes(f.timezone) ? zones : [f.timezone, ...zones]).map((z) => <option key={z} value={z}>{z}</option>)}</Select></Field>
             <Field label="Pay week starts on" hint="Weekly hours and overtime are counted from this day">
               <Select value={f.payWeekStart ?? ''} onChange={(e) => set('payWeekStart', e.target.value === '' ? null : Number(e.target.value))}><option value="">Company setting</option>{DAYS_LONG.map((n, i) => <option key={n} value={i}>{n}</option>)}</Select>
+            </Field>
+            <Field label="Weekend days" hint="Used for weekend pay and fair sharing of weekend shifts. It does not close the group: a 24x7 group is still covered on these days">
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-1.5 text-[13px] text-[#171717]"><input type="checkbox" checked={f.weekendDays === null} onChange={(e) => set('weekendDays', e.target.checked ? null : [5, 6])} /> Use the company setting</label>
+                {f.weekendDays !== null && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1" role="group" aria-label="Weekend days">
+                    {DAYS_LONG.map((n, i) => { const on = f.weekendDays!.includes(i); return (
+                      <label key={n} className="flex items-center gap-1 text-[13px] text-[#171717]">
+                        <input type="checkbox" checked={on} disabled={(!on && f.weekendDays!.length >= 3) || (on && f.weekendDays!.length <= 1)} onChange={() => set('weekendDays', on ? f.weekendDays!.filter((x) => x !== i) : [...f.weekendDays!, i].sort((a, b) => a - b))} /> {n.slice(0, 3)}
+                      </label>); })}
+                  </div>
+                )}
+              </div>
             </Field>
             <Field label="Full-time hours per week" hint="What counts as 1 full-time person"><Input type="number" min={10} max={60} value={f.fteHoursWeek} onChange={num('fteHoursWeek')} /></Field>
           </div>

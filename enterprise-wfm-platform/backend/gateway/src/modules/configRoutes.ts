@@ -27,6 +27,7 @@ const GroupBody = z.object({
   blended: z.boolean().optional(), model: z.enum(['auto', 'snaive', 'wavg', 'ets', 'gbm', 'combo', 'croston', 'sarima', 'arima', 'lstm']).optional(),
   fteHoursWeek: z.number().min(10).max(60).optional(),
   payWeekStart: z.number().int().min(0).max(6).nullable().optional(),   // null = use the company default
+  weekendDays: z.array(z.number().int().min(0).max(6)).min(1, 'Choose at least one weekend day').max(3, 'A weekend is at most three days').refine((a) => new Set(a).size === a.length, 'Each weekend day once').nullable().optional(),   // null = use the company's weekend
   siteId: z.string().uuid().nullable().optional(),                      // the site this group's people work at
   managerId: z.string().uuid().nullable().optional(),                   // who manages the group: gets what is escalated above the team supervisors
   defaultRotationRef: z.string().trim().max(60).regex(/^[A-Za-z0-9_-]+$/, 'Choose a pattern from the list').nullable().optional(),   // the rotation pattern the group normally follows: a ready-made one's id or a library entry's id
@@ -51,7 +52,7 @@ export const groupDto = (g: any, queues: any[], cats: { name: string; pct: numbe
   id: g.id, tenantId: g.tenantId, name: g.name, code: g.code, description: g.description, timezone: g.timezone, status: g.status, siteId: g.siteId ?? null, managerId: g.managerId ?? null, managerName: g.managerName ?? null, defaultRotationRef: g.defaultRotationRef ?? null,
   queueIds: queues.map((q) => q.id), queueNames: queues.map((q) => q.name), channels: [...new Set(queues.map((q) => q.channel))], agentCount: 0,
   serviceLevelGoal: Math.round(g.serviceLevel * 100), serviceLevelThresholdSec: g.answerSec, targetOccupancy: Math.round(g.occupancyCap * 100),
-  shrinkagePercent: Math.round(g.shrinkage * 100), chatEfficiency: Number(g.chatEfficiency ?? 0.85), method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: (g.payWeekStart ?? null) as number | null,
+  shrinkagePercent: Math.round(g.shrinkage * 100), chatEfficiency: Number(g.chatEfficiency ?? 0.85), method: g.method, patienceSec: g.patienceSec, blended: g.blended, model: g.model, fteHoursWeek: g.fteHoursWeek, payWeekStart: (g.payWeekStart ?? null) as number | null, weekendDays: Array.isArray(g.weekendDays) ? (g.weekendDays as unknown[]).map(Number).sort((a, c) => a - c) : null,
   shrinkageSource: cats.length ? 'CATEGORIES' : 'FLAT', shrinkageEffectivePercent: cats.length ? Math.round(Math.min(90, cats.reduce((t, c) => t + c.pct, 0)) * 10) / 10 : Math.round(g.shrinkage * 1000) / 10, shrinkageCategories: cats.map((c) => ({ name: c.name, pct: c.pct })),
   historyStaleDays: Number(g.historyStaleDays ?? 3), agentCostPerHour: g.agentCostPerHour == null ? null : Number(g.agentCostPerHour), createdAt: g.createdAt, updatedAt: g.updatedAt,
 });
@@ -100,11 +101,11 @@ config.post('/groups', requires('config:write'), async (req, res) => {
     await ensureRotationRef(tx, b.defaultRotationRef);
     const tz = (await tx.one<{ timezone: string }>('SELECT timezone FROM tenants WHERE id = :t'))?.timezone ?? 'UTC';
     const g = await tx.one<any>(
-      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, default_rotation_ref, chat_efficiency)
-       VALUES (:t, $1, $2, $3, $4, coalesce($5, 80)/100.0, coalesce($6, 20), coalesce($7, 30)/100.0, coalesce($8, 85)/100.0, coalesce($9, 'erlang_c'), coalesce($10, 120), coalesce($11, false), coalesce($12, 'auto'), coalesce($13, 40), $14, $15::uuid, $16::uuid, $17, coalesce($18, 0.85))
+      `INSERT INTO wfm_groups (tenant_id, name, code, description, timezone, service_level, answer_sec, shrinkage, occupancy_cap, method, patience_sec, blended, model, fte_hours_week, pay_week_start, site_id, manager_id, default_rotation_ref, chat_efficiency, weekend_days)
+       VALUES (:t, $1, $2, $3, $4, coalesce($5, 80)/100.0, coalesce($6, 20), coalesce($7, 30)/100.0, coalesce($8, 85)/100.0, coalesce($9, 'erlang_c'), coalesce($10, 120), coalesce($11, false), coalesce($12, 'auto'), coalesce($13, 40), $14, $15::uuid, $16::uuid, $17, coalesce($18, 0.85), $19::smallint[])
        RETURNING id`,
       [b.name.trim(), b.code ?? code(b.name), b.description ?? '', b.timezone ?? tz, b.serviceLevelGoal ?? null, b.serviceLevelThresholdSec ?? null, b.shrinkagePercent ?? null,
-        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null, b.payWeekStart ?? null, b.siteId ?? null, b.managerId ?? null, b.defaultRotationRef ?? null, b.chatEfficiency ?? null]);
+        b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null, b.payWeekStart ?? null, b.siteId ?? null, b.managerId ?? null, b.defaultRotationRef ?? null, b.chatEfficiency ?? null, b.weekendDays ? [...b.weekendDays].sort((a, c) => a - c) : null]);
     const [dto] = await loadGroups(tx, g!.id);
     await audit(tx, p, req, { action: 'CREATE', entityType: 'WFM_GROUP', entityId: g!.id, entityName: b.name, after: dto, reason: b.reason });
     return dto;
@@ -134,11 +135,11 @@ config.put('/groups/:id', requires('config:write'), async (req, res) => {
          service_level = coalesce($6::numeric / 100, service_level), answer_sec = coalesce($7, answer_sec), shrinkage = coalesce($8::numeric / 100, shrinkage),
          occupancy_cap = coalesce($9::numeric / 100, occupancy_cap), method = coalesce($10, method), patience_sec = coalesce($11, patience_sec),
          blended = coalesce($12, blended), model = coalesce($13, model), fte_hours_week = coalesce($14, fte_hours_week), pay_week_start = CASE WHEN $15::boolean THEN $16::smallint ELSE pay_week_start END,
-         site_id = CASE WHEN $17::boolean THEN $18::uuid ELSE site_id END, manager_id = CASE WHEN $19::boolean THEN $20::uuid ELSE manager_id END, default_rotation_ref = CASE WHEN $21::boolean THEN $22 ELSE default_rotation_ref END, chat_efficiency = coalesce($23, chat_efficiency), history_stale_days = coalesce($24::int, history_stale_days), agent_cost_per_hour = CASE WHEN $25::boolean THEN $26::numeric ELSE agent_cost_per_hour END, updated_at = now()
+         site_id = CASE WHEN $17::boolean THEN $18::uuid ELSE site_id END, manager_id = CASE WHEN $19::boolean THEN $20::uuid ELSE manager_id END, default_rotation_ref = CASE WHEN $21::boolean THEN $22 ELSE default_rotation_ref END, chat_efficiency = coalesce($23, chat_efficiency), history_stale_days = coalesce($24::int, history_stale_days), agent_cost_per_hour = CASE WHEN $25::boolean THEN $26::numeric ELSE agent_cost_per_hour END, weekend_days = CASE WHEN $27::boolean THEN $28::smallint[] ELSE weekend_days END, updated_at = now()
        WHERE tenant_id = :t AND id = $1`,
       [id, b.name?.trim() ?? null, b.description ?? null, b.timezone ?? null, b.status ?? null, b.serviceLevelGoal ?? null, b.serviceLevelThresholdSec ?? null, b.shrinkagePercent ?? null,
         b.targetOccupancy ?? null, b.method ?? null, b.patienceSec ?? null, b.blended ?? null, b.model ?? null, b.fteHoursWeek ?? null, 'payWeekStart' in b, b.payWeekStart ?? null,
-        b.siteId !== undefined, b.siteId ?? null, b.managerId !== undefined, b.managerId ?? null, b.defaultRotationRef !== undefined, b.defaultRotationRef ?? null, b.chatEfficiency ?? null, b.historyStaleDays ?? null, b.agentCostPerHour !== undefined, b.agentCostPerHour ?? null]);
+        b.siteId !== undefined, b.siteId ?? null, b.managerId !== undefined, b.managerId ?? null, b.defaultRotationRef !== undefined, b.defaultRotationRef ?? null, b.chatEfficiency ?? null, b.historyStaleDays ?? null, b.agentCostPerHour !== undefined, b.agentCostPerHour ?? null, 'weekendDays' in b, b.weekendDays ? [...b.weekendDays].sort((a, c) => a - c) : null]);
     const [after] = await loadGroups(tx, id);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'WFM_GROUP', entityId: id, entityName: after.name, before, after, reason: b.reason || undefined, diffSummary: moved.length ? `Changed ${moved.join(', ')}` : undefined });
     return after;

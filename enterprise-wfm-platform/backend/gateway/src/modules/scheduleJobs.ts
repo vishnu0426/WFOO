@@ -29,7 +29,7 @@ import { matchWeeks } from './weekMatch.ts';
 import { addShiftCoverage } from './shiftCoverage.ts';
 import { holidayDays } from './holidayDays.ts';
 import { requireValid } from './scheduleValidation.ts';
-import { loadPolicy } from './policyRoutes.ts';
+import { weekendDaysFor } from './payWeek.ts';
 export { matchWeeks } from './weekMatch.ts';
 
 const uuid = z.string().uuid();
@@ -95,7 +95,7 @@ interface Win { from: string; to: string; kind: 'SOLVED' | 'PATTERN'; coverage: 
 async function weekendCounts(tx: Tx, versionId: string, before: string) {
   const v = await tx.one<{ groupId: string; first: string | null }>(`SELECT v.wfm_group_id AS group_id, (SELECT min(day)::text FROM schedule_shifts WHERE version_id = v.id) AS first FROM schedule_versions v WHERE v.tenant_id = :t AND v.id = $1`, [versionId]);
   if (!v?.first) return new Map<string, number>();
-  const weekend = new Set((await loadPolicy(tx)).scheduling.weekendDays ?? [5, 6]);
+  const weekend = new Set(await weekendDaysFor(tx, v.groupId));
   const holidays = await holidayDays(tx, v.groupId, v.first, before);
   const tpl = new Map((await tx.q<any>('SELECT * FROM shift_templates WHERE tenant_id = :t')).map((t: any) => [t.id, t]));
   const rows = await tx.q<{ employeeId: string; day: string; templateId: string | null; lengthSlots: number }>(`SELECT employee_id, day::text AS day, template_id, length_slots FROM schedule_shifts WHERE tenant_id = :t AND version_id = $1 AND day < $2::date`, [versionId, before]);
