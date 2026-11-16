@@ -1,0 +1,29 @@
+{
+ "vs held-back actuals": {
+  "days": 26,
+  "WAPE%": 13.56,
+  "accuracy%": 86.44,
+  "MAPE%": 11.5,
+  "MAE": 315.0,
+  "RMSE": 529.7,
+  "bias%": -13.56
+ },
+ "vs noise-free truth": {
+  "days": 26,
+  "WAPE%": 8.53,
+  "accuracy%": 91.47,
+  "MAPE%": 8.58,
+  "MAE": 187.3,
+  "RMSE": 199.8,
+  "bias%": -8.53
+ },
+ "15-min intervals vs held-back actuals": {
+  "intervals": 1557,
+  "WAPE%": 18.23,
+  "MAPE% (non-zero actuals)": 22.91,
+  "zero-actual intervals skipped": 160,
+  "MAE": 7.07,
+  "RMSE": 12.42,
+  "bias%": -13.56
+ }
+}

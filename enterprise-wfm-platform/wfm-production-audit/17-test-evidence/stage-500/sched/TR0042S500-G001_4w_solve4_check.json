@@ -1,0 +1,103 @@
+{
+ "name": "TR0042S500-G001 4w solve4",
+ "weeks": 4,
+ "shifts": 1864,
+ "people": 100,
+ "peopleWithShifts": 100,
+ "peopleWithoutShifts": 0,
+ "activeWithoutShifts": 0,
+ "hardRuleViolations": {},
+ "totalHardViolations": 0,
+ "examples": {},
+ "contractWeeks": {
+  "under": 56,
+  "exact": 0,
+  "over": 344
+ },
+ "avgPaidMinusContractH": 2.42,
+ "coverage4w": {
+  "requiredAgentSlots": 46790,
+  "metAgentSlots": 45690,
+  "coverage%": 97.65,
+  "shortAgentSlots": 1100,
+  "overAgentSlots": 13640,
+  "intervalsUnderstaffed": 446,
+  "intervalsWithDemand": 1668
+ },
+ "coverageAppDefinition4w": {
+  "required": 67611,
+  "met": 60575,
+  "under": 7036,
+  "over": 2449,
+  "underIntervals": 1068,
+  "coverage%": 89.59
+ },
+ "lastDay": "2026-12-13",
+ "appStats": {
+  "solver": {
+   "gap": 1,
+   "bound": 0,
+   "parts": null,
+   "score": null,
+   "advice": null,
+   "people": 100,
+   "status": "FEASIBLE",
+   "backend": "cpsat",
+   "verdict": {
+    "note": "checked in 0.14s",
+    "valid": true,
+    "status": "VALIDATED_WITH_WARNINGS",
+    "checked": true,
+    "findings": [],
+    "softWarnings": 429,
+    "coverageStatus": "UNDERSTAFFED",
+    "hardViolations": 0
+   },
+   "wallSec": 59.75,
+   "attempts": [
+    "within each window the answer was 84.4% from that window's best bound on average (summed); no figure exists for the whole plan",
+    "solved 4 windows one after another: each is the best found for its week, nothing is proven for the plan as a whole"
+   ],
+   "windowed": true,
+   "objective": 6732270,
+   "phasesSec": {
+    "solve": 60.6,
+    "load forecast": 0.1,
+    "optimise breaks": 0.1,
+    "candidate shifts": 1.7,
+    "write the report": 0,
+    "load people and rules": 0,
+    "place meals and breaks": 0.1,
+    "check rules and coverage": 0.1
+   },
+   "variables": 92212,
+   "candidates": 86800,
+   "scoreTerms": [],
+   "constraints": 8674,
+   "partitioned": false,
+   "partsOptimal": 0,
+   "deterministic": false,
+   "capabilityNotes": []
+  },
+  "coverage": {
+   "percent": 89.6,
+   "requiredSlots": 67611,
+   "underSlots": 7036,
+   "overSlots": 2449,
+   "underIntervals": 1068,
+   "criticalIntervals": 589
+  },
+  "hours": {
+   "paid": 15756,
+   "overtime": 1080,
+   "required": 16902.8,
+   "premium": 915
+  },
+  "shifts": 1864,
+  "people": 100,
+  "violations": 0,
+  "warnings": 1830,
+  "uncoveredDays": [],
+  "projectedDays": []
+ }
+}

@@ -1,0 +1,187 @@
+{
+ "name": "TR0042S500-G003 13w solve13",
+ "weeks": 13,
+ "shifts": 6071,
+ "people": 100,
+ "peopleWithShifts": 100,
+ "peopleWithoutShifts": 0,
+ "activeWithoutShifts": 0,
+ "hardRuleViolations": {},
+ "totalHardViolations": 0,
+ "examples": {},
+ "contractWeeks": {
+  "under": 215,
+  "exact": 201,
+  "over": 884
+ },
+ "avgPaidMinusContractH": 0.22,
+ "coverage4w": {
+  "requiredAgentSlots": 28329,
+  "metAgentSlots": 22918,
+  "coverage%": 80.9,
+  "shortAgentSlots": 5411,
+  "overAgentSlots": 33321,
+  "intervalsUnderstaffed": 448,
+  "intervalsWithDemand": 1680
+ },
+ "coverageAppDefinition4w": {
+  "required": 41299,
+  "met": 33352,
+  "under": 7947,
+  "over": 26242,
+  "underIntervals": 450,
+  "coverage%": 80.76
+ },
+ "lastDay": "2027-02-14",
+ "appStats": {
+  "solver": {
+   "gap": 0.0757,
+   "bound": 1874002,
+   "parts": null,
+   "score": 2027452,
+   "advice": "CP-SAT made this roster and is the right solver for it; it was not proven the very best within the time given. More time may improve it a little.",
+   "people": 100,
+   "status": "FEASIBLE",
+   "backend": "cpsat",
+   "verdict": {
+    "note": "checked in 0.04s",
+    "valid": true,
+    "status": "VALIDATED_WITH_WARNINGS",
+    "checked": true,
+    "findings": [],
+    "softWarnings": 100,
+    "coverageStatus": "UNDERSTAFFED",
+    "hardViolations": 0
+   },
+   "wallSec": 32.47,
+   "attempts": [
+    "cpsat: feasible"
+   ],
+   "windowed": false,
+   "objective": 2027452,
+   "phasesSec": {
+    "solve": 34.2,
+    "load forecast": 0.2,
+    "optimise breaks": 0,
+    "candidate shifts": 0.2,
+    "write the report": 0,
+    "load people and rules": 0,
+    "place meals and breaks": 0,
+    "check rules and coverage": 0
+   },
+   "variables": 34262,
+   "candidates": 32900,
+   "scoreTerms": [
+    {
+     "name": "under",
+     "value": 1817100
+    },
+    {
+     "name": "over",
+     "value": 193560
+    },
+    {
+     "name": "heavy",
+     "value": 8950
+    },
+    {
+     "name": "contract_hours",
+     "value": 7200
+    },
+    {
+     "name": "fairness",
+     "value": 642
+    }
+   ],
+   "constraints": 2205,
+   "partitioned": false,
+   "partsOptimal": 0,
+   "deterministic": false,
+   "capabilityNotes": []
+  },
+  "coverage": {
+   "percent": 80.7,
+   "requiredSlots": 133577,
+   "underSlots": 25806,
+   "overSlots": 85987,
+   "underIntervals": 1469,
+   "criticalIntervals": 1456
+  },
+  "hours": {
+   "paid": 48439.5,
+   "overtime": 687.5,
+   "required": 33394.3,
+   "premium": 2415
+  },
+  "shifts": 6071,
+  "people": 100,
+  "violations": 0,
+  "warnings": 4830,
+  "uncoveredDays": [],
+  "projectedDays": [
+   "2026-12-14",
+   "2026-12-15",
+   "2026-12-16",
+   "2026-12-17",
+   "2026-12-18",
+   "2026-12-19",
+   "2026-12-20",
+   "2026-12-21",
+   "2026-12-22",
+   "2026-12-23",
+   "2026-12-24",
+   "2026-12-25",
+   "2026-12-26",
+   "2026-12-27",
+   "2026-12-28",
+   "2026-12-29",
+   "2026-12-30",
+   "2026-12-31",
+   "2027-01-01",
+   "2027-01-02",
+   "2027-01-03",
+   "2027-01-04",
+   "2027-01-05",
+   "2027-01-06",
+   "2027-01-07",
+   "2027-01-08",
+   "2027-01-09",
+   "2027-01-10",
+   "2027-01-11",
+   "2027-01-12",
+   "2027-01-13",
+   "2027-01-14",
+   "2027-01-15",
+   "2027-01-16",
+   "2027-01-17",
+   "2027-01-18",
+   "2027-01-19",
+   "2027-01-20",
+   "2027-01-21",
+   "2027-01-22",
+   "2027-01-23",
+   "2027-01-24",
+   "2027-01-25",
+   "2027-01-26",
+   "2027-01-27",
+   "2027-01-28",
+   "2027-01-29",
+   "2027-01-30",
+   "2027-01-31",
+   "2027-02-01",
+   "2027-02-02",
+   "2027-02-03",
+   "2027-02-04",
+   "2027-02-05",
+   "2027-02-06",
+   "2027-02-07",
+   "2027-02-08",
+   "2027-02-09",
+   "2027-02-10",
+   "2027-02-11",
+   "2027-02-12",
+   "2027-02-13",
+   "2027-02-14"
+  ]
+ }
+}

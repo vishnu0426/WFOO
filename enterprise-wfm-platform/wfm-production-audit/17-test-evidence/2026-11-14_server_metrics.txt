@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>AgnoWFM</title>
+    <meta name="description" content="AgnoWFM is a workforce management platform: demand forecasting, capacity planning, schedule optimisation, real-time adherence and data management." />
+    <meta property="og:title" content="AgnoWFM" />
+    <meta property="og:description" content="AgnoWFM is a workforce management platform: demand forecasting, capacity planning, schedule optimisation, real-time adherence and data management." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="module" crossorigin src="/assets/index-W4vlkH30.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BjYldFKH.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+

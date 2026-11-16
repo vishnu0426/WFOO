@@ -1,0 +1,532 @@
+case,formula,source,inputs,expected,actual,diff,tolerance,result
+G-EC-01,"ErlangC(N=2,A=1) = 1/3",independent,"[2, 1.0]",0.3333333333333333,0.3333333333333334,1.1102230246251565e-16,1e-12,PASS
+G-EC-02,"ErlangC(N=3,A=2) = 4/9",independent,"[3, 2.0]",0.4444444444444444,0.44444444444444425,1.6653345369377348e-16,1e-12,PASS
+G-EC-03,"ErlangC(N=1,A=0.5) = 0.5 (M/M/1: rho)",independent,"[1, 0.5]",0.5,0.5,0.0,1e-12,PASS
+G-EC-04,ErlangC(N<=A) = 1 (unstable),independent,"[5, 5.0]",1.0,1.0,0.0,0,PASS
+G-SL-01,"SL(N=2,A=1,AHT=180,T=20) = 1 - exp(-1/9)/3",independent,"[2, 1.0, 180, 20]",0.7017202277285435,0.7017202277285433,2.220446049250313e-16,1e-12,PASS
+G-SL-02,SL unstable = 0,independent,"[4, 4.0, 180, 20]",0.0,0.0,0.0,0,PASS
+G-ASA-01,"ASA(N=2,A=1,AHT=180) = 60 s",independent,"[2, 1.0, 180]",60.0,60.000000000000014,1.4210854715202004e-14,1e-09,PASS
+G-ASA-02,"ASA(N=3,A=2,AHT=300) = 4/9*300 = 133.33 s",independent,"[3, 2.0, 300]",133.33333333333334,133.3333333333333,5.684341886080802e-14,1e-09,PASS
+G-TR-01,A = 100 calls * 180 s / 1800 s = 10 E,independent,"[100, 180, 1800]",10.0,10.0,0.0,1e-12,PASS
+G-TR-02,zero contacts -> A = 0,independent,"[0, 180, 1800]",0.0,0.0,0.0,0,PASS
+G-WL-01,Workload = 400 * 270 / 3600 = 30 h,independent,"[400, 270]",30.0,30.0,0.0,1e-12,PASS
+G-GS-01,Gross = 80 / 0.75 = 106.667,independent,"[80, 0.25]",106.66666666666667,106.66666666666667,0.0,1e-09,PASS
+G-GS-02,Gross with 0% shrinkage = net,independent,"[80, 0.0]",80.0,80.0,0.0,0,PASS
+G-OC-01,Occupancy = 10 / 12,independent,"[10.0, 12]",0.8333333333333334,0.8333333333333334,0.0,1e-12,PASS
+G-FTE-01,FTE = 1500 / 37.5 = 40,independent,"[1500, 37.5]",40.0,40.0,0.0,1e-12,PASS
+G-AHT-01,AHT = (3000+600+900)/20 = 225 s,independent,"[3000, 600, 900, 20]",225.0,225.0,0.0,1e-12,PASS
+G-SH-01,Shrinkage = 120/480 = 25%,independent,"[120, 480]",0.25,0.25,0.0,1e-12,PASS
+G-ADH-01,Adherence = 432/480 = 90%,independent,"[432, 480]",90.0,90.0,0.0,1e-12,PASS
+G-WAPE-01,WAPE = 50/350,independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",14.285714285714286,14.285714285714286,0.0,1e-12,PASS
+G-ACC-01,Accuracy = 100 - WAPE,independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",85.71428571428571,85.71428571428571,0.0,1e-12,PASS
+G-MAPE-01,MAPE skips zero actuals,independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",11.666666666666666,11.666666666666666,0.0,1e-12,PASS
+G-MAE-01,MAE = 50/5,independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",10.0,10.0,0.0,1e-12,PASS
+G-RMSE-01,RMSE = sqrt(700/5),independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",11.832159566199232,11.832159566199232,0.0,1e-12,PASS
+G-BIAS-01,Bias = -10/350 (under-forecast),independent,"{""a"": [100, 120, 80, 0, 50], ""f"": [110, 100, 80, 10, 40]}",-2.857142857142857,-2.857142857142857,0.0,1e-12,PASS
+G-ROLL-01,daily = sum(intervals),independent,{},360,360.0,0.0,0,PASS
+G-ROLL-02,weekly = sum(daily),independent,{},2520,2520.0,0.0,0,PASS
+X-ENG-C-1-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 1, ""a"": 0.5}",0.5,0.5,0.0,1e-09,PASS
+X-ENG-C-2-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 2, ""a"": 0.5}",0.10000000000000003,0.10000000000000002,1.3877787807814457e-17,1e-09,PASS
+X-ENG-C-3-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 3, ""a"": 0.5}",0.015151515151515147,0.015151515151515154,6.938893903907228e-18,1e-09,PASS
+X-ENG-C-4-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 4, ""a"": 0.5}",0.0018050541516245503,0.001805054151624549,1.3010426069826053e-18,1e-09,PASS
+X-ENG-C-5-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 5, ""a"": 0.5}",0.00017550017550017538,0.00017550017550017552,1.3552527156068805e-19,1e-09,PASS
+X-ENG-C-6-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 6, ""a"": 0.5}",1.435915108698772e-05,1.435915108698774e-05,2.0328790734103208e-20,1e-09,PASS
+X-ENG-C-7-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 7, ""a"": 0.5}",1.0125044297068815e-06,1.0125044297068802e-06,1.2705494208814505e-21,1e-09,PASS
+X-ENG-C-8-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 8, ""a"": 0.5}",6.267884625292696e-08,6.267884625292696e-08,0.0,1e-09,PASS
+X-ENG-C-9-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 9, ""a"": 0.5}",3.4565540228941703e-09,3.4565540228941546e-09,1.5716431638507526e-23,1e-09,PASS
+X-ENG-C-10-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 10, ""a"": 0.5}",1.7181701283739328e-10,1.7181701283739302e-10,2.5849394142282115e-25,1e-09,PASS
+X-ENG-C-11-0.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 11, ""a"": 0.5}",7.77267439026938e-12,7.772674390269377e-12,3.2311742677852644e-27,1e-09,PASS
+X-ENG-C-2-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 2, ""a"": 1.0}",0.3333333333333334,0.33333333333333337,5.551115123125783e-17,1e-09,PASS
+X-ENG-C-3-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 3, ""a"": 1.0}",0.09090909090909087,0.09090909090909091,4.163336342344337e-17,1e-09,PASS
+X-ENG-C-4-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 4, ""a"": 1.0}",0.02040816326530613,0.020408163265306124,6.938893903907228e-18,1e-09,PASS
+X-ENG-C-5-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 5, ""a"": 1.0}",0.00383141762452107,0.0038314176245210726,2.6020852139652106e-18,1e-09,PASS
+X-ENG-C-6-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 6, ""a"": 1.0}",0.0006131207847946041,0.0006131207847946046,5.421010862427522e-19,1e-09,PASS
+X-ENG-C-7-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 7, ""a"": 1.0}",8.515711487694797e-05,8.515711487694797e-05,0.0,1e-09,PASS
+X-ENG-C-8-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 8, ""a"": 1.0}",1.0427419943483396e-05,1.0427419943483386e-05,1.0164395367051604e-20,1e-09,PASS
+X-ENG-C-9-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 9, ""a"": 1.0}",1.1404992421382565e-06,1.1404992421382537e-06,2.752857078576476e-21,1e-09,PASS
+X-ENG-C-10-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 10, ""a"": 1.0}",1.1264190204412405e-07,1.1264190204412388e-07,1.7205356741102976e-22,1e-09,PASS
+X-ENG-C-11-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 11, ""a"": 1.0}",1.0137771195390527e-08,1.0137771195390527e-08,0.0,1e-09,PASS
+X-ENG-C-12-1.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 12, ""a"": 1.0}",8.378323302677612e-10,8.378323302677606e-10,6.203854594147708e-25,1e-09,PASS
+X-ENG-C-3-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 3, ""a"": 2.5}",0.7022471910112359,0.702247191011236,1.1102230246251565e-16,1e-09,PASS
+X-ENG-C-4-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 4, ""a"": 2.5}",0.3198567041965202,0.3198567041965199,2.7755575615628914e-16,1e-09,PASS
+X-ENG-C-5-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 5, ""a"": 2.5}",0.1303712974551522,0.1303712974551523,1.1102230246251565e-16,1e-09,PASS
+X-ENG-C-6-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 6, ""a"": 2.5}",0.04744481219445536,0.04744481219445541,5.551115123125783e-17,1e-09,PASS
+X-ENG-C-7-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 7, ""a"": 2.5}",0.01544347736702795,0.015443477367027954,3.469446951953614e-18,1e-09,PASS
+X-ENG-C-8-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 8, ""a"": 2.5}",0.004517234412924903,0.004517234412924893,9.540979117872439e-18,1e-09,PASS
+X-ENG-C-9-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 9, ""a"": 2.5}",0.0011947204857489925,0.0011947204857489888,3.686287386450715e-18,1e-09,PASS
+X-ENG-C-10-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 10, ""a"": 2.5}",0.0002876306220579605,0.0002876306220579603,2.168404344971009e-19,1e-09,PASS
+X-ENG-C-11-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 11, ""a"": 2.5}",6.344846809285427e-05,6.344846809285437e-05,1.0842021724855044e-19,1e-09,PASS
+X-ENG-C-12-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 12, ""a"": 2.5}",1.2902220033860274e-05,1.2902220033860245e-05,2.879912020664621e-20,1e-09,PASS
+X-ENG-C-13-2.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 13, ""a"": 2.5}",2.4319667003857592e-06,2.4319667003857503e-06,8.893845946170154e-21,1e-09,PASS
+X-ENG-C-8-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 8, ""a"": 7.3}",0.7359272312164111,0.735927231216411,1.1102230246251565e-16,1e-09,PASS
+X-ENG-C-9-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 9, ""a"": 7.3}",0.45706259168702246,0.4570625916870217,7.771561172376096e-16,1e-09,PASS
+X-ENG-C-10-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 10, ""a"": 7.3}",0.2705732422391121,0.27057324223911156,5.551115123125783e-16,1e-09,PASS
+X-ENG-C-11-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 11, ""a"": 7.3}",0.15226343248448396,0.15226343248448387,8.326672684688674e-17,1e-09,PASS
+X-ENG-C-12-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 12, ""a"": 7.3}",0.0812958910791264,0.0812958910791264,0.0,1e-09,PASS
+X-ENG-C-13-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 13, ""a"": 7.3}",0.04113558991692353,0.04113558991692351,2.0816681711721685e-17,1e-09,PASS
+X-ENG-C-14-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 14, ""a"": 7.3}",0.01971955773383746,0.019719557733837514,5.204170427930421e-17,1e-09,PASS
+X-ENG-C-15-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 15, ""a"": 7.3}",0.008958935364907947,0.008958935364907937,1.0408340855860843e-17,1e-09,PASS
+X-ENG-C-16-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 16, ""a"": 7.3}",0.0038607988811432737,0.0038607988811432694,4.336808689942018e-18,1e-09,PASS
+X-ENG-C-17-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 17, ""a"": 7.3}",0.0015801795905750877,0.0015801795905750948,7.15573433840433e-18,1e-09,PASS
+X-ENG-C-18-7.3,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 18, ""a"": 7.3}",0.0006151710445186716,0.0006151710445186699,1.734723475976807e-18,1e-09,PASS
+X-ENG-C-11-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 11, ""a"": 10.0}",0.682118204689332,0.6821182046893323,2.220446049250313e-16,1e-09,PASS
+X-ENG-C-12-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 12, ""a"": 10.0}",0.4493882242982712,0.4493882242982711,1.1102230246251565e-16,1e-09,PASS
+X-ENG-C-13-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 13, ""a"": 10.0}",0.28527045303649357,0.28527045303649307,4.996003610813204e-16,1e-09,PASS
+X-ENG-C-14-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 14, ""a"": 10.0}",0.17413193359504933,0.17413193359504991,5.828670879282072e-16,1e-09,PASS
+X-ENG-C-15-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 15, ""a"": 10.0}",0.10204236700798844,0.10204236700798801,4.3021142204224816e-16,1e-09,PASS
+X-ENG-C-16-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 16, ""a"": 10.0}",0.05734033090337133,0.057340330903371255,7.632783294297951e-17,1e-09,PASS
+X-ENG-C-17-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 17, ""a"": 10.0}",0.03087610998067204,0.030876109980672164,1.249000902703301e-16,1e-09,PASS
+X-ENG-C-18-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 18, ""a"": 10.0}",0.01592827743460143,0.015928277434601366,6.245004513516506e-17,1e-09,PASS
+X-ENG-C-19-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 19, ""a"": 10.0}",0.007873557511435203,0.007873557511435206,3.469446951953614e-18,1e-09,PASS
+X-ENG-C-20-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 20, ""a"": 10.0}",0.0037311260441267396,0.003731126044126722,1.734723475976807e-17,1e-09,PASS
+X-ENG-C-21-10.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 21, ""a"": 10.0}",0.0016962540626808188,0.0016962540626808155,3.2526065174565133e-18,1e-09,PASS
+X-ENG-C-25-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 25, ""a"": 24.0}",0.7785445449353167,0.7785445449353153,1.3322676295501878e-15,1e-09,PASS
+X-ENG-C-26-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 26, ""a"": 24.0}",0.5966824300285306,0.5966824300285335,2.886579864025407e-15,1e-09,PASS
+X-ENG-C-27-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 27, ""a"": 24.0}",0.44976329767789347,0.4497632976778954,1.942890293094024e-15,1e-09,PASS
+X-ENG-C-28-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 28, ""a"": 24.0}",0.3331385279927253,0.3331385279927227,2.609024107869118e-15,1e-09,PASS
+X-ENG-C-29-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 29, ""a"": 24.0}",0.2422739846736004,0.24227398467359743,2.9698465908722937e-15,1e-09,PASS
+X-ENG-C-30-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 30, ""a"": 24.0}",0.17286205549683586,0.17286205549683792,2.0539125955565396e-15,1e-09,PASS
+X-ENG-C-31-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 31, ""a"": 24.0}",0.12092289289176272,0.12092289289176247,2.498001805406602e-16,1e-09,PASS
+X-ENG-C-32-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 32, ""a"": 24.0}",0.08288545149833844,0.08288545149833766,7.771561172376096e-16,1e-09,PASS
+X-ENG-C-33-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 33, ""a"": 24.0}",0.055641288777414255,0.0556412887774139,3.5388358909926865e-16,1e-09,PASS
+X-ENG-C-34-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 34, ""a"": 24.0}",0.036567729059582964,0.03656772905958281,1.5265566588595902e-16,1e-09,PASS
+X-ENG-C-35-24.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 35, ""a"": 24.0}",0.0235211168614585,0.023521116861458604,1.0408340855860843e-16,1e-09,PASS
+X-ENG-C-56-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 56, ""a"": 55.5}",0.9211858657650277,0.9211858657650301,2.4424906541753444e-15,1e-09,PASS
+X-ENG-C-57-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 57, ""a"": 55.5}",0.777598234074141,0.7775982340741483,7.327471962526033e-15,1e-09,PASS
+X-ENG-C-58-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 58, ""a"": 55.5}",0.651629795709856,0.6516297957098547,1.3322676295501878e-15,1e-09,PASS
+X-ENG-C-59-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 59, ""a"": 55.5}",0.5419359247785112,0.5419359247785059,5.218048215738236e-15,1e-09,PASS
+X-ENG-C-60-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 60, ""a"": 55.5}",0.44715788962066505,0.4471578896206733,8.271161533457416e-15,1e-09,PASS
+X-ENG-C-61-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 61, ""a"": 55.5}",0.36593709062461366,0.36593709062461083,2.831068712794149e-15,1e-09,PASS
+X-ENG-C-62-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 62, ""a"": 55.5}",0.29693014429093395,0.2969301442909308,3.164135620181696e-15,1e-09,PASS
+X-ENG-C-63-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 63, ""a"": 55.5}",0.23882426540210322,0.2388242654021021,1.1102230246251565e-15,1e-09,PASS
+X-ENG-C-64-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 64, ""a"": 55.5}",0.1903523293914792,0.19035232939148408,4.884981308350689e-15,1e-09,PASS
+X-ENG-C-65-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 65, ""a"": 55.5}",0.15030696962145776,0.1503069696214561,1.6653345369377348e-15,1e-09,PASS
+X-ENG-C-66-55.5,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 66, ""a"": 55.5}",0.11755308705156604,0.11755308705156807,2.0261570199409107e-15,1e-09,PASS
+X-ENG-C-121-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 121, ""a"": 120.0}",0.8928217620315654,0.8928217620315683,2.886579864025407e-15,1e-09,PASS
+X-ENG-C-122-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 122, ""a"": 120.0}",0.794435031336886,0.7944350313368705,1.5432100042289676e-14,1e-09,PASS
+X-ENG-C-123-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 123, ""a"": 120.0}",0.7044222111746398,0.7044222111746423,2.55351295663786e-15,1e-09,PASS
+X-ENG-C-124-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 124, ""a"": 120.0}",0.6223584806328204,0.6223584806328283,7.882583474838611e-15,1e-09,PASS
+X-ENG-C-125-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 125, ""a"": 120.0}",0.5478136210440347,0.5478136210440487,1.3988810110276972e-14,1e-09,PASS
+X-ENG-C-126-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 126, ""a"": 120.0}",0.4803540121608202,0.4803540121608157,4.496403249731884e-15,1e-09,PASS
+X-ENG-C-127-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 127, ""a"": 120.0}",0.4195447739325751,0.4195447739325868,1.1712852909795402e-14,1e-09,PASS
+X-ENG-C-128-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 128, ""a"": 120.0}",0.36495202342837396,0.3649520234283789,4.9404924595819466e-15,1e-09,PASS
+X-ENG-C-129-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 129, ""a"": 120.0}",0.31614521059705153,0.3161452105970429,8.604228440844963e-15,1e-09,PASS
+X-ENG-C-130-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 130, ""a"": 120.0}",0.2726994914921591,0.272699491492176,1.687538997430238e-14,1e-09,PASS
+X-ENG-C-131-120.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 131, ""a"": 120.0}",0.23419809364765573,0.2341980936476566,8.604228440844963e-16,1e-09,PASS
+X-ENG-C-401-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 401, ""a"": 400.0}",0.9395447620024651,0.9395447620024661,9.992007221626409e-16,1e-09,PASS
+X-ENG-C-402-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 402, ""a"": 400.0}",0.8818247153848601,0.8818247153848444,1.5654144647214707e-14,1e-09,PASS
+X-ENG-C-403-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 403, ""a"": 400.0}",0.8267719223495134,0.8267719223494877,2.5646151868841116e-14,1e-09,PASS
+X-ENG-C-404-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 404, ""a"": 400.0}",0.7743175655689135,0.7743175655689531,3.963496197911809e-14,1e-09,PASS
+X-ENG-C-405-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 405, ""a"": 400.0}",0.724392026249187,0.7243920262492436,5.6621374255882984e-14,1e-09,PASS
+X-ENG-C-406-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 406, ""a"": 400.0}",0.6769249679690713,0.6769249679690599,1.1435297153639112e-14,1e-09,PASS
+X-ENG-C-407-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 407, ""a"": 400.0}",0.6318454261308091,0.6318454261308022,6.8833827526759706e-15,1e-09,PASS
+X-ENG-C-408-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 408, ""a"": 400.0}",0.589081902803266,0.5890819028032256,4.04121180963557e-14,1e-09,PASS
+X-ENG-C-409-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 409, ""a"": 400.0}",0.5485624666778921,0.5485624666778701,2.19824158875781e-14,1e-09,PASS
+X-ENG-C-410-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 410, ""a"": 400.0}",0.5102148578026964,0.5102148578027174,2.098321516541546e-14,1e-09,PASS
+X-ENG-C-411-400.0,engine erlang_c_wait_prob vs independent,engine/staffing.py,"{""n"": 411, ""a"": 400.0}",0.47396659669758845,0.4739665966975102,7.827072323607354e-14,1e-09,PASS
+X-ENG-SL-1-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 1, ""a"": 0.5}",0.5204052714454309,0.5204052714454309,0.0,1e-09,PASS
+X-ENG-ASA-1-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 1, ""a"": 0.5}",240.0,240.0,0.0,1e-06,PASS
+X-ENG-SL-2-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 2, ""a"": 0.5}",0.9117503097415405,0.9117503097415405,0.0,1e-09,PASS
+X-ENG-ASA-2-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 2, ""a"": 0.5}",16.000000000000004,16.000000000000004,0.0,1e-06,PASS
+X-ENG-SL-3-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 3, ""a"": 0.5}",0.9876979341492328,0.9876979341492328,0.0,1e-09,PASS
+X-ENG-ASA-3-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 3, ""a"": 0.5}",1.4545454545454541,1.4545454545454546,4.440892098500626e-16,1e-06,PASS
+X-ENG-SL-4-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 4, ""a"": 0.5}",0.9986515929597285,0.9986515929597285,0.0,1e-09,PASS
+X-ENG-ASA-4-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 4, ""a"": 0.5}",0.12377514182568346,0.12377514182568336,9.71445146547012e-17,1e-06,PASS
+X-ENG-SL-5-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 5, ""a"": 0.5}",0.9998793806109528,0.9998793806109528,0.0,1e-09,PASS
+X-ENG-ASA-5-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 5, ""a"": 0.5}",0.009360009360009353,0.009360009360009362,8.673617379884035e-18,1e-06,PASS
+X-ENG-SL-6-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 6, ""a"": 0.5}",0.9999909201823298,0.9999909201823298,0.0,1e-09,PASS
+X-ENG-ASA-6-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 6, ""a"": 0.5}",0.0006265811383412823,0.0006265811383412832,8.673617379884035e-19,1e-06,PASS
+X-ENG-SL-7-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 7, ""a"": 0.5}",0.999999410947386,0.999999410947386,0.0,1e-09,PASS
+X-ENG-ASA-7-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 7, ""a"": 0.5}",3.7384778943023317e-05,3.738477894302327e-05,4.743384504624082e-20,1e-06,PASS
+X-ENG-SL-8-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 8, ""a"": 0.5}",0.9999999664504312,0.9999999664504312,0.0,1e-09,PASS
+X-ENG-ASA-8-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 8, ""a"": 0.5}",2.0057230800936628e-06,2.0057230800936628e-06,0.0,1e-06,PASS
+X-ENG-SL-9-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 9, ""a"": 0.5}",0.9999999982977705,0.9999999982977705,0.0,1e-09,PASS
+X-ENG-ASA-9-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 9, ""a"": 0.5}",9.759681946995305e-08,9.75968194699526e-08,4.499862532288471e-22,1e-06,PASS
+X-ENG-SL-10-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 10, ""a"": 0.5}",0.9999999999221516,0.9999999999221516,0.0,1e-09,PASS
+X-ENG-ASA-10-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 10, ""a"": 0.5}",4.340640324313093e-09,4.3406403243130874e-09,5.790264287871194e-24,1e-06,PASS
+X-ENG-SL-11-0.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 11, ""a"": 0.5}",0.9999999999967598,0.9999999999967598,0.0,1e-09,PASS
+X-ENG-ASA-11-0.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 11, ""a"": 0.5}",1.7766112892044297e-10,1.7766112892044292e-10,5.169878828456423e-26,1e-06,PASS
+X-ENG-SL-2-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 2, ""a"": 1.0}",0.6933185284568921,0.6933185284568921,0.0,1e-09,PASS
+X-ENG-ASA-2-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 2, ""a"": 1.0}",80.00000000000003,80.00000000000001,1.4210854715202004e-14,1e-06,PASS
+X-ENG-SL-3-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 3, ""a"": 1.0}",0.9230471159190351,0.9230471159190351,0.0,1e-09,PASS
+X-ENG-ASA-3-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 3, ""a"": 1.0}",10.909090909090905,10.90909090909091,5.329070518200751e-15,1e-06,PASS
+X-ENG-SL-4-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 4, ""a"": 1.0}",0.9841061064679305,0.9841061064679305,0.0,1e-09,PASS
+X-ENG-ASA-4-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 4, ""a"": 1.0}",1.6326530612244905,1.6326530612244898,6.661338147750939e-16,1e-06,PASS
+X-ENG-SL-5-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 5, ""a"": 1.0}",0.9972546693081464,0.9972546693081464,0.0,1e-09,PASS
+X-ENG-ASA-5-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 5, ""a"": 1.0}",0.2298850574712642,0.22988505747126436,1.6653345369377348e-16,1e-06,PASS
+X-ENG-SL-6-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 6, ""a"": 1.0}",0.999595805867443,0.999595805867443,0.0,1e-09,PASS
+X-ENG-ASA-6-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 6, ""a"": 1.0}",0.029429797670140995,0.029429797670141023,2.7755575615628914e-17,1e-06,PASS
+X-ENG-SL-7-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 7, ""a"": 1.0}",0.9999483495989344,0.9999483495989344,0.0,1e-09,PASS
+X-ENG-ASA-7-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 7, ""a"": 1.0}",0.0034062845950779187,0.0034062845950779187,0.0,1e-06,PASS
+X-ENG-SL-8-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 8, ""a"": 1.0}",0.9999941811331918,0.9999941811331918,0.0,1e-09,PASS
+X-ENG-ASA-8-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 8, ""a"": 1.0}",0.00035751154091943075,0.00035751154091943037,3.7947076036992655e-19,1e-06,PASS
+X-ENG-SL-9-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 9, ""a"": 1.0}",0.9999994144481649,0.9999994144481649,0.0,1e-09,PASS
+X-ENG-ASA-9-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 9, ""a"": 1.0}",3.421497726414769e-05,3.421497726414761e-05,8.131516293641283e-20,1e-06,PASS
+X-ENG-SL-10-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 10, ""a"": 1.0}",0.999999946791733,0.999999946791733,0.0,1e-09,PASS
+X-ENG-ASA-10-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 10, ""a"": 1.0}",3.0037840545099747e-06,3.00378405450997e-06,4.658681209898652e-21,1e-06,PASS
+X-ENG-SL-11-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 11, ""a"": 1.0}",0.9999999955941428,0.9999999955941428,0.0,1e-09,PASS
+X-ENG-ASA-11-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 11, ""a"": 1.0}",2.4330650868937265e-07,2.4330650868937265e-07,0.0,1e-06,PASS
+X-ENG-SL-12-1.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 12, ""a"": 1.0}",0.999999999664993,0.999999999664993,0.0,1e-09,PASS
+X-ENG-ASA-12-1.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 12, ""a"": 1.0}",1.8279978114932973e-08,1.8279978114932956e-08,1.6543612251060553e-23,1e-06,PASS
+X-ENG-SL-3-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 3, ""a"": 2.5}",0.32641189809751536,0.32641189809751525,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-3-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 3, ""a"": 2.5}",337.07865168539325,337.0786516853933,5.684341886080802e-14,1e-06,PASS
+X-ENG-SL-4-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 4, ""a"": 2.5}",0.7177274492756538,0.717727449275654,2.220446049250313e-16,1e-09,PASS
+X-ENG-ASA-4-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 4, ""a"": 2.5}",51.17707267144323,51.17707267144319,3.552713678800501e-14,1e-06,PASS
+X-ENG-SL-5-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 5, ""a"": 2.5}",0.8941468051013461,0.894146805101346,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-5-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 5, ""a"": 2.5}",12.51564455569461,12.515644555694621,1.0658141036401503e-14,1e-06,PASS
+X-ENG-SL-6-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 6, ""a"": 2.5}",0.9645578949918,0.9645578949918,0.0,1e-09,PASS
+X-ENG-ASA-6-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 6, ""a"": 2.5}",3.2533585504769387,3.2533585504769427,3.9968028886505635e-15,1e-06,PASS
+X-ENG-SL-7-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 7, ""a"": 2.5}",0.9893858635783906,0.9893858635783906,0.0,1e-09,PASS
+X-ENG-ASA-7-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 7, ""a"": 2.5}",0.8236521262414906,0.8236521262414909,2.220446049250313e-16,1e-06,PASS
+X-ENG-SL-8-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 8, ""a"": 2.5}",0.9971435870690182,0.9971435870690182,0.0,1e-09,PASS
+X-ENG-ASA-8-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 8, ""a"": 2.5}",0.1971156834730867,0.19711568347308625,4.440892098500626e-16,1e-06,PASS
+X-ENG-SL-9-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 9, ""a"": 2.5}",0.9993049381272092,0.9993049381272092,0.0,1e-09,PASS
+X-ENG-ASA-9-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 9, ""a"": 2.5}",0.044112756396885874,0.044112756396885736,1.3877787807814457e-16,1e-06,PASS
+X-ENG-SL-10-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 10, ""a"": 2.5}",0.9998460424223514,0.9998460424223514,0.0,1e-09,PASS
+X-ENG-ASA-10-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 10, ""a"": 2.5}",0.009204179905854737,0.00920417990585473,6.938893903907228e-18,1e-06,PASS
+X-ENG-SL-11-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 11, ""a"": 2.5}",0.9999687538953566,0.9999687538953566,0.0,1e-09,PASS
+X-ENG-ASA-11-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 11, ""a"": 2.5}",0.0017914861579158853,0.0017914861579158882,2.8189256484623115e-18,1e-06,PASS
+X-ENG-SL-12-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 12, ""a"": 2.5}",0.9999941541458042,0.9999941541458042,0.0,1e-09,PASS
+X-ENG-ASA-12-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 12, ""a"": 2.5}",0.00032595082190804903,0.00032595082190804833,7.047314121155779e-19,1e-06,PASS
+X-ENG-SL-13-2.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 13, ""a"": 2.5}",0.9999989862054495,0.9999989862054495,0.0,1e-09,PASS
+X-ENG-ASA-13-2.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 13, ""a"": 2.5}",5.5587810294531635e-05,5.558781029453144e-05,1.9651164376299768e-19,1e-06,PASS
+X-ENG-SL-8-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 8, ""a"": 7.3}",0.30577375426631337,0.3057737542663135,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-8-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 8, ""a"": 7.3}",252.3179078456266,252.31790784562656,2.842170943040401e-14,1e-06,PASS
+X-ENG-SL-9-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 9, ""a"": 7.3}",0.6033105721343618,0.6033105721343625,6.661338147750939e-16,1e-09,PASS
+X-ENG-ASA-9-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 9, ""a"": 7.3}",64.52648353228551,64.52648353228541,9.947598300641403e-14,1e-06,PASS
+X-ENG-SL-10-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 10, ""a"": 7.3}",0.7839428777097592,0.7839428777097597,4.440892098500626e-16,1e-09,PASS
+X-ENG-ASA-10-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 10, ""a"": 7.3}",24.050954865698852,24.050954865698806,4.618527782440651e-14,1e-06,PASS
+X-ENG-SL-11-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 11, ""a"": 7.3}",0.8881365651214651,0.8881365651214652,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-11-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 11, ""a"": 7.3}",9.876546971966526,9.87654697196652,5.329070518200751e-15,1e-06,PASS
+X-ENG-SL-12-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 12, ""a"": 7.3}",0.9450497182416074,0.9450497182416074,0.0,1e-09,PASS
+X-ENG-ASA-12-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 12, ""a"": 7.3}",4.151279544466028,4.151279544466028,0.0,1e-06,PASS
+X-ENG-SL-13-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 13, ""a"": 7.3}",0.9744183913417921,0.9744183913417921,0.0,1e-09,PASS
+X-ENG-ASA-13-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 13, ""a"": 7.3}",1.7320248386073065,1.7320248386073058,6.661338147750939e-16,1e-06,PASS
+X-ENG-SL-14-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 14, ""a"": 7.3}",0.9887172209173619,0.9887172209173619,0.0,1e-09,PASS
+X-ENG-ASA-14-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 14, ""a"": 7.3}",0.706372217331491,0.706372217331493,1.9984014443252818e-15,1e-06,PASS
+X-ENG-SL-15-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 15, ""a"": 7.3}",0.9952838879950636,0.9952838879950636,0.0,1e-09,PASS
+X-ENG-ASA-15-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 15, ""a"": 7.3}",0.2792395438412867,0.27923954384128635,3.3306690738754696e-16,1e-06,PASS
+X-ENG-SL-16-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 16, ""a"": 7.3}",0.998130120246067,0.998130120246067,0.0,1e-09,PASS
+X-ENG-ASA-16-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 16, ""a"": 7.3}",0.10650479672119377,0.10650479672119365,1.249000902703301e-16,1e-06,PASS
+X-ENG-SL-17-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 17, ""a"": 7.3}",0.9992958717934537,0.9992958717934537,0.0,1e-09,PASS
+X-ENG-ASA-17-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 17, ""a"": 7.3}",0.03909722698330114,0.03909722698330132,1.8041124150158794e-16,1e-06,PASS
+X-ENG-SL-18-7.3,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 18, ""a"": 7.3}",0.9997477971601845,0.9997477971601845,0.0,1e-09,PASS
+X-ENG-ASA-18-7.3,engine ASA(AHT=240),engine/staffing.py,"{""n"": 18, ""a"": 7.3}",0.013798229035932823,0.013798229035932783,3.9898639947466563e-17,1e-06,PASS
+X-ENG-SL-11-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 11, ""a"": 10.0}",0.37242095565859856,0.37242095565859834,2.220446049250313e-16,1e-09,PASS
+X-ENG-ASA-11-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 11, ""a"": 10.0}",163.7083691254397,163.70836912543973,2.842170943040401e-14,1e-06,PASS
+X-ENG-SL-12-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 12, ""a"": 10.0}",0.6196010807504693,0.6196010807504693,0.0,1e-09,PASS
+X-ENG-ASA-12-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 12, ""a"": 10.0}",53.92658691579254,53.92658691579253,1.4210854715202004e-14,1e-06,PASS
+X-ENG-SL-13-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 13, ""a"": 10.0}",0.7778311477880444,0.7778311477880447,3.3306690738754696e-16,1e-09,PASS
+X-ENG-ASA-13-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 13, ""a"": 10.0}",22.821636242919485,22.821636242919443,4.263256414560601e-14,1e-06,PASS
+X-ENG-SL-14-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 14, ""a"": 10.0}",0.8752290174083912,0.8752290174083909,3.3306690738754696e-16,1e-09,PASS
+X-ENG-ASA-14-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 14, ""a"": 10.0}",10.44791601570296,10.447916015702996,3.552713678800501e-14,1e-06,PASS
+X-ENG-SL-15-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 15, ""a"": 10.0}",0.9327295256665087,0.932729525666509,3.3306690738754696e-16,1e-09,PASS
+X-ENG-ASA-15-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 15, ""a"": 10.0}",4.8980336163834455,4.898033616383424,2.1316282072803006e-14,1e-06,PASS
+X-ENG-SL-16-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 16, ""a"": 10.0}",0.9652213312690375,0.9652213312690375,0.0,1e-09,PASS
+X-ENG-ASA-16-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 16, ""a"": 10.0}",2.293613236134853,2.2936132361348505,2.6645352591003757e-15,1e-06,PASS
+X-ENG-SL-17-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 17, ""a"": 10.0}",0.9827700454661237,0.9827700454661236,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-17-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 17, ""a"": 10.0}",1.0586094850516128,1.058609485051617,4.218847493575595e-15,1e-06,PASS
+X-ENG-SL-18-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 18, ""a"": 10.0}",0.9918221496883751,0.9918221496883751,0.0,1e-09,PASS
+X-ENG-ASA-18-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 18, ""a"": 10.0}",0.47784832303804287,0.477848323038041,1.887379141862766e-15,1e-06,PASS
+X-ENG-SL-19-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 19, ""a"": 10.0}",0.9962807947805152,0.9962807947805152,0.0,1e-09,PASS
+X-ENG-ASA-19-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 19, ""a"": 10.0}",0.20996153363827208,0.2099615336382722,1.1102230246251565e-16,1e-06,PASS
+X-ENG-SL-20-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 20, ""a"": 10.0}",0.9983784593055084,0.9983784593055084,0.0,1e-09,PASS
+X-ENG-ASA-20-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 20, ""a"": 10.0}",0.08954702505904175,0.08954702505904133,4.163336342344337e-16,1e-06,PASS
+X-ENG-SL-21-10.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 21, ""a"": 10.0}",0.999321753399356,0.999321753399356,0.0,1e-09,PASS
+X-ENG-ASA-21-10.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 21, ""a"": 10.0}",0.03700917954939968,0.03700917954939961,6.938893903907228e-17,1e-06,PASS
+X-ENG-SL-25-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 25, ""a"": 24.0}",0.2837044398921337,0.2837044398921349,1.2212453270876722e-15,1e-09,PASS
+X-ENG-ASA-25-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 25, ""a"": 24.0}",186.850690784476,186.8506907844757,3.126388037344441e-13,1e-06,PASS
+X-ENG-SL-26-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 26, ""a"": 24.0}",0.49491922741752625,0.4949192274175238,2.4424906541753444e-15,1e-09,PASS
+X-ENG-ASA-26-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 26, ""a"": 24.0}",71.60189160342367,71.60189160342402,3.552713678800501e-13,1e-06,PASS
+X-ENG-SL-27-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 27, ""a"": 24.0}",0.6497239915716793,0.6497239915716777,1.5543122344752192e-15,1e-09,PASS
+X-ENG-ASA-27-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 27, ""a"": 24.0}",35.981063814231476,35.98106381423163,1.5631940186722204e-13,1e-06,PASS
+X-ENG-SL-28-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 28, ""a"": 24.0}",0.7612958139347495,0.7612958139347514,1.887379141862766e-15,1e-09,PASS
+X-ENG-ASA-28-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 28, ""a"": 24.0}",19.98831167956352,19.988311679563363,1.5631940186722204e-13,1e-06,PASS
+X-ENG-SL-29-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 29, ""a"": 24.0}",0.840283145662603,0.840283145662605,1.9984014443252818e-15,1e-09,PASS
+X-ENG-ASA-29-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 29, ""a"": 24.0}",11.629151264332819,11.629151264332677,1.4210854715202004e-13,1e-06,PASS
+X-ENG-SL-30-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 30, ""a"": 24.0}",0.8951538634402223,0.8951538634402211,1.2212453270876722e-15,1e-09,PASS
+X-ENG-ASA-30-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 30, ""a"": 24.0}",6.914482219873435,6.914482219873516,8.171241461241152e-14,1e-06,PASS
+X-ENG-SL-31-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 31, ""a"": 24.0}",0.9325207758382094,0.9325207758382096,2.220446049250313e-16,1e-09,PASS
+X-ENG-ASA-31-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 31, ""a"": 24.0}",4.145927756289008,4.145927756288999,8.881784197001252e-15,1e-06,PASS
+X-ENG-SL-32-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 32, ""a"": 24.0}",0.9574451902820075,0.9574451902820078,3.3306690738754696e-16,1e-09,PASS
+X-ENG-ASA-32-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 32, ""a"": 24.0}",2.4865635449501533,2.4865635449501298,2.353672812205332e-14,1e-06,PASS
+X-ENG-SL-33-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 33, ""a"": 24.0}",0.9737169162301456,0.9737169162301457,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-33-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 33, ""a"": 24.0}",1.4837677007310468,1.4837677007310373,9.547918011776346e-15,1e-06,PASS
+X-ENG-SL-34-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 34, ""a"": 24.0}",0.984107730461533,0.9841077304615331,1.1102230246251565e-16,1e-09,PASS
+X-ENG-ASA-34-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 34, ""a"": 24.0}",0.8776254974299912,0.8776254974299874,3.774758283725532e-15,1e-06,PASS
+X-ENG-SL-35-24.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 35, ""a"": 24.0}",0.990595089553141,0.990595089553141,0.0,1e-09,PASS
+X-ENG-ASA-35-24.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 35, ""a"": 24.0}",0.5131880042500035,0.513188004250006,2.4424906541753444e-15,1e-06,PASS
+X-ENG-SL-56-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 56, ""a"": 55.5}",0.11640822952023167,0.11640822952022933,2.3314683517128287e-15,1e-09,PASS
+X-ENG-ASA-56-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 56, ""a"": 55.5}",442.1692155672133,442.16921556721445,1.1368683772161603e-12,1e-06,PASS
+X-ENG-SL-57-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 57, ""a"": 55.5}",0.3137719669743194,0.31377196697431287,6.5503158452884236e-15,1e-09,PASS
+X-ENG-ASA-57-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 57, ""a"": 55.5}",124.41571745186256,124.41571745186373,1.1652900866465643e-12,1e-06,PASS
+X-ENG-SL-58-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 58, ""a"": 55.5}",0.47091808462845486,0.47091808462845586,9.992007221626409e-16,1e-09,PASS
+X-ENG-ASA-58-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 58, ""a"": 55.5}",62.556460388146185,62.55646038814605,1.3500311979441904e-13,1e-06,PASS
+X-ENG-SL-59-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 59, ""a"": 55.5}",0.595164380143534,0.5951643801435379,3.885780586188048e-15,1e-09,PASS
+X-ENG-ASA-59-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 59, ""a"": 55.5}",37.16132055624077,37.161320556240405,3.623767952376511e-13,1e-06,PASS
+X-ENG-SL-60-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 60, ""a"": 55.5}",0.69267317653692,0.6926731765369143,5.662137425588298e-15,1e-09,PASS
+X-ENG-ASA-60-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 60, ""a"": 55.5}",23.8484207797688,23.848420779769246,4.440892098500626e-13,1e-06,PASS
+X-ENG-SL-61-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 61, ""a"": 55.5}",0.7686045615442846,0.7686045615442865,1.887379141862766e-15,1e-09,PASS
+X-ENG-ASA-61-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 61, ""a"": 55.5}",15.968163954528597,15.968163954528473,1.2434497875801753e-13,1e-06,PASS
+X-ENG-SL-62-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 62, ""a"": 55.5}",0.8272526296814174,0.8272526296814193,1.887379141862766e-15,1e-09,PASS
+X-ENG-ASA-62-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 62, ""a"": 55.5}",10.963574558434486,10.963574558434367,1.1901590823981678e-13,1e-06,PASS
+X-ENG-SL-63-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 63, ""a"": 55.5}",0.8721665825358718,0.8721665825358724,6.661338147750939e-16,1e-09,PASS
+X-ENG-ASA-63-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 63, ""a"": 55.5}",7.642376492867303,7.6423764928672675,3.552713678800501e-14,1e-06,PASS
+X-ENG-SL-64-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 64, ""a"": 55.5}",0.9062582756988702,0.9062582756988679,2.3314683517128287e-15,1e-09,PASS
+X-ENG-ASA-64-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 64, ""a"": 55.5}",5.374654006347647,5.374654006347786,1.3855583347321954e-13,1e-06,PASS
+X-ENG-SL-65-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 65, ""a"": 55.5}",0.9318975628438535,0.9318975628438543,7.771561172376096e-16,1e-09,PASS
+X-ENG-ASA-65-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 65, ""a"": 55.5}",3.797228706226301,3.7972287062262593,4.1744385725905886e-14,1e-06,PASS
+X-ENG-SL-66-55.5,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 66, ""a"": 55.5}",0.9509965827122406,0.9509965827122399,7.771561172376096e-16,1e-09,PASS
+X-ENG-ASA-66-55.5,engine ASA(AHT=240),engine/staffing.py,"{""n"": 66, ""a"": 55.5}",2.6869277040357953,2.686927704035842,4.6629367034256575e-14,1e-06,PASS
+X-ENG-SL-121-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 121, ""a"": 120.0}",0.17856432458334748,0.1785643245833448,2.6645352591003757e-15,1e-09,PASS
+X-ENG-ASA-121-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 121, ""a"": 120.0}",214.2772228875757,214.2772228875764,6.821210263296962e-13,1e-06,PASS
+X-ENG-SL-122-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 122, ""a"": 120.0}",0.3275252643604236,0.3275252643604367,1.3100631690576847e-14,1e-09,PASS
+X-ENG-ASA-122-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 122, ""a"": 120.0}",95.33220376042632,95.33220376042446,1.8616219676914625e-12,1e-06,PASS
+X-ENG-SL-123-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 123, ""a"": 120.0}",0.45139543032429996,0.4513954303242981,1.887379141862766e-15,1e-09,PASS
+X-ENG-ASA-123-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 123, ""a"": 120.0}",56.35377689397118,56.35377689397139,2.1316282072803006e-13,1e-06,PASS
+X-ENG-SL-124-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 124, ""a"": 120.0}",0.5540606622254529,0.5540606622254474,5.551115123125783e-15,1e-09,PASS
+X-ENG-ASA-124-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 124, ""a"": 120.0}",37.34150883796922,37.3415088379697,4.760636329592671e-13,1e-06,PASS
+X-ENG-SL-125-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 125, ""a"": 120.0}",0.6388590032305435,0.6388590032305342,9.2148511043888e-15,1e-09,PASS
+X-ENG-ASA-125-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 125, ""a"": 120.0}",26.295053810113664,26.295053810114336,6.714628852932947e-13,1e-06,PASS
+X-ENG-SL-126-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 126, ""a"": 120.0}",0.7086505641084874,0.7086505641084901,2.7755575615628914e-15,1e-09,PASS
+X-ENG-ASA-126-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 126, ""a"": 120.0}",19.214160486432807,19.21416048643263,1.7763568394002505e-13,1e-06,PASS
+X-ENG-SL-127-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 127, ""a"": 120.0}",0.765879270921474,0.7658792709214675,6.5503158452884236e-15,1e-09,PASS
+X-ENG-ASA-127-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 127, ""a"": 120.0}",14.38439224911686,14.384392249117264,4.0323300254385686e-13,1e-06,PASS
+X-ENG-SL-128-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 128, ""a"": 120.0}",0.8126273835462892,0.8126273835462867,2.4424906541753444e-15,1e-09,PASS
+X-ENG-ASA-128-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 128, ""a"": 120.0}",10.94856070285122,10.948560702851367,1.474376176702208e-13,1e-06,PASS
+X-ENG-SL-129-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 129, ""a"": 120.0}",0.8506635767046886,0.8506635767046927,4.107825191113079e-15,1e-09,PASS
+X-ENG-ASA-129-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 129, ""a"": 120.0}",8.430538949254707,8.430538949254478,2.291500322826323e-13,1e-06,PASS
+X-ENG-SL-130-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 130, ""a"": 120.0}",0.8814852895367165,0.8814852895367091,7.327471962526033e-15,1e-09,PASS
+X-ENG-ASA-130-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 130, ""a"": 120.0}",6.544787795811819,6.544787795812224,4.050093593832571e-13,1e-06,PASS
+X-ENG-SL-131-120.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 131, ""a"": 120.0}",0.9063559732067626,0.9063559732067623,3.3306690738754696e-16,1e-09,PASS
+X-ENG-ASA-131-120.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 131, ""a"": 120.0}",5.109776588676126,5.109776588676144,1.865174681370263e-14,1e-06,PASS
+X-ENG-SL-401-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 401, ""a"": 400.0}",0.13557708942539515,0.13557708942539426,8.881784197001252e-16,1e-09,PASS
+X-ENG-ASA-401-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 401, ""a"": 400.0}",225.49074288059163,225.49074288059185,2.2737367544323206e-13,1e-06,PASS
+X-ENG-SL-402-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 402, ""a"": 400.0}",0.25355149386984877,0.253551493869862,1.3211653993039363e-14,1e-09,PASS
+X-ENG-ASA-402-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 402, ""a"": 400.0}",105.8189658461832,105.81896584618133,1.8758328224066645e-12,1e-06,PASS
+X-ENG-SL-403-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 403, ""a"": 400.0}",0.35610937945274823,0.3561093794527682,1.9984014443252818e-14,1e-09,PASS
+X-ENG-ASA-403-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 403, ""a"": 400.0}",66.14175378796106,66.14175378795902,2.0463630789890885e-12,1e-06,PASS
+X-ENG-SL-404-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 404, ""a"": 400.0}",0.4451772199426004,0.445177219942572,2.842170943040401e-14,1e-09,PASS
+X-ENG-ASA-404-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 404, ""a"": 400.0}",46.45905393413481,46.45905393413719,2.3803181647963356e-12,1e-06,PASS
+X-ENG-SL-405-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 405, ""a"": 400.0}",0.5224513441033096,0.5224513441032723,3.730349362740526e-14,1e-09,PASS
+X-ENG-ASA-405-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 405, ""a"": 400.0}",34.77081725996097,34.77081725996369,2.7213786779611837e-12,1e-06,PASS
+X-ENG-SL-406-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 406, ""a"": 400.0}",0.5894242526017659,0.5894242526017729,6.994405055138486e-15,1e-09,PASS
+X-ENG-ASA-406-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 406, ""a"": 400.0}",27.07699871876285,27.076998718762397,4.547473508864641e-13,1e-06,PASS
+X-ENG-SL-407-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 407, ""a"": 400.0}",0.6474080455249565,0.6474080455249602,3.774758283725532e-15,1e-09,PASS
+X-ENG-ASA-407-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 407, ""a"": 400.0}",21.66327175305631,21.663271753056076,2.3447910280083306e-13,1e-06,PASS
+X-ENG-SL-408-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 408, ""a"": 400.0}",0.6975552665885099,0.6975552665885305,2.0650148258027912e-14,1e-09,PASS
+X-ENG-ASA-408-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 408, ""a"": 400.0}",17.67245708409798,17.672457084096767,1.2150280781497713e-12,1e-06,PASS
+X-ENG-SL-409-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 409, ""a"": 400.0}",0.7408774386522563,0.7408774386522667,1.0436096431476471e-14,1e-09,PASS
+X-ENG-ASA-409-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 409, ""a"": 400.0}",14.62833244474379,14.628332444743203,5.879741138414829e-13,1e-06,PASS
+X-ENG-SL-410-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 410, ""a"": 400.0}",0.7782615368452546,0.7782615368452453,9.2148511043888e-15,1e-09,PASS
+X-ENG-ASA-410-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 410, ""a"": 400.0}",12.245156587264713,12.245156587265217,5.044853423896711e-13,1e-06,PASS
+X-ENG-SL-411-400.0,"engine SL(T=20,AHT=240)",engine/staffing.py,"{""n"": 411, ""a"": 400.0}",0.8104846201394655,0.8104846201394968,3.1308289294429414e-14,1e-09,PASS
+X-ENG-ASA-411-400.0,engine ASA(AHT=240),engine/staffing.py,"{""n"": 411, ""a"": 400.0}",10.34108938249284,10.341089382491132,1.7070789226636407e-12,1e-06,PASS
+X-ENG-REQ-0-180,engine required_agents (hourly),engine/staffing.py,"{""cph"": 0, ""aht"": 180, ""sl"": 0.8, ""t"": 20}",0,0,0,0,PASS
+X-ENG-REQ-10-180,engine required_agents (hourly),engine/staffing.py,"{""cph"": 10, ""aht"": 180, ""sl"": 0.8, ""t"": 20}",2,2,0,0,PASS
+X-ENG-REQ-360-240,engine required_agents (hourly),engine/staffing.py,"{""cph"": 360, ""aht"": 240, ""sl"": 0.8, ""t"": 20}",29,29,0,0,PASS
+X-ENG-REQ-1200-300,engine required_agents (hourly),engine/staffing.py,"{""cph"": 1200, ""aht"": 300, ""sl"": 0.9, ""t"": 15}",112,112,0,0,PASS
+X-ENG-REQ-5000-420,engine required_agents (hourly),engine/staffing.py,"{""cph"": 5000, ""aht"": 420, ""sl"": 0.8, ""t"": 30}",596,596,0,0,PASS
+X-ENG-REQ-60-3600,engine required_agents (hourly),engine/staffing.py,"{""cph"": 60, ""aht"": 3600, ""sl"": 0.95, ""t"": 60}",74,74,0,0,PASS
+X-ENG-OCC-3.0,engine solve_agents w/ 85% occupancy cap,engine/staffing.py,"{""a"": 3.0}",5,5,0,0,PASS
+X-ENG-OCC-9.5,engine solve_agents w/ 85% occupancy cap,engine/staffing.py,"{""a"": 9.5}",13,13,0,0,PASS
+X-ENG-OCC-40.0,engine solve_agents w/ 85% occupancy cap,engine/staffing.py,"{""a"": 40.0}",48,48,0,0,PASS
+X-ENG-OCC-150.0,engine solve_agents w/ 85% occupancy cap,engine/staffing.py,"{""a"": 150.0}",177,177,0,0,PASS
+X-GW-C-1-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 1, ""a"": 0.5}",0.5,0.5,0.0,1e-09,PASS
+X-GW-SL-1-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 1, ""a"": 0.5}",0.5204052714454309,0.5204052714454309,0.0,1e-09,PASS
+X-GW-C-2-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 2, ""a"": 0.5}",0.10000000000000003,0.10000000000000002,1.3877787807814457e-17,1e-09,PASS
+X-GW-SL-2-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 2, ""a"": 0.5}",0.9117503097415405,0.9117503097415405,0.0,1e-09,PASS
+X-GW-C-3-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 3, ""a"": 0.5}",0.015151515151515147,0.015151515151515154,6.938893903907228e-18,1e-09,PASS
+X-GW-SL-3-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 3, ""a"": 0.5}",0.9876979341492328,0.9876979341492328,0.0,1e-09,PASS
+X-GW-C-4-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 4, ""a"": 0.5}",0.0018050541516245503,0.001805054151624549,1.3010426069826053e-18,1e-09,PASS
+X-GW-SL-4-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 4, ""a"": 0.5}",0.9986515929597285,0.9986515929597285,0.0,1e-09,PASS
+X-GW-C-5-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 5, ""a"": 0.5}",0.00017550017550017538,0.00017550017550017552,1.3552527156068805e-19,1e-09,PASS
+X-GW-SL-5-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 5, ""a"": 0.5}",0.9998793806109528,0.9998793806109528,0.0,1e-09,PASS
+X-GW-C-6-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 6, ""a"": 0.5}",1.435915108698772e-05,1.435915108698774e-05,2.0328790734103208e-20,1e-09,PASS
+X-GW-SL-6-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 6, ""a"": 0.5}",0.9999909201823298,0.9999909201823298,0.0,1e-09,PASS
+X-GW-C-7-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 7, ""a"": 0.5}",1.0125044297068815e-06,1.0125044297068802e-06,1.2705494208814505e-21,1e-09,PASS
+X-GW-SL-7-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 7, ""a"": 0.5}",0.999999410947386,0.999999410947386,0.0,1e-09,PASS
+X-GW-C-8-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 8, ""a"": 0.5}",6.267884625292696e-08,6.267884625292696e-08,0.0,1e-09,PASS
+X-GW-SL-8-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 8, ""a"": 0.5}",0.9999999664504312,0.9999999664504312,0.0,1e-09,PASS
+X-GW-C-9-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 9, ""a"": 0.5}",3.4565540228941703e-09,3.4565540228941546e-09,1.5716431638507526e-23,1e-09,PASS
+X-GW-SL-9-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 9, ""a"": 0.5}",0.9999999982977705,0.9999999982977705,0.0,1e-09,PASS
+X-GW-C-10-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 10, ""a"": 0.5}",1.7181701283739328e-10,1.7181701283739302e-10,2.5849394142282115e-25,1e-09,PASS
+X-GW-SL-10-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 10, ""a"": 0.5}",0.9999999999221516,0.9999999999221516,0.0,1e-09,PASS
+X-GW-C-11-0.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 11, ""a"": 0.5}",7.77267439026938e-12,7.772674390269377e-12,3.2311742677852644e-27,1e-09,PASS
+X-GW-SL-11-0.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 11, ""a"": 0.5}",0.9999999999967598,0.9999999999967598,0.0,1e-09,PASS
+X-GW-C-2-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 2, ""a"": 1}",0.3333333333333334,0.33333333333333337,5.551115123125783e-17,1e-09,PASS
+X-GW-SL-2-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 2, ""a"": 1}",0.6933185284568921,0.6933185284568921,0.0,1e-09,PASS
+X-GW-C-3-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 3, ""a"": 1}",0.09090909090909087,0.09090909090909091,4.163336342344337e-17,1e-09,PASS
+X-GW-SL-3-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 3, ""a"": 1}",0.9230471159190351,0.9230471159190351,0.0,1e-09,PASS
+X-GW-C-4-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 4, ""a"": 1}",0.02040816326530613,0.020408163265306124,6.938893903907228e-18,1e-09,PASS
+X-GW-SL-4-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 4, ""a"": 1}",0.9841061064679305,0.9841061064679305,0.0,1e-09,PASS
+X-GW-C-5-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 5, ""a"": 1}",0.00383141762452107,0.0038314176245210726,2.6020852139652106e-18,1e-09,PASS
+X-GW-SL-5-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 5, ""a"": 1}",0.9972546693081464,0.9972546693081464,0.0,1e-09,PASS
+X-GW-C-6-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 6, ""a"": 1}",0.0006131207847946041,0.0006131207847946046,5.421010862427522e-19,1e-09,PASS
+X-GW-SL-6-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 6, ""a"": 1}",0.999595805867443,0.999595805867443,0.0,1e-09,PASS
+X-GW-C-7-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 7, ""a"": 1}",8.515711487694797e-05,8.515711487694797e-05,0.0,1e-09,PASS
+X-GW-SL-7-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 7, ""a"": 1}",0.9999483495989344,0.9999483495989344,0.0,1e-09,PASS
+X-GW-C-8-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 8, ""a"": 1}",1.0427419943483396e-05,1.0427419943483386e-05,1.0164395367051604e-20,1e-09,PASS
+X-GW-SL-8-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 8, ""a"": 1}",0.9999941811331918,0.9999941811331918,0.0,1e-09,PASS
+X-GW-C-9-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 9, ""a"": 1}",1.1404992421382565e-06,1.1404992421382537e-06,2.752857078576476e-21,1e-09,PASS
+X-GW-SL-9-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 9, ""a"": 1}",0.9999994144481649,0.9999994144481649,0.0,1e-09,PASS
+X-GW-C-10-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 10, ""a"": 1}",1.1264190204412405e-07,1.1264190204412388e-07,1.7205356741102976e-22,1e-09,PASS
+X-GW-SL-10-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 10, ""a"": 1}",0.999999946791733,0.999999946791733,0.0,1e-09,PASS
+X-GW-C-11-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 11, ""a"": 1}",1.0137771195390527e-08,1.0137771195390527e-08,0.0,1e-09,PASS
+X-GW-SL-11-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 11, ""a"": 1}",0.9999999955941428,0.9999999955941428,0.0,1e-09,PASS
+X-GW-C-12-1,gateway waitProbability,gateway/erlang.ts,"{""n"": 12, ""a"": 1}",8.378323302677612e-10,8.378323302677606e-10,6.203854594147708e-25,1e-09,PASS
+X-GW-SL-12-1,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 12, ""a"": 1}",0.999999999664993,0.999999999664993,0.0,1e-09,PASS
+X-GW-C-3-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 3, ""a"": 2.5}",0.7022471910112359,0.702247191011236,1.1102230246251565e-16,1e-09,PASS
+X-GW-SL-3-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 3, ""a"": 2.5}",0.32641189809751536,0.32641189809751525,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-4-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 4, ""a"": 2.5}",0.3198567041965202,0.3198567041965199,2.7755575615628914e-16,1e-09,PASS
+X-GW-SL-4-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 4, ""a"": 2.5}",0.7177274492756538,0.717727449275654,2.220446049250313e-16,1e-09,PASS
+X-GW-C-5-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 5, ""a"": 2.5}",0.1303712974551522,0.1303712974551523,1.1102230246251565e-16,1e-09,PASS
+X-GW-SL-5-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 5, ""a"": 2.5}",0.8941468051013461,0.894146805101346,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-6-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 6, ""a"": 2.5}",0.04744481219445536,0.04744481219445541,5.551115123125783e-17,1e-09,PASS
+X-GW-SL-6-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 6, ""a"": 2.5}",0.9645578949918,0.9645578949918,0.0,1e-09,PASS
+X-GW-C-7-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 7, ""a"": 2.5}",0.01544347736702795,0.015443477367027954,3.469446951953614e-18,1e-09,PASS
+X-GW-SL-7-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 7, ""a"": 2.5}",0.9893858635783906,0.9893858635783906,0.0,1e-09,PASS
+X-GW-C-8-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 8, ""a"": 2.5}",0.004517234412924903,0.004517234412924893,9.540979117872439e-18,1e-09,PASS
+X-GW-SL-8-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 8, ""a"": 2.5}",0.9971435870690182,0.9971435870690182,0.0,1e-09,PASS
+X-GW-C-9-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 9, ""a"": 2.5}",0.0011947204857489925,0.0011947204857489888,3.686287386450715e-18,1e-09,PASS
+X-GW-SL-9-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 9, ""a"": 2.5}",0.9993049381272092,0.9993049381272092,0.0,1e-09,PASS
+X-GW-C-10-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 10, ""a"": 2.5}",0.0002876306220579605,0.0002876306220579603,2.168404344971009e-19,1e-09,PASS
+X-GW-SL-10-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 10, ""a"": 2.5}",0.9998460424223514,0.9998460424223514,0.0,1e-09,PASS
+X-GW-C-11-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 11, ""a"": 2.5}",6.344846809285427e-05,6.344846809285437e-05,1.0842021724855044e-19,1e-09,PASS
+X-GW-SL-11-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 11, ""a"": 2.5}",0.9999687538953566,0.9999687538953566,0.0,1e-09,PASS
+X-GW-C-12-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 12, ""a"": 2.5}",1.2902220033860274e-05,1.2902220033860245e-05,2.879912020664621e-20,1e-09,PASS
+X-GW-SL-12-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 12, ""a"": 2.5}",0.9999941541458042,0.9999941541458042,0.0,1e-09,PASS
+X-GW-C-13-2.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 13, ""a"": 2.5}",2.4319667003857592e-06,2.4319667003857503e-06,8.893845946170154e-21,1e-09,PASS
+X-GW-SL-13-2.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 13, ""a"": 2.5}",0.9999989862054495,0.9999989862054495,0.0,1e-09,PASS
+X-GW-C-8-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 8, ""a"": 7.3}",0.7359272312164111,0.735927231216411,1.1102230246251565e-16,1e-09,PASS
+X-GW-SL-8-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 8, ""a"": 7.3}",0.30577375426631337,0.3057737542663135,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-9-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 9, ""a"": 7.3}",0.45706259168702246,0.4570625916870217,7.771561172376096e-16,1e-09,PASS
+X-GW-SL-9-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 9, ""a"": 7.3}",0.6033105721343618,0.6033105721343625,6.661338147750939e-16,1e-09,PASS
+X-GW-C-10-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 10, ""a"": 7.3}",0.2705732422391121,0.27057324223911156,5.551115123125783e-16,1e-09,PASS
+X-GW-SL-10-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 10, ""a"": 7.3}",0.7839428777097592,0.7839428777097597,4.440892098500626e-16,1e-09,PASS
+X-GW-C-11-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 11, ""a"": 7.3}",0.15226343248448396,0.15226343248448387,8.326672684688674e-17,1e-09,PASS
+X-GW-SL-11-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 11, ""a"": 7.3}",0.8881365651214651,0.8881365651214652,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-12-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 12, ""a"": 7.3}",0.0812958910791264,0.0812958910791264,0.0,1e-09,PASS
+X-GW-SL-12-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 12, ""a"": 7.3}",0.9450497182416074,0.9450497182416074,0.0,1e-09,PASS
+X-GW-C-13-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 13, ""a"": 7.3}",0.04113558991692353,0.04113558991692351,2.0816681711721685e-17,1e-09,PASS
+X-GW-SL-13-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 13, ""a"": 7.3}",0.9744183913417921,0.9744183913417921,0.0,1e-09,PASS
+X-GW-C-14-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 14, ""a"": 7.3}",0.01971955773383746,0.019719557733837514,5.204170427930421e-17,1e-09,PASS
+X-GW-SL-14-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 14, ""a"": 7.3}",0.9887172209173619,0.9887172209173619,0.0,1e-09,PASS
+X-GW-C-15-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 15, ""a"": 7.3}",0.008958935364907947,0.008958935364907937,1.0408340855860843e-17,1e-09,PASS
+X-GW-SL-15-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 15, ""a"": 7.3}",0.9952838879950636,0.9952838879950636,0.0,1e-09,PASS
+X-GW-C-16-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 16, ""a"": 7.3}",0.0038607988811432737,0.0038607988811432694,4.336808689942018e-18,1e-09,PASS
+X-GW-SL-16-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 16, ""a"": 7.3}",0.998130120246067,0.998130120246067,0.0,1e-09,PASS
+X-GW-C-17-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 17, ""a"": 7.3}",0.0015801795905750877,0.0015801795905750948,7.15573433840433e-18,1e-09,PASS
+X-GW-SL-17-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 17, ""a"": 7.3}",0.9992958717934537,0.9992958717934537,0.0,1e-09,PASS
+X-GW-C-18-7.3,gateway waitProbability,gateway/erlang.ts,"{""n"": 18, ""a"": 7.3}",0.0006151710445186716,0.0006151710445186699,1.734723475976807e-18,1e-09,PASS
+X-GW-SL-18-7.3,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 18, ""a"": 7.3}",0.9997477971601845,0.9997477971601845,0.0,1e-09,PASS
+X-GW-C-11-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 11, ""a"": 10}",0.682118204689332,0.6821182046893323,2.220446049250313e-16,1e-09,PASS
+X-GW-SL-11-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 11, ""a"": 10}",0.37242095565859856,0.37242095565859834,2.220446049250313e-16,1e-09,PASS
+X-GW-C-12-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 12, ""a"": 10}",0.4493882242982712,0.4493882242982711,1.1102230246251565e-16,1e-09,PASS
+X-GW-SL-12-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 12, ""a"": 10}",0.6196010807504693,0.6196010807504694,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-13-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 13, ""a"": 10}",0.28527045303649357,0.28527045303649307,4.996003610813204e-16,1e-09,PASS
+X-GW-SL-13-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 13, ""a"": 10}",0.7778311477880444,0.7778311477880447,3.3306690738754696e-16,1e-09,PASS
+X-GW-C-14-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 14, ""a"": 10}",0.17413193359504933,0.17413193359504991,5.828670879282072e-16,1e-09,PASS
+X-GW-SL-14-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 14, ""a"": 10}",0.8752290174083912,0.8752290174083909,3.3306690738754696e-16,1e-09,PASS
+X-GW-C-15-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 15, ""a"": 10}",0.10204236700798844,0.10204236700798801,4.3021142204224816e-16,1e-09,PASS
+X-GW-SL-15-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 15, ""a"": 10}",0.9327295256665087,0.932729525666509,3.3306690738754696e-16,1e-09,PASS
+X-GW-C-16-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 16, ""a"": 10}",0.05734033090337133,0.057340330903371255,7.632783294297951e-17,1e-09,PASS
+X-GW-SL-16-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 16, ""a"": 10}",0.9652213312690375,0.9652213312690375,0.0,1e-09,PASS
+X-GW-C-17-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 17, ""a"": 10}",0.03087610998067204,0.030876109980672164,1.249000902703301e-16,1e-09,PASS
+X-GW-SL-17-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 17, ""a"": 10}",0.9827700454661237,0.9827700454661236,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-18-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 18, ""a"": 10}",0.01592827743460143,0.015928277434601366,6.245004513516506e-17,1e-09,PASS
+X-GW-SL-18-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 18, ""a"": 10}",0.9918221496883751,0.9918221496883751,0.0,1e-09,PASS
+X-GW-C-19-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 19, ""a"": 10}",0.007873557511435203,0.007873557511435206,3.469446951953614e-18,1e-09,PASS
+X-GW-SL-19-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 19, ""a"": 10}",0.9962807947805152,0.9962807947805152,0.0,1e-09,PASS
+X-GW-C-20-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 20, ""a"": 10}",0.0037311260441267396,0.003731126044126722,1.734723475976807e-17,1e-09,PASS
+X-GW-SL-20-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 20, ""a"": 10}",0.9983784593055084,0.9983784593055084,0.0,1e-09,PASS
+X-GW-C-21-10,gateway waitProbability,gateway/erlang.ts,"{""n"": 21, ""a"": 10}",0.0016962540626808188,0.0016962540626808155,3.2526065174565133e-18,1e-09,PASS
+X-GW-SL-21-10,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 21, ""a"": 10}",0.999321753399356,0.999321753399356,0.0,1e-09,PASS
+X-GW-C-25-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 25, ""a"": 24}",0.7785445449353167,0.7785445449353153,1.3322676295501878e-15,1e-09,PASS
+X-GW-SL-25-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 25, ""a"": 24}",0.2837044398921337,0.2837044398921349,1.2212453270876722e-15,1e-09,PASS
+X-GW-C-26-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 26, ""a"": 24}",0.5966824300285306,0.5966824300285335,2.886579864025407e-15,1e-09,PASS
+X-GW-SL-26-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 26, ""a"": 24}",0.49491922741752625,0.4949192274175238,2.4424906541753444e-15,1e-09,PASS
+X-GW-C-27-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 27, ""a"": 24}",0.44976329767789347,0.4497632976778954,1.942890293094024e-15,1e-09,PASS
+X-GW-SL-27-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 27, ""a"": 24}",0.6497239915716793,0.6497239915716777,1.5543122344752192e-15,1e-09,PASS
+X-GW-C-28-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 28, ""a"": 24}",0.3331385279927253,0.3331385279927227,2.609024107869118e-15,1e-09,PASS
+X-GW-SL-28-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 28, ""a"": 24}",0.7612958139347495,0.7612958139347514,1.887379141862766e-15,1e-09,PASS
+X-GW-C-29-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 29, ""a"": 24}",0.2422739846736004,0.24227398467359743,2.9698465908722937e-15,1e-09,PASS
+X-GW-SL-29-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 29, ""a"": 24}",0.840283145662603,0.840283145662605,1.9984014443252818e-15,1e-09,PASS
+X-GW-C-30-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 30, ""a"": 24}",0.17286205549683586,0.17286205549683792,2.0539125955565396e-15,1e-09,PASS
+X-GW-SL-30-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 30, ""a"": 24}",0.8951538634402223,0.8951538634402211,1.2212453270876722e-15,1e-09,PASS
+X-GW-C-31-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 31, ""a"": 24}",0.12092289289176272,0.12092289289176247,2.498001805406602e-16,1e-09,PASS
+X-GW-SL-31-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 31, ""a"": 24}",0.9325207758382094,0.9325207758382096,2.220446049250313e-16,1e-09,PASS
+X-GW-C-32-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 32, ""a"": 24}",0.08288545149833844,0.08288545149833766,7.771561172376096e-16,1e-09,PASS
+X-GW-SL-32-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 32, ""a"": 24}",0.9574451902820075,0.9574451902820078,3.3306690738754696e-16,1e-09,PASS
+X-GW-C-33-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 33, ""a"": 24}",0.055641288777414255,0.0556412887774139,3.5388358909926865e-16,1e-09,PASS
+X-GW-SL-33-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 33, ""a"": 24}",0.9737169162301456,0.9737169162301457,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-34-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 34, ""a"": 24}",0.036567729059582964,0.03656772905958281,1.5265566588595902e-16,1e-09,PASS
+X-GW-SL-34-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 34, ""a"": 24}",0.984107730461533,0.9841077304615331,1.1102230246251565e-16,1e-09,PASS
+X-GW-C-35-24,gateway waitProbability,gateway/erlang.ts,"{""n"": 35, ""a"": 24}",0.0235211168614585,0.023521116861458604,1.0408340855860843e-16,1e-09,PASS
+X-GW-SL-35-24,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 35, ""a"": 24}",0.990595089553141,0.990595089553141,0.0,1e-09,PASS
+X-GW-C-56-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 56, ""a"": 55.5}",0.9211858657650277,0.9211858657650301,2.4424906541753444e-15,1e-09,PASS
+X-GW-SL-56-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 56, ""a"": 55.5}",0.11640822952023167,0.11640822952022933,2.3314683517128287e-15,1e-09,PASS
+X-GW-C-57-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 57, ""a"": 55.5}",0.777598234074141,0.7775982340741483,7.327471962526033e-15,1e-09,PASS
+X-GW-SL-57-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 57, ""a"": 55.5}",0.3137719669743194,0.31377196697431287,6.5503158452884236e-15,1e-09,PASS
+X-GW-C-58-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 58, ""a"": 55.5}",0.651629795709856,0.6516297957098547,1.3322676295501878e-15,1e-09,PASS
+X-GW-SL-58-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 58, ""a"": 55.5}",0.47091808462845486,0.47091808462845586,9.992007221626409e-16,1e-09,PASS
+X-GW-C-59-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 59, ""a"": 55.5}",0.5419359247785112,0.5419359247785059,5.218048215738236e-15,1e-09,PASS
+X-GW-SL-59-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 59, ""a"": 55.5}",0.595164380143534,0.595164380143538,3.9968028886505635e-15,1e-09,PASS
+X-GW-C-60-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 60, ""a"": 55.5}",0.44715788962066505,0.4471578896206733,8.271161533457416e-15,1e-09,PASS
+X-GW-SL-60-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 60, ""a"": 55.5}",0.69267317653692,0.6926731765369143,5.662137425588298e-15,1e-09,PASS
+X-GW-C-61-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 61, ""a"": 55.5}",0.36593709062461366,0.36593709062461083,2.831068712794149e-15,1e-09,PASS
+X-GW-SL-61-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 61, ""a"": 55.5}",0.7686045615442846,0.7686045615442864,1.7763568394002505e-15,1e-09,PASS
+X-GW-C-62-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 62, ""a"": 55.5}",0.29693014429093395,0.2969301442909308,3.164135620181696e-15,1e-09,PASS
+X-GW-SL-62-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 62, ""a"": 55.5}",0.8272526296814174,0.8272526296814193,1.887379141862766e-15,1e-09,PASS
+X-GW-C-63-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 63, ""a"": 55.5}",0.23882426540210322,0.2388242654021021,1.1102230246251565e-15,1e-09,PASS
+X-GW-SL-63-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 63, ""a"": 55.5}",0.8721665825358718,0.8721665825358724,6.661338147750939e-16,1e-09,PASS
+X-GW-C-64-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 64, ""a"": 55.5}",0.1903523293914792,0.19035232939148408,4.884981308350689e-15,1e-09,PASS
+X-GW-SL-64-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 64, ""a"": 55.5}",0.9062582756988702,0.9062582756988679,2.3314683517128287e-15,1e-09,PASS
+X-GW-C-65-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 65, ""a"": 55.5}",0.15030696962145776,0.1503069696214561,1.6653345369377348e-15,1e-09,PASS
+X-GW-SL-65-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 65, ""a"": 55.5}",0.9318975628438535,0.9318975628438543,7.771561172376096e-16,1e-09,PASS
+X-GW-C-66-55.5,gateway waitProbability,gateway/erlang.ts,"{""n"": 66, ""a"": 55.5}",0.11755308705156604,0.11755308705156807,2.0261570199409107e-15,1e-09,PASS
+X-GW-SL-66-55.5,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 66, ""a"": 55.5}",0.9509965827122406,0.9509965827122399,7.771561172376096e-16,1e-09,PASS
+X-GW-C-121-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 121, ""a"": 120}",0.8928217620315654,0.8928217620315683,2.886579864025407e-15,1e-09,PASS
+X-GW-SL-121-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 121, ""a"": 120}",0.17856432458334748,0.1785643245833448,2.6645352591003757e-15,1e-09,PASS
+X-GW-C-122-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 122, ""a"": 120}",0.794435031336886,0.7944350313368705,1.5432100042289676e-14,1e-09,PASS
+X-GW-SL-122-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 122, ""a"": 120}",0.3275252643604236,0.32752526436043683,1.3211653993039363e-14,1e-09,PASS
+X-GW-C-123-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 123, ""a"": 120}",0.7044222111746398,0.7044222111746423,2.55351295663786e-15,1e-09,PASS
+X-GW-SL-123-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 123, ""a"": 120}",0.45139543032429996,0.4513954303242981,1.887379141862766e-15,1e-09,PASS
+X-GW-C-124-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 124, ""a"": 120}",0.6223584806328204,0.6223584806328283,7.882583474838611e-15,1e-09,PASS
+X-GW-SL-124-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 124, ""a"": 120}",0.5540606622254529,0.5540606622254474,5.551115123125783e-15,1e-09,PASS
+X-GW-C-125-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 125, ""a"": 120}",0.5478136210440347,0.5478136210440487,1.3988810110276972e-14,1e-09,PASS
+X-GW-SL-125-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 125, ""a"": 120}",0.6388590032305435,0.6388590032305342,9.2148511043888e-15,1e-09,PASS
+X-GW-C-126-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 126, ""a"": 120}",0.4803540121608202,0.4803540121608157,4.496403249731884e-15,1e-09,PASS
+X-GW-SL-126-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 126, ""a"": 120}",0.7086505641084874,0.7086505641084901,2.7755575615628914e-15,1e-09,PASS
+X-GW-C-127-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 127, ""a"": 120}",0.4195447739325751,0.4195447739325868,1.1712852909795402e-14,1e-09,PASS
+X-GW-SL-127-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 127, ""a"": 120}",0.765879270921474,0.7658792709214675,6.5503158452884236e-15,1e-09,PASS
+X-GW-C-128-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 128, ""a"": 120}",0.36495202342837396,0.3649520234283789,4.9404924595819466e-15,1e-09,PASS
+X-GW-SL-128-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 128, ""a"": 120}",0.8126273835462892,0.8126273835462867,2.4424906541753444e-15,1e-09,PASS
+X-GW-C-129-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 129, ""a"": 120}",0.31614521059705153,0.3161452105970429,8.604228440844963e-15,1e-09,PASS
+X-GW-SL-129-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 129, ""a"": 120}",0.8506635767046886,0.8506635767046927,4.107825191113079e-15,1e-09,PASS
+X-GW-C-130-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 130, ""a"": 120}",0.2726994914921591,0.272699491492176,1.687538997430238e-14,1e-09,PASS
+X-GW-SL-130-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 130, ""a"": 120}",0.8814852895367165,0.8814852895367091,7.327471962526033e-15,1e-09,PASS
+X-GW-C-131-120,gateway waitProbability,gateway/erlang.ts,"{""n"": 131, ""a"": 120}",0.23419809364765573,0.2341980936476566,8.604228440844963e-16,1e-09,PASS
+X-GW-SL-131-120,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 131, ""a"": 120}",0.9063559732067626,0.9063559732067623,3.3306690738754696e-16,1e-09,PASS
+X-GW-C-401-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 401, ""a"": 400}",0.9395447620024651,0.9395447620024661,9.992007221626409e-16,1e-09,PASS
+X-GW-SL-401-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 401, ""a"": 400}",0.13557708942539515,0.13557708942539426,8.881784197001252e-16,1e-09,PASS
+X-GW-C-402-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 402, ""a"": 400}",0.8818247153848601,0.8818247153848444,1.5654144647214707e-14,1e-09,PASS
+X-GW-SL-402-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 402, ""a"": 400}",0.25355149386984877,0.2535514938698621,1.3322676295501878e-14,1e-09,PASS
+X-GW-C-403-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 403, ""a"": 400}",0.8267719223495134,0.8267719223494877,2.5646151868841116e-14,1e-09,PASS
+X-GW-SL-403-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 403, ""a"": 400}",0.35610937945274823,0.3561093794527682,1.9984014443252818e-14,1e-09,PASS
+X-GW-C-404-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 404, ""a"": 400}",0.7743175655689135,0.7743175655689531,3.963496197911809e-14,1e-09,PASS
+X-GW-SL-404-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 404, ""a"": 400}",0.4451772199426004,0.445177219942572,2.842170943040401e-14,1e-09,PASS
+X-GW-C-405-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 405, ""a"": 400}",0.724392026249187,0.7243920262492436,5.6621374255882984e-14,1e-09,PASS
+X-GW-SL-405-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 405, ""a"": 400}",0.5224513441033096,0.5224513441032723,3.730349362740526e-14,1e-09,PASS
+X-GW-C-406-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 406, ""a"": 400}",0.6769249679690713,0.6769249679690599,1.1435297153639112e-14,1e-09,PASS
+X-GW-SL-406-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 406, ""a"": 400}",0.5894242526017659,0.5894242526017729,6.994405055138486e-15,1e-09,PASS
+X-GW-C-407-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 407, ""a"": 400}",0.6318454261308091,0.6318454261308022,6.8833827526759706e-15,1e-09,PASS
+X-GW-SL-407-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 407, ""a"": 400}",0.6474080455249565,0.6474080455249602,3.774758283725532e-15,1e-09,PASS
+X-GW-C-408-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 408, ""a"": 400}",0.589081902803266,0.5890819028032256,4.04121180963557e-14,1e-09,PASS
+X-GW-SL-408-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 408, ""a"": 400}",0.6975552665885099,0.6975552665885305,2.0650148258027912e-14,1e-09,PASS
+X-GW-C-409-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 409, ""a"": 400}",0.5485624666778921,0.5485624666778701,2.19824158875781e-14,1e-09,PASS
+X-GW-SL-409-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 409, ""a"": 400}",0.7408774386522563,0.7408774386522667,1.0436096431476471e-14,1e-09,PASS
+X-GW-C-410-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 410, ""a"": 400}",0.5102148578026964,0.5102148578027174,2.098321516541546e-14,1e-09,PASS
+X-GW-SL-410-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 410, ""a"": 400}",0.7782615368452546,0.7782615368452453,9.2148511043888e-15,1e-09,PASS
+X-GW-C-411-400,gateway waitProbability,gateway/erlang.ts,"{""n"": 411, ""a"": 400}",0.47396659669758845,0.4739665966975102,7.827072323607354e-14,1e-09,PASS
+X-GW-SL-411-400,gateway erlangC().sl,gateway/erlang.ts,"{""n"": 411, ""a"": 400}",0.8104846201394655,0.8104846201394968,3.1308289294429414e-14,1e-09,PASS

@@ -1022,7 +1022,13 @@ def _get_pool():
     global _pool
     with _pool_lock:
         if _pool is None:
-            _pool = ProcessPoolExecutor(max_workers=max(2, min(4, __import__("resources").effective_cpus())), initializer=warm_up)
+            # Not the Linux default (fork): the engine is a multi-threaded gRPC server, and forking it while other threads are inside gRPC can crash the whole process with a
+            # segmentation fault (seen in production, in threading._after_fork). A forkserver is a clean separate process that the workers are forked from instead.
+            # ENGINE_POOL_START=fork brings the old behaviour back; spawn is the other safe choice.
+            import multiprocessing
+            want = os.environ.get("ENGINE_POOL_START") or "forkserver"
+            ctx = multiprocessing.get_context(want if want in multiprocessing.get_all_start_methods() else "spawn")     # Windows has no forkserver
+            _pool = ProcessPoolExecutor(max_workers=max(2, min(4, __import__("resources").effective_cpus())), mp_context=ctx, initializer=warm_up)
         return _pool
 
 

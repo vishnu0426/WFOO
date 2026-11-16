@@ -1,0 +1,16 @@
+{
+  "note": "Employee stages per the user's instruction (50 -> 200k, not 500k). Each stage runs on its own throwaway DB; a stage starts only after the previous one passes or its failure is written up and approved.",
+  "employee_stages": [50, 500, 5000, 10000, 25000, 50000, 100000, 150000, 200000],
+  "schedule_horizons_weeks": {"1 week": 1, "4 weeks": 4, "quarter": 13, "half year": 26, "full year": 52},
+  "horizon_rule": "Record solvedWeeks and repeatedWeeks separately: by default the solver builds at most 13 weeks and later weeks repeat the last solved cycle. Also run 26 and 52 with solveWeeks set to the full horizon where the app allows it, and report both.",
+  "matrix_per_stage": {
+    "import": ["employees CSV via app import (dry run, then commit)", "history CSV per queue via ingestion"],
+    "forecast": ["15/30/60-min intervals", "versions, adjust (reason), compare, publish", "accuracy vs holdout truth: WAPE, MAPE, MAE, RMSE, bias"],
+    "schedule": ["each horizon above for every group", "validate.mjs hard rules + coverage per interval/skill", "runtime, solver status, gap, placed vs unplaced people"],
+    "api_probes": ["employee search p95/p99", "schedule read", "dashboard/overview", "health during solves"],
+    "concurrency": [100, 500, 1000, 2500, 5000],
+    "resources": ["gateway RSS/event loop (/metrics)", "engine CPU/RAM", "Postgres size, slow queries (pg_stat_statements)", "DB pool waiting"]
+  },
+  "abort_thresholds": {"machine_free_ram_gb_below": 2, "health_probe_failures_in_a_row": 5, "api_5xx_rate_above": 0.02, "single_solve_minutes_above": 60},
+  "existing_harness_reused": ["qa/scale/scale-test.mjs (QA_API, QA_TIME_LIMIT)", "qa/scale/validate.mjs", "qa/scale/schedule-sequential.mjs", "qa/scale/probe-50k.mjs"]
+}

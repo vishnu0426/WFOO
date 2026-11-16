@@ -1,0 +1,211 @@
+{
+ "summary": {
+  "TR0042S500-G001": {
+   "VOICE net agents (Erlang C)": [
+    1658,
+    6
+   ],
+   "gross = ceil(net/0.7) exact": [
+    1622,
+    42
+   ],
+   "VOICE service level at net": [
+    1664,
+    0
+   ],
+   "day = sum of 15-min": [
+    28,
+    0
+   ],
+   "week = sum of days": [
+    4,
+    0
+   ]
+  },
+  "TR0042S500-G002": {
+   "VOICE net agents (Erlang C)": [
+    1679,
+    1
+   ],
+   "gross = ceil(net/0.7) exact": [
+    1618,
+    62
+   ],
+   "VOICE service level at net": [
+    1680,
+    0
+   ],
+   "day = sum of 15-min": [
+    28,
+    0
+   ],
+   "week = sum of days": [
+    4,
+    0
+   ]
+  },
+  "TR0042S500-G003": {
+   "CHAT net agents (Erlang C on AHT/(2*0.85))": [
+    1678,
+    2
+   ],
+   "gross = ceil(net/0.7) exact": [
+    1584,
+    96
+   ],
+   "CHAT service level at net": [
+    1680,
+    0
+   ],
+   "day = sum of 15-min": [
+    28,
+    0
+   ],
+   "week = sum of days": [
+    4,
+    0
+   ]
+  },
+  "TR0042S500-G004": {
+   "EMAIL net per slot = ceil(workload/capacity)": [
+    28,
+    0
+   ],
+   "EMAIL worked 08:00-20:00 (slots 32-79)": [
+    28,
+    0
+   ],
+   "gross = ceil(net/0.7) exact": [
+    25,
+    3
+   ],
+   "day = sum of 15-min": [
+    28,
+    0
+   ],
+   "week = sum of days": [
+    4,
+    0
+   ]
+  },
+  "TR0042S500-G005": {
+   "BACKOFFICE net per slot = ceil(workload/capacity) (4-day rolling avg)": [
+    28,
+    0
+   ],
+   "BACKOFFICE worked 08:00-20:00 (slots 32-79)": [
+    28,
+    0
+   ],
+   "gross = ceil(net/0.7) exact": [
+    24,
+    4
+   ],
+   "day = sum of 15-min": [
+    28,
+    0
+   ],
+   "week = sum of days": [
+    4,
+    0
+   ]
+  }
+ },
+ "accuracy": {
+  "TR0042S500-G001": {
+   "channel": "VOICE",
+   "model": "ets",
+   "days": 26,
+   "vsActual": {
+    "WAPE%": 5.3,
+    "MAPE%": 5.27,
+    "MAE": 235.7,
+    "RMSE": 405.8,
+    "bias%": -5.3
+   },
+   "vsTruth": {
+    "WAPE%": 4.09,
+    "MAPE%": 4.1,
+    "MAE": 179.8,
+    "RMSE": 208.1,
+    "bias%": -4.09
+   }
+  },
+  "TR0042S500-G002": {
+   "channel": "VOICE",
+   "model": "combo",
+   "days": 26,
+   "vsActual": {
+    "WAPE%": 12.26,
+    "MAPE%": 11.43,
+    "MAE": 552.5,
+    "RMSE": 795.7,
+    "bias%": -12.26
+   },
+   "vsTruth": {
+    "WAPE%": 9.94,
+    "MAPE%": 10.0,
+    "MAE": 436.7,
+    "RMSE": 459.7,
+    "bias%": -9.94
+   }
+  },
+  "TR0042S500-G003": {
+   "channel": "CHAT",
+   "model": "ets",
+   "days": 26,
+   "vsActual": {
+    "WAPE%": 8.12,
+    "MAPE%": 7.93,
+    "MAE": 194.4,
+    "RMSE": 212.4,
+    "bias%": -8.1
+   },
+   "vsTruth": {
+    "WAPE%": 8.25,
+    "MAPE%": 8.18,
+    "MAE": 197.8,
+    "RMSE": 208.9,
+    "bias%": -8.25
+   }
+  },
+  "TR0042S500-G004": {
+   "channel": "EMAIL",
+   "model": "ets",
+   "days": 26,
+   "vsActual": {
+    "WAPE%": 2.69,
+    "MAPE%": 3.01,
+    "MAE": 85.8,
+    "RMSE": 106.1,
+    "bias%": -2.61
+   },
+   "vsTruth": {
+    "WAPE%": 2.62,
+    "MAPE%": 2.8,
+    "MAE": 83.4,
+    "RMSE": 89.8,
+    "bias%": -2.62
+   }
+  },
+  "TR0042S500-G005": {
+   "channel": "BACKOFFICE",
+   "model": "snaive",
+   "days": 20,
+   "vsActual": {
+    "WAPE%": 7.88,
+    "MAPE%": 7.68,
+    "MAE": 156.9,
+    "RMSE": 181.8,
+    "bias%": -7.85
+   },
+   "vsTruth": {
+    "WAPE%": 8.21,
+    "MAPE%": 8.11,
+    "MAE": 164.0,
+    "RMSE": 179.9,
+    "bias%": -8.21
+   }
+  }
+ }
+}

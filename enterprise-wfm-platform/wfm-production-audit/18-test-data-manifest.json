@@ -1,0 +1,147 @@
+{
+ "audit": "AgnoWFM production readiness",
+ "TEST_RUN_ID": "TR0042",
+ "environment": "Test organisation on the shared server 192.168.9.186 (chosen by the user 2026-11-14)",
+ "baseline_before_seeding": {
+  "taken_at": "2026-11-14 (super-admin dashboard + organisations list)",
+  "organisations": 1,
+  "workspaces": 2,
+  "tenant_user_accounts": 5,
+  "employee_seats_in_use": "385 / 500",
+  "real_org": {
+   "name": "My Organisation",
+   "code": "ORG",
+   "workspaces": 2,
+   "users": 5,
+   "created": "2026-09-24"
+  }
+ },
+ "server_writes": [
+  {
+   "when": "2026-11-14",
+   "by": "Claude via super-admin portal :3002 (session signed in by the user)",
+   "what": "Organisation",
+   "name": "AUDIT TR0042 (synthetic test)",
+   "code": "AUDITTR0042",
+   "legal_name": "Synthetic Test Run TR0042 (not a customer)",
+   "side_effects_reported_by_app": [
+    "default workspace",
+    "licence: Custom, 200,000 employee seats, 5,000 users, 50 sites, 10 workspaces, all modules, 2026-11-14 to 2027-11-14",
+    "main site TR0042-HQ",
+    "12 public holidays (box was unticked - see AUD-01)",
+    "first administrator invitation audit-admin-tr0042@wfm-test.example (link not used)",
+    "labour-law pack: India OSH Code 2020"
+   ],
+   "cleanup": "Delete the whole organisation AUDITTR0042 after the audit, with approval; confirm ORG counts equal the baseline above"
+  },
+  {
+   "when": "2026-11-14",
+   "by": "Claude in the test-org admin page (session signed in by the user); every call checked /auth/me tenant = a27e73cf-8151-4447-a402-795a177a6537",
+   "TEST_RUN_ID": "TR0042S50",
+   "what": "Stage 50",
+   "counts": {
+    "site": 1,
+    "skill": 9,
+    "group": 1,
+    "queue": 1,
+    "template": 1,
+    "team": 4,
+    "employees": 50,
+    "history_import_jobs": 2,
+    "history_rows": 5400,
+    "forecastVersion": 2,
+    "scheduleJob": 7,
+    "scheduleVersion": 7
+   },
+   "ids": {
+    "site": [
+     "439f3f82-5998-4473-b94a-b40d5ef21f8a"
+    ],
+    "group": [
+     "7b3079f5-a3ea-43b2-b235-bc5f76151492"
+    ],
+    "queue": [
+     "7972afe1-aa1c-498c-a220-f945bf0ad300"
+    ],
+    "template": [
+     "93c045ca-e35d-463b-a592-fa93a0fc85f7"
+    ],
+    "skill": [
+     "fc65ef51-ce37-444e-a14d-5be62209e303",
+     "8af7fa21-8efc-48db-8db1-d8ef39118af9",
+     "f9229422-e607-40a5-848d-c0672f7951a7",
+     "84491af3-c29a-4bf3-8584-c4515bd4312d",
+     "a832d522-d3ac-47a5-b46d-956ade88fc20",
+     "0eec4cbd-002e-409d-b2c8-445be387ee78",
+     "16be2c9a-544b-44e3-9390-859e4fe6ead3",
+     "1c3e9345-f1a1-447d-ba53-5efb36785745",
+     "250ddbd0-0c10-4f2d-b1ef-c5374483aff8"
+    ],
+    "team": [
+     "1670e3d3-8886-487a-9d90-e702ee2ad467",
+     "c813801e-1681-4504-8ec6-4d3931b6f82a",
+     "746ae400-3d22-4915-8d84-5499397a2e32",
+     "4cbba525-5ff8-43e3-aeb1-2cbb959a109a"
+    ],
+    "import": [
+     "dc708577-186d-45f2-b007-22210e2b6ebb",
+     "48c5c5c0-7e81-4ed0-b14a-c717dd539f91"
+    ],
+    "forecastVersion": [
+     "8a0194bd-3266-4bbe-88d6-863a3fae15c1",
+     "ea2af857-e3b6-4f1d-9814-f19f305e8e77"
+    ],
+    "scheduleVersion": [
+     "fd88d2c3-dfb0-4559-a8ca-3aa10b371c87",
+     "650f82fa-d872-4fdc-a75d-5a6b23b40aa5",
+     "61ee35cd-5f1d-4f73-8a8b-987609509819",
+     "13fc4b71-fb06-45aa-b786-99acae446837",
+     "67a154ae-9b0a-46c6-b004-7c1875e20beb",
+     "498d8404-f111-474a-9cb7-8e3365d1c6dc",
+     "(52w full: see report)"
+    ],
+    "employees": "employee_number TR0042S50-000001 .. TR0042S50-000050"
+   },
+   "published_schedules": 0,
+   "app_logins_created": 0,
+   "cleanup": "All inside org AUDITTR0042: deleting that organisation removes them; real org untouched"
+  },
+  {
+   "when": "2026-11-14",
+   "TEST_RUN_ID": "TR0042S500",
+   "what": "Stage 500",
+   "by": "Claude in the test-org admin page, tenant-guarded",
+   "counts": {
+    "site": 5,
+    "skill": 9,
+    "group": 5,
+    "queue": 5,
+    "template": 5,
+    "team": 35,
+    "employees": 500,
+    "history_import_jobs": 5,
+    "history_rows": 24560,
+    "forecastVersion": 10,
+    "scheduleJob": "27 run + 16 refused/blocked by my queue (never created)",
+    "scheduleVersion": 27
+   },
+   "names": "all prefixed TR0042S500-; employee numbers TR0042S500-000001 .. -000500",
+   "published_schedules": 0,
+   "app_logins_created": 0,
+   "cleanup": "inside org AUDITTR0042; deleting the organisation removes them"
+  }
+ ],
+ "local_generated_runs": [
+  {
+   "TEST_RUN_ID": "TR0042S50",
+   "location": "05-synthetic-data-generator/out/TR0042S50",
+   "loaded_anywhere": "server test org AUDITTR0042"
+  },
+  {
+   "TEST_RUN_ID": "TR0042S500",
+   "location": "05-synthetic-data-generator/out/TR0042S500",
+   "generator": "gen.cjs",
+   "loaded_anywhere": "server test org AUDITTR0042"
+  }
+ ]
+}

@@ -1,0 +1,119 @@
+{
+ "name": "TR0042S500-G004 1w solve1",
+ "weeks": 1,
+ "shifts": 453,
+ "people": 100,
+ "peopleWithShifts": 98,
+ "peopleWithoutShifts": 2,
+ "activeWithoutShifts": 0,
+ "hardRuleViolations": {},
+ "totalHardViolations": 0,
+ "examples": {},
+ "contractWeeks": {
+  "under": 13,
+  "exact": 10,
+  "over": 75
+ },
+ "avgPaidMinusContractH": 0.7,
+ "coverage4w": {
+  "requiredAgentSlots": 11088,
+  "metAgentSlots": 9224,
+  "coverage%": 83.19,
+  "shortAgentSlots": 1864,
+  "overAgentSlots": 4516,
+  "intervalsUnderstaffed": 84,
+  "intervalsWithDemand": 336
+ },
+ "coverageAppDefinition4w": {
+  "required": 15984,
+  "met": 12850,
+  "under": 3134,
+  "over": 1708,
+  "underIntervals": 111,
+  "coverage%": 80.39
+ },
+ "lastDay": "2026-11-22",
+ "appStats": {
+  "solver": {
+   "gap": 0.5831,
+   "bound": 1205790,
+   "parts": null,
+   "score": 2892608,
+   "advice": "CP-SAT made this roster and is the right solver for it; it was not proven the very best within the time given. More time may improve it a little.",
+   "people": 98,
+   "status": "FEASIBLE",
+   "backend": "cpsat",
+   "verdict": {
+    "note": "checked in 0.05s",
+    "valid": true,
+    "status": "VALIDATED_WITH_WARNINGS",
+    "checked": true,
+    "findings": [],
+    "softWarnings": 95,
+    "coverageStatus": "UNDERSTAFFED",
+    "hardViolations": 0
+   },
+   "wallSec": 33.22,
+   "attempts": [
+    "cpsat: feasible"
+   ],
+   "windowed": false,
+   "objective": 2892608,
+   "phasesSec": {
+    "solve": 35.3,
+    "load forecast": 0.1,
+    "optimise breaks": 0,
+    "candidate shifts": 0.2,
+    "write the report": 0,
+    "load people and rules": 0,
+    "place meals and breaks": 0,
+    "check rules and coverage": 0
+   },
+   "variables": 44494,
+   "candidates": 43218,
+   "scoreTerms": [
+    {
+     "name": "under",
+     "value": 2835000
+    },
+    {
+     "name": "over",
+     "value": 51960
+    },
+    {
+     "name": "contract_hours",
+     "value": 5600
+    },
+    {
+     "name": "fairness",
+     "value": 48
+    }
+   ],
+   "constraints": 2058,
+   "partitioned": false,
+   "partsOptimal": 0,
+   "deterministic": false,
+   "capabilityNotes": []
+  },
+  "coverage": {
+   "percent": 80.4,
+   "requiredSlots": 15984,
+   "underSlots": 3134,
+   "overSlots": 1716,
+   "underIntervals": 111,
+   "criticalIntervals": 84
+  },
+  "hours": {
+   "paid": 3641.5,
+   "overtime": 83,
+   "required": 3996,
+   "premium": 177
+  },
+  "shifts": 453,
+  "people": 98,
+  "violations": 0,
+  "warnings": 354,
+  "uncoveredDays": [],
+  "projectedDays": []
+ }
+}
