@@ -38,5 +38,7 @@ export function errorHandler(err: any, req: Request, res: Response, _next: NextF
   if (err?.code === '42501') message = 'That is outside the sites and regions you have access to.';
   if (err?.code === '23503') message = 'That is referenced by other records and cannot be changed this way.';
   if (status >= 500) console.error(`[http] ${req.method} ${req.path} ${req.requestId ?? ''}`, err);
-  res.status(status).json({ error: { code, message: status >= 500 && !(err instanceof HttpError) ? 'Internal error' : message, details: err?.details, requestId: req.requestId } });
+  // The engine's own failures (busy, not reachable, timed out, restarting) are written for the user and carry no internals, so they are shown; any other server fault stays "Internal error".
+  const userSafe = typeof err?.code === 'string' && /^ENGINE_(UNAVAILABLE|BUSY|CRASHED|TIMEOUT)$/.test(err.code);
+  res.status(status).json({ error: { code, message: status >= 500 && !(err instanceof HttpError) && !userSafe ? 'Internal error' : message, details: err?.details, requestId: req.requestId } });
 }
