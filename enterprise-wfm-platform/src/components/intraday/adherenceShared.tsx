@@ -24,6 +24,36 @@ export const useRefreshSetting = () => {
   return [sec, change] as const;
 };
 
+/** When a shift written "12:30–21:00" begins, as "12:30"; null when there is no shift. */
+export const shiftStartText = (shift: string | null) => (shift ? shift.split('–')[0] : null);
+
+/** Minutes from now until the shift starts, on that person's own clock (null when it has begun, or there is no shift). Only meaningful for today. */
+export function minutesToStart(shift: string | null, timeZone: string): number | null {
+  const s = shiftStartText(shift);
+  if (!s) return null;
+  try {
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+    const now = Number(p.find((x) => x.type === 'hour')?.value) * 60 + Number(p.find((x) => x.type === 'minute')?.value);
+    const start = Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
+    return start > now ? start - now : null;
+  } catch { return null; }
+}
+export const inText = (min: number) => (min < 60 ? `${min} min` : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}`);
+
+/**
+ * What a person is doing now. Before their shift starts it is still shown (grey, marked "before shift"), so someone who signed in early is not
+ * mistaken for nothing arriving; time before the shift is still not judged.
+ */
+export const ActualCell: React.FC<{ a: { actual: string; state: string | null; reason: string; stateSince: string | null }; before: boolean }> = ({ a, before }) => {
+  if (!a.state) return before ? <span className="text-[#6B6B6B]">Nothing received yet</span> : <div>{a.actual}</div>;
+  return (
+    <div className="leading-tight">
+      <div className={before ? 'text-[#6B6B6B]' : ''}>{a.actual}</div>
+      <div className="text-[12px] text-[#6B6B6B]">{a.state}{a.reason ? ` / ${a.reason}` : ''}{a.stateSince ? ` since ${a.stateSince}` : ''}{before ? ' · before shift' : ''}</div>
+    </div>
+  );
+};
+
 export const STATUS: Record<AdherenceStatus, { label: string; tone: 'good' | 'bad' | 'warn' | 'neutral' | 'info' }> = {
   IN: { label: 'In adherence', tone: 'good' }, OUT: { label: 'Out of adherence', tone: 'bad' }, UNSCHEDULED: { label: 'Unscheduled', tone: 'warn' },
   IGNORED: { label: 'Ignored', tone: 'neutral' }, UNKNOWN: { label: 'No state yet', tone: 'info' }, NOT_STARTED: { label: 'Not started', tone: 'neutral' }, SHIFT_ENDED: { label: 'Shift ended', tone: 'neutral' },
@@ -44,6 +74,8 @@ export const useActivityLooks = (activities: { status: string; category: string;
   useEffect(() => {
     const color: Record<string, string> = { ...SCHED_FALLBACK }, name: Record<string, string> = { ...SCHED_LABEL_FALLBACK }, seen = new Set<string>();
     for (const a of activities ?? []) if (a.status === 'ACTIVE' && !seen.has(a.category)) { seen.add(a.category); color[a.category] = a.color; name[a.category] = a.name; }
+    // a break or meal that was given the same colour as work could not be told apart on the bars: use its default colour instead
+    for (const k of Object.keys(color)) if (k !== 'WORK' && color[k].toLowerCase() === color.WORK.toLowerCase()) color[k] = SCHED_FALLBACK[k] ?? color[k];
     setLooks({ color, name });
   }, [activities]);
   return looks;

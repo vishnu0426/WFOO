@@ -39,13 +39,15 @@ export interface Policy {
   accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>;
   /** The team's supervisor decides first; escalateHours later the managers are told. Supervisors limited to their own teams' people when asked. */
   supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
+  /** Who besides team leads may see who in their team is working: MANAGERS (nobody else), PEERS_NOW (names on shift now) or PEERS_ROSTER (the week's roster). */
+  teamView: 'MANAGERS' | 'PEERS_NOW' | 'PEERS_ROSTER';
 }
 export async function loadSelfPolicy(tx: Tx): Promise<Policy> {
   await tx.exec('INSERT INTO self_service_policy (tenant_id, workspace_id) VALUES (:t, :w) ON CONFLICT (tenant_id, workspace_id) DO NOTHING');
   const r = (await tx.one<any>('SELECT * FROM self_service_policy WHERE tenant_id = :t AND workspace_id = :w'))!;
   return { timeOffAutoApprove: r.timeOffAutoApprove, timeOffMinNoticeDays: r.timeOffMinNoticeDays, timeOffMaxOffPercent: r.timeOffMaxOffPercent, entitlements: r.entitlements ?? {}, agentCanEditAvailability: r.agentCanEditAvailability,
     swapAutoApprove: r.swapAutoApprove, swapMaxExtraGapSlots: r.swapMaxExtraGapSlots, swapMinNoticeHours: r.swapMinNoticeHours, swapBoardHours: r.swapBoardHours,
-    accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false };
+    accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false, teamView: r.teamView ?? 'MANAGERS' };
 }
 const PolicyBody = z.object({
   timeOffAutoApprove: z.boolean(), timeOffMinNoticeDays: z.number().int().min(0).max(365), timeOffMaxOffPercent: z.number().int().min(0).max(100),
@@ -53,6 +55,7 @@ const PolicyBody = z.object({
   swapAutoApprove: z.boolean(), swapMaxExtraGapSlots: z.number().int().min(0).max(96), swapMinNoticeHours: z.number().int().min(0).max(720), swapBoardHours: z.number().int().min(1).max(720),
   accrualMode: z.enum(['UPFRONT', 'MONTHLY']).default('UPFRONT'), carryOverDays: z.record(z.enum(TYPES), z.number().min(0).max(366)).default({}),
   supervisorFirst: z.boolean().default(true), escalateHours: z.number().int().min(1).max(720).default(24), limitSupervisorsToTeams: z.boolean().default(false),
+  teamView: z.enum(['MANAGERS', 'PEERS_NOW', 'PEERS_ROSTER']).optional(),   // omitted by older clients: the saved choice stays
 });
 selfAdmin.get('/policy', requires('config:read'), async (req, res) => { res.json(await withTenant(me(req).tenantId, loadSelfPolicy)); });
 selfAdmin.put('/policy', requires('config:write'), async (req, res) => {
@@ -62,8 +65,8 @@ selfAdmin.put('/policy', requires('config:write'), async (req, res) => {
     await tx.exec(
       `UPDATE self_service_policy SET time_off_auto_approve = $1, time_off_min_notice_days = $2, time_off_max_off_percent = $3, entitlements = $4, agent_can_edit_availability = $5,
          swap_auto_approve = $6, swap_max_extra_gap_slots = $7, swap_min_notice_hours = $8, swap_board_hours = $9, accrual_mode = $10, carry_over_days = $11,
-         supervisor_first = $12, escalate_hours = $13, limit_supervisors_to_teams = $14, updated_at = now() WHERE tenant_id = :t`,
-      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours, b.accrualMode, JSON.stringify(b.carryOverDays), b.supervisorFirst, b.escalateHours, b.limitSupervisorsToTeams]);
+         supervisor_first = $12, escalate_hours = $13, limit_supervisors_to_teams = $14, team_view = coalesce($15, team_view), updated_at = now() WHERE tenant_id = :t`,
+      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours, b.accrualMode, JSON.stringify(b.carryOverDays), b.supervisorFirst, b.escalateHours, b.limitSupervisorsToTeams, b.teamView ?? null]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SELF_SERVICE_POLICY', entityId: 'policy', entityName: 'Self-service rules', before, after: b });
     return loadSelfPolicy(tx);
   });

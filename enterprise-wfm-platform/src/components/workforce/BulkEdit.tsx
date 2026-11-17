@@ -11,13 +11,61 @@ type Result = { updated: number; skipped: { id: string; name: string; reason: st
 const slotOfTime = (t: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim()); return m ? Math.min(95, Math.floor((+m[1] * 60 + +m[2]) / 15)) : null; };
 
 /** One thing that can be changed: a checkbox to opt in, then the control. */
-const Row: React.FC<{ on: boolean; toggle: () => void; label: string; hint?: string; children: React.ReactNode }> = ({ on, toggle, label, hint, children }) => (
+const Row: React.FC<{ on: boolean; toggle: () => void; label: string; hint?: string; /** the label already says what happens ("Add skills"), so it is not prefixed with "Change" */ plain?: boolean; children: React.ReactNode }> = ({ on, toggle, label, hint, plain, children }) => (
   <div className={`rounded-md border p-2.5 ${on ? 'border-[#171717] bg-white' : 'border-[#E5E5E0] bg-[#FAFAF8]'}`}>
-    <label className="flex items-center gap-2 text-[12px] font-semibold cursor-pointer"><input type="checkbox" checked={on} onChange={toggle} />Change {label.toLowerCase()}</label>
+    <label className="flex items-center gap-2 text-[12px] font-semibold cursor-pointer"><input type="checkbox" checked={on} onChange={toggle} />{plain ? label : `Change ${label[0].toLowerCase()}${label.slice(1)}`}</label>
     {hint && <div className="text-[11px] text-[#6B6B6B] ml-6">{hint}</div>}
     <div className={`mt-1.5 ${on ? '' : 'opacity-40 pointer-events-none'}`}>{children}</div>
   </div>
 );
+
+/**
+ * A long list to tick from (groups, skills): what is ticked shows as chips at the top, a search box narrows the list, and the list scrolls inside
+ * its own box instead of running down the page. `levels` adds a 1 to 5 level to each row, for skills.
+ */
+const MultiPick: React.FC<{
+  items: { id: string; name: string }[]; selected: string[]; onChange: (ids: string[]) => void; empty: string;
+  levels?: { value: Record<string, number>; onChange: (id: string, level: number) => void };
+}> = ({ items, selected, onChange, empty, levels }) => {
+  const [q, setQ] = useState('');
+  if (items.length === 0) return <span className="text-[12px] text-[#6B6B6B]">{empty}</span>;
+  const shown = items.filter((i) => i.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const name = (id: string) => items.find((i) => i.id === id)?.name ?? id;
+  const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  return (
+    <div className="space-y-2">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map((id) => (
+            <span key={id} className="inline-flex items-center gap-1 rounded-full bg-[#171717] text-white text-[12px] pl-2.5 pr-1.5 py-0.5">
+              {name(id)}{levels ? ` · ${levels.value[id] ?? 3}` : ''}
+              <button type="button" onClick={() => toggle(id)} aria-label={`Remove ${name(id)}`} className="px-0.5 opacity-80 hover:opacity-100">×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Input placeholder={`Search ${items.length}…`} value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="shrink-0 text-[11px] text-[#525252] whitespace-nowrap">
+          {q.trim() && shown.length > 0 && <button type="button" className="underline mr-2" onClick={() => onChange([...selected, ...shown.map((i) => i.id).filter((id) => !selected.includes(id))])}>Select all {shown.length} shown</button>}
+          {selected.length > 0 && <button type="button" className="underline" onClick={() => onChange([])}>Clear</button>}
+        </span>
+      </div>
+      <div className="max-h-44 overflow-y-auto rounded border border-[#E5E5E0] bg-white p-1.5">
+        {shown.length === 0 ? <div className="px-1 py-1 text-[12px] text-[#6B6B6B]">No match.</div> : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3">
+            {shown.map((i) => (
+              <div key={i.id} className="flex items-center gap-2 py-1 text-[13px]">
+                <label className="flex flex-1 min-w-0 items-center gap-1.5 cursor-pointer"><input type="checkbox" checked={selected.includes(i.id)} onChange={() => toggle(i.id)} /><span className="truncate" title={i.name}>{i.name}</span></label>
+                {levels && <select disabled={!selected.includes(i.id)} value={levels.value[i.id] ?? 3} onChange={(e) => levels.onChange(i.id, Number(e.target.value))} aria-label={`Level for ${i.name}`} className="border border-[#E5E5E0] rounded p-0.5 text-[12px] disabled:opacity-40">{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const BulkEdit: React.FC<{
   people: { id: string; name: string }[]; groups: { id: string; name: string }[]; teams: Team[]; skills: Skill[]; templates: ShiftTemplate[];
@@ -43,7 +91,6 @@ export const BulkEdit: React.FC<{
   const [result, setResult] = useState<Result | null>(null);
   const [progress, setProgress] = useState('');
 
-  const toggleIn = (list: string[], set: (x: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const activeSkills = skills.filter((s) => s.status === 'ACTIVE');
 
   const changes: Record<string, unknown> = {};
@@ -114,26 +161,19 @@ export const BulkEdit: React.FC<{
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Row on={!!on.addGroups} toggle={() => flip('addGroups')} label="Add WFM groups they can also cover" hint="Their other groups stay">
-          <div className="flex flex-wrap gap-3 text-[13px]">{groups.map((g) => <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={addGroups.includes(g.id)} onChange={() => toggleIn(addGroups, setAddGroups, g.id)} />{g.name}</label>)}</div>
+        <Row plain on={!!on.addGroups} toggle={() => flip('addGroups')} label="Add WFM groups they can also cover" hint="Their other groups stay">
+          <MultiPick items={groups} selected={addGroups} onChange={setAddGroups} empty="No WFM groups yet." />
         </Row>
-        <Row on={!!on.removeGroups} toggle={() => flip('removeGroups')} label="Remove WFM groups they can cover" hint="A person is always eligible for their main group">
-          <div className="flex flex-wrap gap-3 text-[13px]">{groups.map((g) => <label key={g.id} className="flex items-center gap-1.5"><input type="checkbox" checked={removeGroups.includes(g.id)} onChange={() => toggleIn(removeGroups, setRemoveGroups, g.id)} />{g.name}</label>)}</div>
+        <Row plain on={!!on.removeGroups} toggle={() => flip('removeGroups')} label="Remove WFM groups they can cover" hint="A person is always eligible for their main group">
+          <MultiPick items={groups} selected={removeGroups} onChange={setRemoveGroups} empty="No WFM groups yet." />
         </Row>
-        <Row on={!!on.addSkills} toggle={() => flip('addSkills')} label="Add skills" hint="Sets the level if they already have it">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-            {activeSkills.map((s) => (
-              <div key={s.id} className="flex items-center gap-2 text-[13px]">
-                <input type="checkbox" checked={s.id in addSkills} onChange={(e) => { const next = { ...addSkills }; if (e.target.checked) next[s.id] = 3; else delete next[s.id]; setAddSkills(next); }} />
-                <span className="flex-1">{s.name}</span>
-                <select disabled={!(s.id in addSkills)} value={addSkills[s.id] ?? 3} onChange={(e) => setAddSkills({ ...addSkills, [s.id]: Number(e.target.value) })} className="border border-[#E5E5E0] rounded p-1 text-[12px] disabled:opacity-40">{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select>
-              </div>
-            ))}
-            {activeSkills.length === 0 && <span className="text-[12px] text-[#6B6B6B]">No skills defined yet.</span>}
-          </div>
+        <Row plain on={!!on.addSkills} toggle={() => flip('addSkills')} label="Add skills" hint="Sets the level if they already have it">
+          <MultiPick items={activeSkills} selected={Object.keys(addSkills)} empty="No skills defined yet."
+            onChange={(ids) => setAddSkills(Object.fromEntries(ids.map((id) => [id, addSkills[id] ?? 3])))}
+            levels={{ value: addSkills, onChange: (id, level) => setAddSkills({ ...addSkills, [id]: level }) }} />
         </Row>
-        <Row on={!!on.removeSkills} toggle={() => flip('removeSkills')} label="Remove skills">
-          <div className="flex flex-wrap gap-3 text-[13px]">{activeSkills.map((s) => <label key={s.id} className="flex items-center gap-1.5"><input type="checkbox" checked={removeSkills.includes(s.id)} onChange={() => toggleIn(removeSkills, setRemoveSkills, s.id)} />{s.name}</label>)}</div>
+        <Row plain on={!!on.removeSkills} toggle={() => flip('removeSkills')} label="Remove skills">
+          <MultiPick items={activeSkills} selected={removeSkills} onChange={setRemoveSkills} empty="No skills defined yet." />
         </Row>
       </div>
 

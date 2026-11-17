@@ -53,10 +53,15 @@ export type Offer = {
 
 /** What the Schedule day-detail panel hands off when the person wants to act on a specific day -- carried through
     App -> Requests -> the relevant sub-tab, which pre-fills its form from it instead of starting blank. */
-export type RequestPrefill = { tab: 'timeoff'; date: string } | { tab: 'swaps'; shiftId: string };
+export type RequestPrefill = { tab: 'timeoff'; date?: string } | { tab: 'swaps'; shiftId?: string } | { tab: 'opportunities' };
 
 export type BidPattern = { id: string; name: string; days: string[]; startTime: string; endTime: string; overnight: boolean; paidHours: number; capacity: number; templateName: string | null; fits: boolean; why: string };
 export type Bid = {
   id: string; groupId: string; groupName: string; name: string; status: 'OPEN' | 'CLOSED' | 'AWARDED'; method: string; periodStart: string; weeks: number; closesAt: string | null;
-  patterns: BidPattern[]; myRanking: string[]; myAward: { patternId: string; patternName: string; rank: number } | null;
+  patterns: BidPattern[]; myRanking: string[]; myAward: { patternId: string | null; patternName: string | null; rank: number | null } | null;
 };
+
+/** What a team lead may decide from the portal: time-off and swap requests waiting for them. */
+export type ApprovalTimeOff = TimeOff & { employeeName: string; team: string | null; teamSize: number; teamOff: number; escalated: boolean };
+export type ApprovalSwap = Swap & { warnings: string[]; escalated: boolean };
+export type Approvals = { access: boolean; timeOff: ApprovalTimeOff[]; swaps: ApprovalSwap[]; truncated: boolean };

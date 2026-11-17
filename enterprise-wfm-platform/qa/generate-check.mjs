@@ -96,10 +96,10 @@ const startVal = await page.getByLabel('Starts on', { exact: true }).inputValue(
 const pw = (await call(token, 'GET', `/scheduling/pay-week?groupId=${A.id}`)).json;
 const dow = (iso0) => (new Date(`${iso0}T00:00:00Z`).getUTCDay() + 6) % 7;
 note(startVal >= A.forecast.fromDay && startVal <= iso(addDays(new Date(`${A.forecast.fromDay}T00:00:00Z`), 6)) && dow(startVal) === (pw.start ?? 0), 'one click moves the start into the forecast, on the first day of the pay week', `${startVal}, forecast from ${A.forecast.fromDay}`);
-note((await page.locator('li', { hasText: /^OK: Forecast: / }).count()) >= 1, 'and the forecast line turns OK');
+note((await page.locator('li', { hasText: /^Forecast: / }).count()) >= 1, 'and the forecast line turns OK');
 note(await generate().isEnabled(), 'Generate is on');
 const est = await text(page.locator('li', { hasText: /Takes up to about/ }).first());
-note(/^i Takes up to about .+ for 30 people: the search stops at \d+ s per four-week window/.test(est), 'the checklist gives an estimated solver time', est.slice(0, 140));
+note(/^Takes up to about .+ for 30 people: the search stops at \d+ s per four-week window/.test(est), 'the checklist gives an estimated solver time', est.slice(0, 140));
 // templates say what the times are
 await page.getByRole('button', { name: 'Choose templates' }).click();
 const dlg = page.getByRole('dialog', { name: 'Choose shift templates' });

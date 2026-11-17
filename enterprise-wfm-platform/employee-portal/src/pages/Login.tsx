@@ -6,7 +6,8 @@
  */
 import React, { useEffect, useState } from 'react';
 import { api, ApiError, Session, storeSession } from '../api';
-import { Banner, Btn, Field, Input, Modal } from '../ui';
+import { Banner, Btn, Field, Input, PasswordInput } from '../ui';
+import { ForgotPassword } from './ForgotPassword';
 import { infoUrl, loginMode, startUrl, type SsoInfo } from '../sso';
 import { orgFromAddress, type OrgSource } from '../orgAddress';
 
@@ -26,6 +27,7 @@ export const Login: React.FC<{ onLogin: (s: Session) => void; initialError?: str
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError ?? '');
+  const [done, setDone] = useState('');
   const [sso, setSso] = useState<SsoInfo | null>(null);
   const [adminForm, setAdminForm] = useState(false);
   const [finder, setFinder] = useState(false);                 // "find my organisation by email" is open
@@ -113,6 +115,7 @@ export const Login: React.FC<{ onLogin: (s: Session) => void; initialError?: str
             <div className="text-[11px] text-[#6B6B6B]">Your schedule, time off, swaps and offers</div>
           </div>
         </div>
+        {done && !error && <Banner kind="ok" onClose={() => setDone('')}>{done}</Banner>}
         {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
         {mode === 'blocked' && <Banner kind="err">Your organisation signs in with single sign-on, but this portal has not been set up for it yet. Ask your administrator.</Banner>}
 
@@ -157,8 +160,8 @@ export const Login: React.FC<{ onLogin: (s: Session) => void; initialError?: str
         )}
         {showForm && (
           <>
-          <Field label="Username" hint={known ? 'Your username, or your work email' : undefined}><Input value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" autoFocus={!!known} /></Field>
-          <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+          <Field label="Username" hint={known ? 'Your username, or your work email' : undefined}><Input value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" autoComplete="username" autoFocus={!!known} /></Field>
+          <Field label="Password"><PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></Field>
           <Btn variant="primary" type="submit" disabled={busy || resolving || !username.trim() || !password || (!known && !!opts && !tenant.trim())} className="w-full">{busy ? 'Signing in…' : 'Sign in'}</Btn>
           </>
         )}
@@ -166,15 +169,7 @@ export const Login: React.FC<{ onLogin: (s: Session) => void; initialError?: str
         {mode === 'blocked' && !adminForm && <button type="button" onClick={() => setAdminForm(true)} className="block w-full text-center text-[12px] text-[#6B6B6B] hover:text-accent underline">Administrator sign-in</button>}
         {showForm && <button type="button" onClick={() => setForgot(true)} className="block w-full text-center text-[12px] text-[#6B6B6B] hover:text-accent underline">Forgot your password?</button>}
       </form>
-      {forgot && (
-        <Modal title="Forgot your password?" onClose={() => setForgot(false)}>
-          <p className="text-[13px] text-[#525252]">
-            Passwords for this portal are reset by your WFM administrator or team lead, not by email. Reach out to them with your employee number and
-            they can issue you a new temporary password to sign in with — you can then set your own from <span className="font-semibold">Me &rarr; Password</span>.
-          </p>
-          <Btn variant="primary" className="w-full mt-4" onClick={() => setForgot(false)}>Got it</Btn>
-        </Modal>
-      )}
+      {forgot && <ForgotPassword org={orgCode} username={username} onClose={() => setForgot(false)} onDone={(u) => { setForgot(false); setUsername(u); setPassword(''); setError(''); setDone('Your password is changed. Sign in with the new one.'); }} />}
     </div>
   );
 };

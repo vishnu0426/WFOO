@@ -6,7 +6,7 @@
  * on the right that checks readiness before any solver time is spent and holds the Generate button.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Sparkles, XCircle } from 'lucide-react';
 import { addDays, api, ConsistentTimes, CoverageWindow, dayYear, dec, dowOfDay, Employee, nextWeekStart, ScheduleJob, RotationPattern, ScheduleVersion, SchedulingPolicy, ShiftTemplate, VersionMeta } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi, usePayWeek } from '../forecasting/hooks';
@@ -42,7 +42,7 @@ const hhmm = (t: string) => { const [h, m] = t.split(':').map(Number); return h 
 
 type SharedGroup = { versionId: string; name: string; groupName: string; people: number; examples: { name: string; days: number }[] };
 type Readiness = { guests?: { name: string; people: number; scheduled: boolean }[]; shared?: { published: SharedGroup[]; drafts: SharedGroup[]; people: number }; requiredHours: number | null; peakPeople: number | null; uncoveredDays: string[]; projectedDays: string[]; problem: string | null; payWeek: { start: number; source: 'GROUP' | 'COMPANY' | 'DEFAULT'; companyStart: number }; horizon?: { weekStart: string; source: string; confidence: string }[]; estimate?: { people: number; windows: number; seconds: number }; confidenceNote?: string | null };
-type Item = { ok: boolean | 'info'; /** shown as a caution, but does not stop the build */ warn?: boolean; text: string; action?: { label: string; onClick: () => void }; /** what would put it right, one button each (the first is the main fix) */ actions?: { label: string; onClick: () => void }[] };
+type Item = { ok: boolean | 'info'; /** shown as a caution, but does not stop the build */ warn?: boolean; text: string; /** a short headline and one line; `text` then becomes the explanation behind "Details" */ title?: string; short?: string; action?: { label: string; onClick: () => void }; /** what would put it right, one button each (the first is the main fix) */ actions?: { label: string; onClick: () => void }[] };
 
 export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (v: ScheduleVersion) => void; go: (sub: string) => void }> = ({ versions, onCreated, go }) => {
   const { group, can, go: goModule } = useForecast();
@@ -184,18 +184,18 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     const note = crewNote({ people: includedCount, contractHours, neededHours: needHours });
     if (note) {
       // far more contract time than the forecast needs: said before the build, not only after it
-      items.push({ ok: 'info', warn: true, text: note.text, actions: (w.contractHours ?? 0) > 40 ? [{ label: 'Lower "Meet contract hours"', onClick: () => { setW({ ...w, contractHours: 40 }); setCustom(true); } }] : undefined });
+      items.push({ ok: 'info', warn: true, text: note.text, title: 'Contracts exceed demand', short: `${Math.round(contractHours).toLocaleString('en-US')} h contracted, about ${Math.round(needHours).toLocaleString('en-US')} h needed. About ${note.neededPeople} of ${includedCount} people would cover it.`, actions: (w.contractHours ?? 0) > 40 ? [{ label: 'Lower "Meet contract hours"', onClick: () => { setW({ ...w, contractHours: 40 }); setCustom(true); } }] : undefined });
     } else items.push(diff >= 0
       ? { ok: true, text: `Needs ${Math.round(needHours).toLocaleString()} h; contracts give ${Math.round(contractHours).toLocaleString()} h (${pct}% to spare)` }
       : { ok: false, text: `Needs ${Math.round(needHours).toLocaleString()} h but contracts give only ${Math.round(contractHours).toLocaleString()} h: expect a shortfall` });
   }
   // too many shift choices for the optimiser: said before the build, not only after it
   const searchNote = includedCount && chosen.length ? optionsNote(optionEstimate({ people: includedCount, days: weeks * 7, templates: chosen })) : null;
-  if (searchNote) items.push({ ok: 'info', warn: true, text: searchNote });
-  for (const g of readiness.data?.guests ?? []) items.push({ ok: g.scheduled || guestsMode === 'ALWAYS' ? 'info' : false, text: `${g.people} ${g.people === 1 ? 'person' : 'people'} from ${g.name} (their home group) can work here. ${guestsMode === 'ALWAYS' ? 'They are used even if their home group is not scheduled.' : g.scheduled ? 'They get the time their home group leaves free.' : 'Their home group has no schedule for these dates yet, so they are held back until it has one.'}` });
+  if (searchNote) items.push({ ok: 'info', warn: true, text: searchNote, title: 'Large search', short: 'The roster may be rough. Fewer templates, start times or people will help.' });
+  for (const g of readiness.data?.guests ?? []) items.push({ ok: g.scheduled || guestsMode === 'ALWAYS' ? 'info' : false, title: g.scheduled || guestsMode === 'ALWAYS' ? `${g.people} from ${g.name} can work here` : `${g.people} ${g.people === 1 ? 'person' : 'people'} held back (from ${g.name})`, short: guestsMode === 'ALWAYS' ? 'Used even if their home group is not scheduled' : g.scheduled ? 'They get the time their home group leaves free' : 'Their home group has no schedule for these dates yet', text: `${g.people} ${g.people === 1 ? 'person' : 'people'} from ${g.name} (their home group) can work here. ${guestsMode === 'ALWAYS' ? 'They are used even if their home group is not scheduled.' : g.scheduled ? 'They get the time their home group leaves free.' : 'Their home group has no schedule for these dates yet, so they are held back until it has one.'}` });
   const sharedWho = (g: SharedGroup) => `${g.examples.map((e) => e.name).join(', ')}${g.people > g.examples.length ? ` and ${g.people - g.examples.length} more` : ''}`;
-  for (const g of readiness.data?.shared?.drafts ?? []) items.push({ ok: false, text: `Another draft (${g.groupName}) plans ${g.people} of the same ${g.people === 1 ? 'person' : 'people'} for these dates: ${sharedWho(g)}. Whichever is published first takes them.` });
-  for (const g of readiness.data?.shared?.published ?? []) items.push({ ok: 'info', text: `${g.groupName} has published shifts for ${g.people} of this group's ${g.people === 1 ? 'person' : 'people'} in these dates (${sharedWho(g)}). That time counts toward their limits here.` });
+  for (const g of readiness.data?.shared?.drafts ?? []) items.push({ ok: false, title: `${g.people} ${g.people === 1 ? 'person is' : 'people are'} also in the ${g.groupName} draft`, short: 'Whichever draft is published first gets them', text: `Another draft (${g.groupName}) plans ${g.people} of the same ${g.people === 1 ? 'person' : 'people'} for these dates: ${sharedWho(g)}. Whichever is published first takes them.` });
+  for (const g of readiness.data?.shared?.published ?? []) items.push({ ok: 'info', title: `${g.groupName} has published shifts for ${g.people} of them`, short: 'That time counts toward their limits here', text: `${g.groupName} has published shifts for ${g.people} of this group's ${g.people === 1 ? 'person' : 'people'} in these dates (${sharedWho(g)}). That time counts toward their limits here.` });
   if (readiness.data?.uncoveredDays.length) {
     const uf = coverageSource === 'FORECAST' ? uncoveredFix(readiness.data.uncoveredDays, published, weekStart) : null;
     items.push({ ok: false, text: `No staffing target for ${readiness.data.uncoveredDays.length} day${readiness.data.uncoveredDays.length === 1 ? '' : 's'}`, actions: uf ? [uf.kind === 'START' ? { label: uf.label, onClick: () => setFrom(uf.startDay) } : { label: uf.label, onClick: () => goModule('forecast-builder', 'forecasting') }] : undefined });
@@ -208,10 +208,16 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     if (readiness.data.confidenceNote) items.push({ ok: 'info', text: readiness.data.confidenceNote });
   }
   items.push(misaligned
-    ? { ok: false, text: `Starts on a ${WEEKDAYS[startDow]} but the pay week starts on ${WEEKDAYS[weekStart]}: people may not reach full contract hours`, action: { label: `Use ${WEEKDAYS[startDow]} week`, onClick: () => setWeekStart(startDow) } }
+    ? { ok: false, title: 'Pay week does not match the start day', short: `The schedule starts on ${WEEKDAYS[startDow]}, the pay week on ${WEEKDAYS[weekStart]}`, text: `Starts on a ${WEEKDAYS[startDow]} but the pay week starts on ${WEEKDAYS[weekStart]}: people may not reach full contract hours`, action: { label: `Use ${WEEKDAYS[startDow]} week`, onClick: () => setWeekStart(startDow) } }
     : { ok: true, text: `Pay week starts on ${WEEKDAYS[weekStart]}, the same day the schedule starts` });
   if (weeks === 1 && !hasPriorPublished && !repeat) items.push({ ok: 'info', text: 'No published schedule before this date, so nobody carries a night shift into the first day', action: { label: 'Assume the week repeats', onClick: () => { setRepeat(true); setAdvanced(true); } } });
   if (gaps.length) items.push({ ok: 'info', text: `No chosen template covers ${gaps.slice(0, 3).join(', ')}. Fine if the phones are closed then.` });
+
+  // the checklist in three groups: things to fix, things worth a look, and what is fine
+  const attention = items.filter((i) => i.ok === false);
+  const worth = items.filter((i) => i.ok === 'info' && i.warn);
+  const passed = items.filter((i) => i.ok === true || (i.ok === 'info' && !i.warn));
+  const review = attention.length + worth.length;
 
   const run = async () => {
     if (!group) return;
@@ -510,15 +516,20 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
 
         {rotChoice !== 'ROTATION' && <div className="lg:sticky lg:top-4 space-y-3">
           <Card title="Ready to generate?" sub={`${fmtShort(from)} to ${fmtShort(to)} · ${includedCount} people · ${chosen.length} template${chosen.length === 1 ? '' : 's'}`}>
-            <ul className="space-y-1.5 text-[12px]">
-              {items.map((it, i) => (
-                <li key={i} className="flex items-start justify-between gap-2">
-                  <span className={it.ok === true ? 'text-[#2A7553]' : it.ok === 'info' && !it.warn ? 'text-[#525252]' : 'text-[#8F6200] font-medium'}>{it.ok === true ? 'OK: ' : it.ok === 'info' && !it.warn ? 'i ' : '! '}{it.text}</span>
-                  {it.action && <button type="button" className="underline shrink-0" onClick={it.action.onClick}>{it.action.label}</button>}
-                  {it.actions && it.actions.length > 0 && <span className="flex shrink-0 flex-col items-end gap-1">{it.actions.map((a, j) => <button key={a.label} type="button" data-fix={j === 0 ? 'main' : 'other'} className={j === 0 ? 'rounded border border-[#171717] bg-[#171717] px-2 py-0.5 text-[11px] font-medium text-white hover:bg-[#333]' : 'rounded border border-[#E5E5E0] bg-white px-2 py-0.5 text-[11px] font-medium text-[#171717] hover:bg-[#FAFAF8]'} onClick={a.onClick}>{a.label}</button>)}</span>}
-                </li>
-              ))}
-            </ul>
+            <div className="flex items-center gap-2 rounded-md px-3 py-2 text-[13px] font-semibold" data-testid="verdict" style={{ backgroundColor: !ready ? '#FBEDED' : review ? '#FDF3DC' : '#E6F4EC', color: !ready ? '#9B2C2C' : review ? '#8F6200' : '#2A7553' }}>
+              {!ready ? <XCircle className="w-4 h-4 shrink-0" /> : review ? <AlertTriangle className="w-4 h-4 shrink-0" /> : <CheckCircle2 className="w-4 h-4 shrink-0" />}
+              {!ready ? `Not ready${attention.length ? ` · ${attention.length} to fix` : ''}` : review ? `Ready · ${review} to review` : 'Ready'}
+            </div>
+            <div className="max-h-[46vh] overflow-y-auto space-y-3 pr-1">
+              {attention.length > 0 && <CheckGroup label="Needs attention">{attention.map((it, i) => <CheckRow key={i} it={it} tone="bad" />)}</CheckGroup>}
+              {worth.length > 0 && <CheckGroup label="Worth a look">{worth.map((it, i) => <CheckRow key={i} it={it} tone="warn" />)}</CheckGroup>}
+              {passed.length > 0 && (
+                <details className="group">
+                  <summary className="cursor-pointer list-none flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-[#6B6B6B]"><ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />All good · {passed.length}</summary>
+                  <ul className="mt-2 space-y-1.5">{passed.map((it, i) => <CheckRow key={i} it={it} tone={it.ok === true ? 'ok' : 'info'} />)}</ul>
+                </details>
+              )}
+            </div>
             {error && <Banner kind="err">{error}</Banner>}
             {busy && (
               <div className="space-y-1.5" role="status">
@@ -540,6 +551,31 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
         </div>}
       </div>
     </div>
+  );
+};
+
+const CheckGroup: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div>
+    <div className="text-[11px] font-bold uppercase tracking-wide text-[#6B6B6B] mb-1.5">{label}</div>
+    <ul className="space-y-2">{children}</ul>
+  </div>
+);
+
+/** One check: an icon, a short headline and line, the fix button underneath, and the long explanation behind "Details". */
+const CheckRow: React.FC<{ it: Item; tone: 'bad' | 'warn' | 'ok' | 'info' }> = ({ it, tone }) => {
+  const Icon = tone === 'bad' ? XCircle : tone === 'warn' ? AlertTriangle : tone === 'ok' ? CheckCircle2 : Info;
+  const color = tone === 'bad' ? 'text-[#BC3F3F]' : tone === 'warn' ? 'text-[#B7791F]' : tone === 'ok' ? 'text-[#2A7553]' : 'text-[#6B6B6B]';
+  const acts = it.actions && it.actions.length ? it.actions : it.action ? [it.action] : [];
+  return (
+    <li className="flex items-start gap-2 text-[12px]">
+      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${color}`} aria-hidden />
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="font-medium text-[#171717]">{it.title ?? it.text}</div>
+        {it.title && it.short && <div className="text-[#525252]">{it.short}</div>}
+        {it.title && <details className="text-[#6B6B6B]"><summary className="cursor-pointer text-[11px] underline list-none">Details</summary><p className="mt-1">{it.text}</p></details>}
+        {acts.length > 0 && <div className="flex flex-wrap gap-1.5 pt-0.5">{acts.map((a, j) => <button key={a.label} type="button" data-fix={j === 0 ? 'main' : 'other'} className={j === 0 ? 'rounded border border-[#171717] bg-[#171717] px-2 py-0.5 text-[11px] font-medium text-white hover:bg-[#333]' : 'rounded border border-[#E5E5E0] bg-white px-2 py-0.5 text-[11px] font-medium text-[#171717] hover:bg-[#FAFAF8]'} onClick={a.onClick}>{a.label}</button>)}</div>}
+      </div>
+    </li>
   );
 };
 

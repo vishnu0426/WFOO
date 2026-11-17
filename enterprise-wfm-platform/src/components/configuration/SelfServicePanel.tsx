@@ -15,6 +15,7 @@ type Policy = {
   swapAutoApprove: boolean; swapMaxExtraGapSlots: number; swapMinNoticeHours: number; swapBoardHours: number;
   accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>;
   supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
+  teamView?: 'MANAGERS' | 'PEERS_NOW' | 'PEERS_ROSTER';
 };
 const TYPES: { id: string; label: string }[] = [
   { id: 'VACATION', label: 'Vacation' }, { id: 'SICK', label: 'Sick leave' }, { id: 'PERSONAL', label: 'Personal' }, { id: 'HOLIDAY', label: 'Holiday' },
@@ -172,6 +173,18 @@ export const SelfServicePanel: React.FC = () => {
           <Field label="Supervisors see only their own teams" hint="Off: they can read everyone, but only decide their own team's requests"><Select disabled={!canWrite} value={yesNo(d.limitSupervisorsToTeams)} onChange={(e) => set('limitSupervisorsToTeams', e.target.value === 'yes')}><option value="yes">Yes</option><option value="no">No</option></Select></Field>
         </div>
         {d.limitSupervisorsToTeams && <p className="text-[12px] text-[#B7791F]">Before you switch this on, check every Supervisor is set as the supervisor or deputy of a team on the Teams screen. A Supervisor with no team would see nobody. The schedule and coverage views stay group-wide.</p>}
+      </Card>
+
+      <Card title="Who can see the team" sub="The Team page in the employee portal and app shows who is working today. A team's supervisor, deputy or cover, and a group's manager, always see their own people, including who is on leave and what kind. This sets what everyone else sees, for their own team only.">
+        <div className="max-w-xl">
+          <Field label="Colleagues can see" hint="Nobody is ever told that a colleague is on leave: it shows as off.">
+            <Select disabled={!canWrite} value={d.teamView ?? 'MANAGERS'} onChange={(e) => set('teamView', e.target.value as Policy['teamView'])}>
+              <option value="MANAGERS">Nothing: only team leads (recommended)</option>
+              <option value="PEERS_NOW">Who in their team is on shift right now, names only</option>
+              <option value="PEERS_ROSTER">Their team's roster for the next week</option>
+            </Select>
+          </Field>
+        </div>
       </Card>
 
       {canWrite && <div><Btn variant="primary" onClick={save}>Save rules</Btn></div>}

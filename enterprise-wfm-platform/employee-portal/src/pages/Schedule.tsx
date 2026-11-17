@@ -1,7 +1,7 @@
 /** A real week grid -- seven day columns side by side, shift blocks colored by activity (the same colours the admin
  * Schedule Timeline uses), matching how Calabrio and most shift-scheduling products show "my schedule". */
 import React, { useEffect, useState } from 'react';
-import { DaySummary, RequestPrefill } from '../types';
+import { DaySummary, Profile, RequestPrefill } from '../types';
 import { useLoad, Card, Busy, Banner, Btn, Modal, Pill, hm, dayLabel, todayIso, addDays, contrastText } from '../ui';
 
 /** First day of the pay week `iso` falls in. weekStart: Monday 0 ... Sunday 6, the day this person's pay week begins on. */
@@ -29,6 +29,28 @@ const shiftProgress = (d: DaySummary, now: Date): number | null => {
   if (nowMin < startMin || nowMin > endMin) return null;
   return Math.max(0, Math.min(100, ((nowMin - startMin) / (endMin - startMin)) * 100));
 };
+
+/** One day as a row of the list view: date, then the shift, leave, rest day or "not published". */
+const AgendaRow: React.FC<{ d: DaySummary; isToday: boolean; onClick: () => void }> = ({ d, isToday, onClick }) => (
+  <button onClick={onClick} className={`w-full flex items-center gap-3 text-left px-3 py-2.5 border-b border-[#F0F0EC] last:border-b-0 hover:bg-[#FAFAF8] ${isToday ? 'bg-accent-bg' : ''}`}>
+    <div className="w-14 shrink-0 text-center">
+      <div className={`text-[10px] font-semibold uppercase tracking-wider ${isToday ? 'text-accent' : 'text-[#6B6B6B]'}`}>{weekday(d.day)}</div>
+      <div className={`text-[16px] font-bold ${isToday ? 'text-accent' : 'text-[#171717]'}`}>{dayNum(d.day)}</div>
+    </div>
+    {d.timeOff ? (
+      <div className="text-[13px] text-[#171717]"><span className="font-semibold">{titleCase(d.timeOff.type.replace(/_/g, ' '))}</span> <span className="text-[#6B6B6B]">· {d.timeOff.status.toLowerCase()}</span></div>
+    ) : d.shift ? (
+      <div className="flex-1 min-w-0 flex items-center gap-3">
+        <span className="w-1.5 self-stretch rounded-full shrink-0" style={{ backgroundColor: d.shift.color }} />
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold text-[#171717]">{hm(d.shift.startTime)} – {hm(d.shift.endTime)}{d.shift.overnight ? ' (ends after midnight)' : ''}</div>
+          <div className="text-[12px] text-[#6B6B6B] truncate">{d.shift.paidHours.toFixed(1)} h paid{d.shift.template ? ` · ${d.shift.template}` : ''}</div>
+        </div>
+        {d.swap && <Pill tone="info">{d.swap.kind === 'SWAP' ? 'Swap pending' : 'Giveaway pending'}</Pill>}
+      </div>
+    ) : <div className="text-[13px] text-[#6B6B6B]">{d.published ? 'Day off' : 'Not published'}</div>}
+  </button>
+);
 
 const DayColumn: React.FC<{ d: DaySummary; isToday: boolean; progress: number | null; onClick: () => void }> = ({ d, isToday, progress, onClick }) => (
   <button onClick={onClick} className={`text-left rounded-lg border bg-white flex flex-col min-h-37.5 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer ${isToday ? 'border-accent ring-1 ring-accent' : 'border-[#E5E5E0]'}`}>
@@ -136,7 +158,7 @@ const DayDetail: React.FC<{ d: DaySummary; onClose: () => void; onRequestAction:
 );
 
 export const Schedule: React.FC<{ onRequestAction: (p: RequestPrefill) => void }> = ({ onRequestAction }) => {
-  const [view, setView] = useState<'week' | 'month'>('week');
+  const [view, setView] = useState<'week' | 'month' | 'list'>('week');
   const [anchor, setAnchor] = useState(todayIso());
   const [selected, setSelected] = useState<DaySummary | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -153,6 +175,19 @@ export const Schedule: React.FC<{ onRequestAction: (p: RequestPrefill) => void }
   const isCurrentPeriod = view === 'week' ? monday === mondayOf(todayIso()) : monthOf(anchor) === monthOf(todayIso());
   const inMonthDays = (data?.days ?? []).filter((d) => view === 'week' || monthOf(d.day) === monthOf(anchor));
   const totalHours = inMonthDays.reduce((sum, d) => sum + (d.shift?.paidHours ?? 0), 0);
+  const profile = useLoad<Profile>('/me/profile');
+  const contract = profile.data?.weeklyContractHours || 0;
+  // nothing at all in view: not one published day, shift or leave. Say so once instead of drawing a grid of empty boxes
+  const nothingPublished = !!data && inMonthDays.length > 0 && inMonthDays.every((d) => !d.published && !d.shift && !d.timeOff);
+  const anyShift = (data?.days ?? []).some((d) => d.shift);
+  // where a published schedule is, so the person can go straight there
+  const nearby = useLoad<{ days: DaySummary[] }>(nothingPublished ? `/me/schedule?from=${addDays(todayIso(), -28)}&to=${addDays(todayIso(), 84)}` : null, [nothingPublished]);
+  const nearest = (() => {
+    const pubs = (nearby.data?.days ?? []).filter((d) => d.published).map((d) => d.day);
+    if (!pubs.length) return null;
+    const dist = (d: string) => Math.abs(new Date(`${d}T00:00:00Z`).getTime() - new Date(`${anchor}T00:00:00Z`).getTime());
+    return pubs.reduce((best, d) => (dist(d) < dist(best) || (dist(d) === dist(best) && d > best) ? d : best));
+  })();
 
   const goPrev = () => setAnchor(view === 'week' ? addDays(monday, -7) : addMonths(anchor, -1));
   const goNext = () => setAnchor(view === 'week' ? addDays(monday, 7) : addMonths(anchor, 1));
@@ -185,34 +220,52 @@ export const Schedule: React.FC<{ onRequestAction: (p: RequestPrefill) => void }
           {isCurrentPeriod && <span className="ml-2 text-[11px] font-semibold text-accent align-middle">{view === 'week' ? 'This week' : 'This month'}</span>}
         </div>
         <div className="flex items-center gap-3">
-          <div className="text-[13px] font-semibold text-accent">{totalHours.toFixed(1)}h scheduled</div>
+          {!nothingPublished && data && <div className="text-[13px] font-semibold text-accent">{totalHours.toFixed(1)}{view === 'week' && contract ? ` of ${contract}` : ''}h scheduled</div>}
           <div className="flex gap-1 bg-[#F0F0EC] rounded-md p-1">
             <button onClick={() => setView('week')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'week' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>Week</button>
             <button onClick={() => setView('month')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'month' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>Month</button>
+            <button onClick={() => setView('list')} className={`text-[12px] font-semibold px-2.5 py-1 rounded ${view === 'list' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#6B6B6B]'}`}>List</button>
           </div>
+          <button onClick={() => window.print()} className="print:hidden text-[12px] font-semibold px-2.5 py-1.5 rounded border border-[#E5E5E0] bg-white text-[#171717] hover:bg-[#FAFAF8]">Print</button>
         </div>
       </div>
       {loading && !data && <Busy />}
       {error && <Banner kind="err">{error}</Banner>}
-      {data && view === 'week' && (
+      {data && nothingPublished && (
+        <Card title="No schedule published for this period yet">
+          <p className="text-[13px] text-[#525252]">Your manager has not published your schedule for {view === 'week' ? 'this week' : 'this month'}. You will get a message in your Inbox when it is, and your shifts will appear here.</p>
+          <div className="flex flex-wrap gap-2 items-center">
+            {nearest ? <Btn variant="primary" onClick={() => setAnchor(nearest)}>Go to the nearest published {view === 'week' ? 'week' : 'month'} ({dayLabel(nearest)})</Btn>
+              : nearby.loading ? <span className="text-[12px] text-[#6B6B6B]">Looking for a published schedule…</span>
+              : <span className="text-[12px] text-[#6B6B6B]">No published schedule found in the last four or next twelve weeks.</span>}
+            {!isCurrentPeriod && <Btn onClick={() => setAnchor(todayIso())}>Back to today</Btn>}
+          </div>
+        </Card>
+      )}
+      {data && !nothingPublished && view === 'week' && (
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
           {data.days.map((d) => <DayColumn key={d.day} d={d} isToday={d.day === todayIso()} progress={shiftProgress(d, now)} onClick={() => setSelected(d)} />)}
         </div>
       )}
-      {data && view === 'month' && (
+      {data && !nothingPublished && view === 'month' && (
         <div className="grid grid-cols-7 gap-1.5">
           {data.days.map((d) => <MonthCell key={d.day} d={d} isToday={d.day === todayIso()} inMonth={monthOf(d.day) === monthOf(anchor)} onClick={() => setSelected(d)} />)}
         </div>
       )}
+      {data && !nothingPublished && view === 'list' && (
+        <Card className="!p-0 overflow-hidden">
+          {inMonthDays.map((d) => <AgendaRow key={d.day} d={d} isToday={d.day === todayIso()} onClick={() => setSelected(d)} />)}
+        </Card>
+      )}
       {selected && <DayDetail d={selected} onClose={() => setSelected(null)} onRequestAction={onRequestAction} />}
-      <Card title="Legend" className="w-fit">
+      {anyShift && <Card title="Legend" className="w-fit">
         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-[#525252]">
           <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: 'var(--color-accent)' }} />Shift</span>
           {data?.days.flatMap((d) => d.shift?.activities ?? []).filter((a, i, arr) => arr.findIndex((x) => x.type === a.type) === i).map((a) => (
             <span key={a.type} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: a.color }} />{a.type[0] + a.type.slice(1).toLowerCase()}</span>
           ))}
         </div>
-      </Card>
+      </Card>}
     </div>
   );
 };

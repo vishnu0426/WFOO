@@ -1,5 +1,6 @@
 /** Small shared UI kit for the employee portal, styled to match the admin web app's palette (ink #171717, muted #737373, borders #E5E5E0). */
 import React, { useEffect, useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { api, ApiError } from './api';
 
 /** Loads `path` on mount and whenever `deps` change; `reload()` re-runs the same fetch on demand (e.g. after an action). */
@@ -61,6 +62,25 @@ export const Field: React.FC<{ label: string; hint?: string; children: React.Rea
 
 const fieldCls = 'w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white disabled:bg-[#FAFAF8] disabled:text-[#6B6B6B]';
 export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', ...rest }) => <input {...rest} className={`${fieldCls} ${className}`} />;
+/** A password box with a show/hide eye and a Caps Lock warning. Hidden by default; `autoComplete` tells the browser's password manager which kind it is. */
+export const PasswordInput: React.FC<Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>> = ({ className = '', onKeyUp, onBlur, ...rest }) => {
+  const [shown, setShown] = useState(false);
+  const [caps, setCaps] = useState(false);
+  return (
+    <>
+      <div className="relative">
+        <input {...rest} type={shown ? 'text' : 'password'} spellCheck={false} autoCapitalize="none" autoCorrect="off"
+          onKeyUp={(e) => { setCaps(e.getModifierState?.('CapsLock') ?? false); onKeyUp?.(e); }} onBlur={(e) => { setCaps(false); onBlur?.(e); }}
+          className={`${fieldCls} pr-10 ${className}`} />
+        <button type="button" onClick={() => setShown((v) => !v)} aria-label={shown ? 'Hide password' : 'Show password'} aria-pressed={shown}
+          className="absolute inset-y-0 right-0 px-3 text-[#737373] hover:text-[#171717] focus:outline-none focus-visible:text-[#171717]">
+          {shown ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
+      {caps && <div className="text-[11px] font-normal text-[#8F6200] mt-1" role="status">Caps Lock is on</div>}
+    </>
+  );
+};
 export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className = '', ...rest }) => <select {...rest} className={`${fieldCls} ${className}`} />;
 export const Textarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({ className = '', ...rest }) => <textarea {...rest} className={`${fieldCls} ${className}`} />;
 

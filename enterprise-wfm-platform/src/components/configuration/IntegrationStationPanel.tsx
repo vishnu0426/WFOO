@@ -8,7 +8,7 @@
 import { Waiting, LoadFailed } from '../common/loading';
 import React, { useEffect, useMemo, useState } from "react";
 import { MoreHorizontal, Plus, Trash2 } from "lucide-react";
-import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, IntegrationCatalog, IntegrationField, IntegrationFieldMap, IntegrationPreset, MapTestResult, when } from "../../services/api";
+import { api, Connector, ConnectorCreated, EntitySuggestion, EventRule, FeedEvent, FeedOutcome, IntegrationCatalog, IntegrationField, IntegrationFieldMap, IntegrationPreset, MapTestResult, when } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
 import { useApi } from "../forecasting/hooks";
 import { Banner, Btn, Busy, Card, Empty, Field, Input, Pill, Select, Table } from "../forecasting/ui";
@@ -21,6 +21,123 @@ const CATEGORIES = [
 ] as const;
 
 const statusTone = (s: string) => (s === "ACTIVE" ? "good" : s === "ERROR" ? "bad" : s === "PAUSED" ? "warn" : "neutral") as "good" | "bad" | "warn" | "neutral";
+
+/** "2 min ago", for a time that matters because of how recent it is (the exact time stays in the tooltip). */
+const agoText = (iso: string | null) => {
+  if (!iso) return "never";
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
+
+/** A connection setting as a labelled row. Secrets arrive already masked from the server, so nothing here can reveal them. */
+const CONFIG_LABEL: Record<string, string> = { subject: "Subject listened to", natsUser: "User name", natsPass: "Password", tlsRejectUnauthorized: "Server certificate" };
+const configRow = (k: string, v: string): { label: string; value: string; warn?: string } =>
+  k === "tlsRejectUnauthorized" ? (String(v) === "false" ? { label: CONFIG_LABEL[k], value: "Not checked", warn: "The connection does not verify the server's certificate, so it could be talking to an impostor. Fine on a private network, not over the internet." } : { label: CONFIG_LABEL[k], value: "Checked" })
+    : { label: CONFIG_LABEL[k] ?? k, value: String(v) };
+
+type DetailTab = "overview" | "live" | "runs" | "mapping" | "rules";
+
+type TestStep = { name: string; status: "ok" | "warn" | "fail"; detail: string };
+const STEP_MARK: Record<TestStep["status"], { icon: string; cls: string }> = { ok: { icon: "✓", cls: "text-[#2A7553]" }, warn: { icon: "!", cls: "text-[#8F6200]" }, fail: { icon: "✕", cls: "text-[#BC3F3F]" } };
+
+/** Checks a live connector step by step on a connection of its own (the running feed is not touched, nothing is saved). */
+const ConnectionTest: React.FC<{ connector: Connector; canWrite: boolean }> = ({ connector, canWrite }) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ ok: boolean; steps: TestStep[] } | null>(null);
+  useEffect(() => { setResult(null); setError(""); }, [connector.id]);
+  const run = async () => {
+    setBusy(true); setError(""); setResult(null);
+    try { setResult(await api(`/integrations/${connector.id}/test-connection`, { method: "POST", timeoutMs: 45_000 })); }
+    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="text-[13px] font-semibold">Test the connection</div>
+        <Btn disabled={!canWrite || busy} onClick={run} title={canWrite ? undefined : "You need permission to change configuration"}>{busy ? "Testing…" : "Test connection"}</Btn>
+        {busy && <span className="text-[12px] text-[#6B6B6B]">Listening for about 8 seconds to see whether messages arrive.</span>}
+      </div>
+      <p className="text-[12px] text-[#6B6B6B]">Opens a separate connection with these settings. It does not disturb the live feed and nothing is saved.</p>
+      {error && <Banner kind="err" onClose={() => setError("")}>{error}</Banner>}
+      {result && (
+        <ul className={`rounded-lg border divide-y text-[13px] ${result.ok ? "border-[#2F7D5A]/30" : "border-[#E9D9B4]"}`} aria-live="polite">
+          {result.steps.map((s) => (
+            <li key={s.name} className="flex gap-3 px-3 py-2">
+              <span aria-label={s.status} className={`w-4 shrink-0 font-bold ${STEP_MARK[s.status].cls}`}>{STEP_MARK[s.status].icon}</span>
+              <div><div className="font-semibold">{s.name}</div><div className="text-[12px] text-[#525252]">{s.detail}</div></div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+type FeedView = { events: FeedEvent[]; lastHour: Record<FeedOutcome, number>; available: boolean };
+const OUTCOME_LABEL: Record<FeedOutcome, string> = { ACCEPTED: "Accepted", REJECTED: "Not accepted", WAITING: "Waiting for a rule", IGNORED: "Ignored" };
+const OUTCOME_TONE: Record<FeedOutcome, "good" | "bad" | "warn" | "neutral"> = { ACCEPTED: "good", REJECTED: "bad", WAITING: "warn", IGNORED: "neutral" };
+const SILENT_MIN = 5;           // a live feed that has sent nothing for this long is called quiet
+
+/** The messages a live connector has received in the last day and what became of each, so a feed that "connects but shows nothing" can be explained. */
+const LiveEvents: React.FC<{ connector: Connector }> = ({ connector }) => {
+  const [outcome, setOutcome] = useState<"" | "ACCEPTED" | "REJECTED" | "WAITING">("");
+  const [paused, setPaused] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  const feed = useApi<FeedView>(`/integrations/${connector.id}/events${outcome ? `?outcome=${outcome}` : ""}`, [connector.id, outcome]);
+  const reload = feed.reload;
+  useEffect(() => { if (paused) return; const t = setInterval(reload, 5000); return () => clearInterval(t); }, [paused, reload]);
+  const d = feed.data;
+  const quietMin = connector.status === "ACTIVE" && connector.lastReceivedAt ? Math.floor((Date.now() - new Date(connector.lastReceivedAt).getTime()) / 60000) : 0;
+  const tiles: FeedOutcome[] = ["ACCEPTED", "REJECTED", "WAITING", "IGNORED"];
+  return (
+    <div className="space-y-3">
+      {quietMin >= SILENT_MIN && <Banner kind="warn">Nothing has arrived for {quietMin} minutes. Check that the phone system is sending to this subject.</Banner>}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {tiles.map((o) => <Tile key={o} label={`${OUTCOME_LABEL[o]}, last hour`} value={d ? d.lastHour[o].toLocaleString() : "–"} tone={o === "ACCEPTED" && d && d.lastHour[o] > 0 ? "good" : "neutral"} note={o === "IGNORED" ? "heartbeats and other types set to be ignored" : undefined} />)}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {([["", "All"], ["REJECTED", "Not accepted"], ["WAITING", "Waiting for a rule"], ["ACCEPTED", "Accepted"]] as const).map(([v, l]) => (
+          <button key={v} type="button" onClick={() => { setOutcome(v); setOpen(null); }} aria-pressed={outcome === v}
+            className={`rounded-md border px-2.5 py-1 text-[12px] ${outcome === v ? "border-[#171717] bg-[#FAFAF8] font-semibold" : "border-[#E5E5E0] text-[#6B6B6B] hover:bg-[#FAFAF8]"}`}>{l}</button>
+        ))}
+        <span className="flex-1" />
+        <span className="text-[11px] text-[#6B6B6B]">{paused ? "Paused" : feed.refreshing ? "Updating…" : "Updates every 5 seconds"}</span>
+        <Btn onClick={() => setPaused((p) => !p)}>{paused ? "Resume" : "Pause"}</Btn>
+        <Btn onClick={reload}>Refresh</Btn>
+      </div>
+      {feed.error && !d && <Banner kind="err">{feed.error}</Banner>}
+      {d && !d.available && <Banner kind="warn">The recent-events store is not available right now, so this list is empty. The feed itself keeps working.</Banner>}
+      {d && d.available && d.events.length === 0 && <p className="text-[12px] text-[#6B6B6B]">{outcome ? "Nothing here for that filter." : "No events yet. Messages appear here as they arrive, newest first and kept for a day; heartbeats are only counted above."}</p>}
+      {d && d.events.length > 0 && (
+        <Table head={["Received", "Agent id", "Event type", "State", "Result", "Why"]}>
+          {d.events.map((e, i) => (
+            <React.Fragment key={`${e.at}-${i}`}>
+              <tr className="cursor-pointer hover:bg-[#FAFAF8]" onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}>
+                <td className="p-3 whitespace-nowrap" title={new Date(e.at).toLocaleString()}>{agoText(e.at)}</td>
+                <td className="p-3 font-mono text-[12px]">{e.sourceId ?? "–"}</td>
+                <td className="p-3 font-mono text-[12px]">{e.eventType ?? "–"}</td>
+                <td className="p-3">{e.state ? <>{e.state}{e.reason ? <span className="text-[#6B6B6B]"> · {e.reason}</span> : null}</> : "–"}</td>
+                <td className="p-3"><Pill tone={OUTCOME_TONE[e.outcome]}>{OUTCOME_LABEL[e.outcome]}</Pill></td>
+                <td className="p-3 text-[12px]">{e.message ?? ""}</td>
+              </tr>
+              {open === i && <tr><td colSpan={6} className="p-3 bg-[#FAFAF8]"><div className="text-[11px] text-[#6B6B6B] mb-1">Message as received</div><pre className="font-mono text-[11.5px] whitespace-pre-wrap break-all">{JSON.stringify(e.raw, null, 2)}</pre></td></tr>}
+            </React.Fragment>
+          ))}
+        </Table>
+      )}
+    </div>
+  );
+};
+
+/** One fact about a connector: a small label, a headline value and a quiet note under it. */
+const Tile: React.FC<{ label: string; value: string; note?: string; tone?: "good" | "neutral" }> = ({ label, value, note, tone = "neutral" }) => (
+  <div className="rounded-lg border border-[#E5E5E0] px-3 py-2.5">
+    <div className="text-[11px] text-[#6B6B6B]">{label}</div>
+    <div className={`text-[15px] font-semibold mt-0.5 ${tone === "good" ? "text-[#2A7553]" : "text-[#171717]"}`}>{value}</div>
+    {note && <div className="text-[11px] text-[#6B6B6B] mt-0.5">{note}</div>}
+  </div>
+);
 
 /** What the setup screen says about a provider: a short guide where there is one, otherwise the original note. */
 const ProviderIntro: React.FC<{ preset: IntegrationPreset }> = ({ preset }) => {
@@ -82,6 +199,12 @@ export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: ()
   const [justCreated, setJustCreated] = useState<ConnectorCreated | null>(null);
   const [error, setError] = useState("");
   useEffect(() => { if (focusId) { setSelected(focusId); setCreating(false); } }, [focusId]);   // the Data Feeds table can open a connector here
+  const [showDrafts, setShowDrafts] = useState(false);
+  // the list and the connector sit side by side, so one is always open: the first one that is live, until another is picked
+  useEffect(() => {
+    const list = connectors.data;
+    if (!creating && list?.length && !list.some((c) => c.id === selected)) setSelected((list.find((c) => c.status !== "DRAFT") ?? list[0]).id);
+  }, [connectors.data, selected, creating]);
 
   const run = async (fn: () => Promise<void>) => { setError(""); try { await fn(); setTick((t) => t + 1); onChange?.(); } catch (e: any) { setError(e.message); } };
 
@@ -102,35 +225,54 @@ export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: ()
         </Banner>
       )}
 
-      <Card title="Connectors" sub="Real, vendor-specific integrations -- ACD, CRM, HRMS, a database, an on-prem system or a scheduled file. Historical data lands in Staged Ingestion for review, exactly like a manual CSV upload; live data feeds interval history or RTA state directly."
-        actions={canWrite && <Btn variant="primary" onClick={() => { setCreating((c) => !c); setSelected(""); }}><Plus className="w-3.5 h-3.5" />{creating ? "Close" : "New connector"}</Btn>}>
-        {creating && catalog.data && <NewConnectorForm feeds={feeds} catalog={catalog.data} groups={groups} onCreated={(c) => { setCreating(false); setJustCreated(c); setSelected(c.id); setTick((t) => t + 1); }} onError={setError} />}
-
-        {connectors.loading && !connectors.data ? <Waiting what="connectors" shape="table" reload={connectors.reload} /> : connectors.error && !connectors.data ? <LoadFailed what="connectors" error={connectors.error} reload={connectors.reload} /> : !connectors.data?.length ? (
-          <Empty title="No connectors yet">Add one for the ACD, CRM or HRMS system you actually use, or a direct database read.</Empty>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {connectors.data.map((c) => {
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-5 items-start">
+        <Card title="Connectors" sub="Real, vendor-specific integrations -- ACD, CRM, HRMS, a database, an on-prem system or a scheduled file. Historical data lands in Staged Ingestion for review, exactly like a manual CSV upload; live data feeds interval history or RTA state directly."
+          actions={canWrite && <Btn variant="primary" onClick={() => { setCreating((c) => !c); setSelected(""); }}><Plus className="w-3.5 h-3.5" />{creating ? "Close" : "New"}</Btn>}>
+          {connectors.loading && !connectors.data ? <Waiting what="connectors" shape="table" reload={connectors.reload} /> : connectors.error && !connectors.data ? <LoadFailed what="connectors" error={connectors.error} reload={connectors.reload} /> : !connectors.data?.length ? (
+            <Empty title="No connectors yet">Add one for the ACD, CRM or HRMS system you actually use, or a direct database read.</Empty>
+          ) : (() => {
+            const live = connectors.data.filter((c) => c.status !== "DRAFT"), drafts = connectors.data.filter((c) => c.status === "DRAFT");
+            const open = showDrafts || drafts.some((c) => c.id === selected);
+            const item = (c: Connector) => {
               const pr = catalog.data ? Object.values(catalog.data).flat().find((p) => p.id === c.preset) : undefined;
               const needs = c.status === "ACTIVE" && !!c.lastError;
               return (
-                <button key={c.id} onClick={() => setSelected(selected === c.id ? "" : c.id)} className={`text-left p-3 rounded-lg border ${selected === c.id ? "border-[#171717] bg-[#FAFAF8]" : "border-[#E5E5E0] hover:bg-[#FAFAF8]"}`}>
+                <button key={c.id} onClick={() => { setSelected(c.id); setCreating(false); }} aria-current={selected === c.id}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg border ${selected === c.id ? "border-[#171717] bg-[#FAFAF8]" : "border-transparent hover:bg-[#FAFAF8]"}`}>
                   <div className="flex items-start justify-between gap-2">
-                    <span className="font-semibold text-[13px]">{c.name}</span>
+                    <span className="font-semibold text-[13px] leading-snug">{c.name}</span>
                     <Pill tone={needs ? "bad" : statusTone(c.status)}>{needs ? "Needs attention" : c.status.charAt(0) + c.status.slice(1).toLowerCase()}</Pill>
                   </div>
-                  <div className="text-[11px] text-[#6B6B6B] mt-1">{pr && pr.label !== c.name ? `${pr.label} · ` : ""}{c.lastReceivedAt ? `Last data ${when(c.lastReceivedAt)}` : "No data yet"}{typeof c.rows24h === "number" ? ` · ${c.rows24h.toLocaleString()} row${c.rows24h === 1 ? "" : "s"} in 24 h` : ""}</div>
-                  {c.lastError && <div className="text-[11px] text-[#BC3F3F] mt-1">{c.lastError}</div>}
+                  <div className="text-[11px] text-[#6B6B6B] mt-0.5" title={c.lastReceivedAt ? when(c.lastReceivedAt) : undefined}>
+                    {pr && pr.label !== c.name ? `${pr.label} · ` : ""}{c.lastReceivedAt ? `last data ${agoText(c.lastReceivedAt)}` : "no data yet"}{typeof c.rows24h === "number" ? ` · ${c.rows24h.toLocaleString()} in 24 h` : ""}
+                  </div>
+                  {c.lastError && <div className="text-[11px] text-[#BC3F3F] mt-1 line-clamp-2" title={c.lastError}>{c.lastError}</div>}
                 </button>
               );
-            })}
-          </div>
-        )}
-      </Card>
+            };
+            return (
+              <div className="space-y-1 -mx-1">
+                {live.map(item)}
+                {drafts.length > 0 && (
+                  <div className="pt-1">
+                    <button type="button" className="w-full text-left px-3 py-1.5 text-[12px] text-[#6B6B6B] hover:text-[#171717]" aria-expanded={open} onClick={() => setShowDrafts((v) => !v)}>
+                      {open ? "▾" : "▸"} Drafts ({drafts.length}) <span className="text-[11px]">not connected yet</span>
+                    </button>
+                    {open && drafts.map(item)}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </Card>
 
-      {selected && connectors.data?.find((c) => c.id === selected) && (
-        <ConnectorDetail feeds={feeds} connector={connectors.data.find((c) => c.id === selected)!} catalog={catalog.data ?? null} canWrite={canWrite} onChanged={() => { setTick((t) => t + 1); onChange?.(); }} onDeleted={() => { setSelected(""); setTick((t) => t + 1); }} onError={setError} run={run} />
-      )}
+        <div className="min-w-0 space-y-4">
+          {creating && catalog.data && <Card title="New connector"><NewConnectorForm feeds={feeds} catalog={catalog.data} groups={groups} onCreated={(c) => { setCreating(false); setJustCreated(c); setSelected(c.id); setTick((t) => t + 1); }} onError={setError} /></Card>}
+          {!creating && selected && connectors.data?.find((c) => c.id === selected) && (
+            <ConnectorDetail feeds={feeds} connector={connectors.data.find((c) => c.id === selected)!} catalog={catalog.data ?? null} canWrite={canWrite} onChanged={() => { setTick((t) => t + 1); onChange?.(); }} onDeleted={() => { setSelected(""); setTick((t) => t + 1); }} onError={setError} run={run} />
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -346,6 +488,13 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
   const targetFields = TARGET_FIELDS[preset?.writesTo ?? ''] ?? [];
   const sampleFields = useMemo(() => flattenSample(connector.lastSample), [connector.lastSample]);
   const [menu, setMenu] = useState(false);
+  const hasRules = preset?.writesTo === "agent_state" || connector.category === "ACD" || connector.category === "CRM" || connector.category === "HRMS";
+  const tabs: { id: DetailTab; label: string }[] = [
+    { id: "overview", label: "Overview" }, ...(preset?.method === "STREAM_SUBSCRIBE" ? [{ id: "live" as const, label: "Live events" }] : []), ...(feeds ? [{ id: "runs" as const, label: "Schedule and runs" }] : []), { id: "mapping", label: "Field mapping" }, ...(hasRules ? [{ id: "rules" as const, label: preset?.writesTo === "agent_state" ? "Event types and agents" : "Matching" }] : []),
+  ];
+  const [tab, setTab] = useState<DetailTab>("overview");
+  useEffect(() => setTab("overview"), [connector.id]);                 // a different connector opens on its overview
+  const configRows = Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => configRow(k, v));
 
   const dropOnTarget = (targetField: string) => (e: React.DragEvent) => {
     e.preventDefault();
@@ -368,7 +517,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
   const remove = () => { if (!confirm(`Delete "${connector.name}"?`)) return; run(async () => { await api(`/integrations/${connector.id}`, { method: "DELETE" }); onDeleted(); }); };
 
   return (
-    <Card title={connector.name} sub={`${connector.category} · ${connector.preset}`}
+    <Card title={connector.name} sub={preset && preset.label !== connector.name ? preset.label : CATEGORIES.find((c) => c.id === connector.category)?.label ?? connector.category}
       actions={canWrite && <>
         <Select value={connector.status} onChange={(e) => setStatus(e.target.value)} className="!w-auto"><option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></Select>
         <div className="relative">
@@ -380,22 +529,50 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
           )}
         </div>
       </>}>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
-        {preset?.method === "STREAM_SUBSCRIBE" && (
-          <div>
-            <div className="text-[#6B6B6B]">Connection</div>
-            <div className={`font-semibold ${connector.connectedAt ? "text-[#2A7553]" : "text-[#6B6B6B]"}`}>{connector.connectedAt ? `Connected since ${when(connector.connectedAt)}` : "Not yet connected"}</div>
-          </div>
-        )}
-        {preset?.method !== "STREAM_SUBSCRIBE" && <div><div className="text-[#6B6B6B]">Backfill</div><div className="font-semibold">{connector.backfillStatus.replace("_", " ").toLowerCase()}{connector.backfillThrough ? ` through ${connector.backfillThrough}` : ""}</div></div>}
-        <div><div className="text-[#6B6B6B]">Last received</div><div className="font-semibold">{connector.lastReceivedAt ? when(connector.lastReceivedAt) : "never"}</div></div>
-        <div><div className="text-[#6B6B6B]">Created</div><div className="font-semibold">{when(connector.createdAt)} by {connector.createdBy}</div></div>
-        <div><div className="text-[#6B6B6B]">Config</div><div className="font-semibold">{Object.entries(connector.config).filter(([k]) => k !== "natsServers").map(([k, v]) => `${k}: ${v}`).join(", ") || "—"}</div></div>
+      <div role="tablist" aria-label="Connector sections" className="flex flex-wrap gap-1 border-b border-[#E5E5E0] -mt-1">
+        {tabs.map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
+            className={`px-3 py-2 text-[13px] -mb-px border-b-2 ${tab === t.id ? "border-[#171717] font-semibold text-[#171717]" : "border-transparent text-[#6B6B6B] hover:text-[#171717]"}`}>{t.label}</button>
+        ))}
       </div>
       {connector.lastError && <Banner kind="err">Last error: {connector.lastError}</Banner>}
-      {feeds && <RunsPanel connector={connector} canWrite={canWrite} onChanged={onChanged} />}
 
-      {sampleFields.length > 0 && targetFields.length > 0 && (
+      {tab === "overview" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {preset?.method === "STREAM_SUBSCRIBE"
+              ? <Tile label="Connection" value={connector.connectedAt ? "Connected" : "Not connected"} tone={connector.connectedAt ? "good" : "neutral"} note={connector.connectedAt ? `since ${when(connector.connectedAt)}` : "Set the connector to Active"} />
+              : <Tile label="Backfill" value={connector.backfillStatus.replace("_", " ").toLowerCase()} note={connector.backfillThrough ? `through ${connector.backfillThrough}` : undefined} />}
+            <Tile label="Last data received" value={connector.lastReceivedAt ? agoText(connector.lastReceivedAt) : "never"} note={connector.lastReceivedAt ? when(connector.lastReceivedAt) : undefined} />
+            {typeof connector.rows24h === "number" && <Tile label="Rows in 24 hours" value={connector.rows24h.toLocaleString()} />}
+            <Tile label="Created" value={when(connector.createdAt)} note={connector.createdBy ? `by ${connector.createdBy}` : undefined} />
+          </div>
+          {preset?.method === "STREAM_SUBSCRIBE" && <ConnectionTest connector={connector} canWrite={canWrite} />}
+          {configRows.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[13px] font-semibold">Connection details</div>
+              <dl className="border border-[#E5E5E0] rounded-lg divide-y divide-[#E5E5E0] text-[13px]">
+                {configRows.map((r) => (
+                  <div key={r.label} className="grid grid-cols-[200px_minmax(0,1fr)] gap-3 px-3 py-2">
+                    <dt className="text-[#6B6B6B]">{r.label}</dt>
+                    <dd className="min-w-0 break-words">
+                      <span className="font-mono text-[12px]">{r.value}</span>
+                      {r.warn && <div className="text-[12px] text-[#8F6200] mt-0.5">{r.warn}</div>}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="text-[11px] text-[#6B6B6B]">Passwords and keys are kept hidden.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "live" && <LiveEvents connector={connector} />}
+
+      {tab === "runs" && feeds && <RunsPanel connector={connector} canWrite={canWrite} onChanged={onChanged} />}
+
+      {tab === "mapping" && sampleFields.length > 0 && targetFields.length > 0 && (
         <div className="space-y-2">
           <div className="text-[13px] font-semibold">Map by drag and drop</div>
           <p className="text-[12px] text-[#6B6B6B]">From the last real message this connector received. Drag a field from the sample onto the target it belongs to.</p>
@@ -423,7 +600,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
       )}
 
 
-      <div className="space-y-2">
+      {tab === "mapping" && <div className="space-y-2">
         <div className="text-[13px] font-semibold">Field mapping{sampleFields.length > 0 && targetFields.length > 0 ? ", by hand" : ""}</div>
         <p className="text-[12px] text-[#6B6B6B]">Where each of our fields comes from in this vendor's own payload. Pre-filled for a named preset; blank for Generic -- fill in your own response shape. The same rows the drag-and-drop above writes to -- use this for a transform (ms → seconds etc.) or a field outside the usual set.</p>
         {rows.map((r, i) => {
@@ -469,13 +646,13 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
-
-      {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} />}
-
-      {connector.category === "ACD" && preset?.writesTo !== "agent_state" && <EntityMatching connectorId={connector.id} entityType="queue" canWrite={canWrite} />}
-      {(connector.category === "CRM" || connector.category === "HRMS" || preset?.writesTo === "agent_state") && <EntityMatching connectorId={connector.id} entityType="employee" canWrite={canWrite} />}
+      {tab === "rules" && <>
+        {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} />}
+        {connector.category === "ACD" && preset?.writesTo !== "agent_state" && <EntityMatching connectorId={connector.id} entityType="queue" canWrite={canWrite} />}
+        {(connector.category === "CRM" || connector.category === "HRMS" || preset?.writesTo === "agent_state") && <EntityMatching connectorId={connector.id} entityType="employee" canWrite={canWrite} />}
+      </>}
     </Card>
   );
 };

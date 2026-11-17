@@ -24,10 +24,11 @@ import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
 import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { PRESETS, presetById, presetsByCategory, configSchemaFor, type Category } from './presets.ts';
 import { mapFields, suggestEntityMatches, type FieldMap } from './mapping.ts';
-import { startSubscription, stopSubscription } from './natsSubscriber.ts';
+import { startSubscription, stopSubscription, testNatsConnection } from './natsSubscriber.ts';
 import { applyLiveRows, loadFieldMaps, pullSupport, recordRun, runConnector, stageBackfillRows, summariseLive, testDatabaseQuery, testRestPull } from './runner.ts';
 import { checkPresetConfig, relayIntervalMinutes } from './pullRules.ts';
 import { readinessOf } from './readiness.ts';
+import { readFeed } from './feedLog.ts';
 import { checkSchedule, firstRunAt, type Schedule } from './schedule.ts';
 import { openFields } from '../../secrets.ts';
 
@@ -199,12 +200,30 @@ integrationsAdmin.post('/:id/test-pull', requires('config:write'), async (req, r
   catch (e: any) { throw bad(e.message); }
 });
 
+/** Checks a live (NATS) connector's settings on a connection of its own, step by step. Nothing is saved and the running subscription is left alone. */
+integrationsAdmin.post('/:id/test-connection', requires('config:write'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT * FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));
+  if (!c) throw notFound('Connector');
+  if (presetById(c.preset)?.method !== 'STREAM_SUBSCRIBE') throw bad('This connector is not a live subscription. Use its own test button, or send it a sample.');
+  res.json(await testNatsConnection(openFields(c.config, CONFIG_SECRET_KEYS)));
+});
+
 integrationsAdmin.get('/:id/runs', requires('config:read'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
   res.json(await withTenant(p.tenantId, async (tx) => ({
     runs: await tx.q<any>(`SELECT started_at, finished_at, trigger, kind, status, rows_in, rows_ok, rows_rejected, message FROM integration_runs WHERE tenant_id = :t AND connector_id = $1 ORDER BY started_at DESC LIMIT 30`, [id]),
     files: await tx.q<any>(`SELECT file_name, file_size, status, import_job_id, message, seen_at FROM integration_files WHERE tenant_id = :t AND connector_id = $1 ORDER BY seen_at DESC LIMIT 20`, [id]),
   })));
+});
+
+/** What happened to the messages a live connector received in the last day: the newest ones (heartbeats and other ignored types are only counted) and the last-hour totals. */
+integrationsAdmin.get('/:id/events', requires('config:read'), async (req, res) => {
+  const p = me(req), id = parse(uuid, req.params.id);
+  const q = parse(z.object({ outcome: z.enum(['ACCEPTED', 'REJECTED', 'WAITING']).optional() }), req.query);
+  const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT id FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));   // the id must be this organisation's before anything is read for it
+  if (!c) throw notFound('Connector');
+  res.json(await readFeed(p.tenantId, id, q.outcome));
 });
 
 // ---------------------------------------------------------------- field maps

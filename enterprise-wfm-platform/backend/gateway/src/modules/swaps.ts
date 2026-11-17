@@ -88,6 +88,12 @@ const dto = (s: any) => ({
   get: s.partnerShiftId ? { shiftId: s.partnerShiftId, day: s.pDay, startTime: hhmm(s.pStart), endTime: hhmm(s.pStart + s.pLen) } : null,
   decisionReason: s.decisionReason, decidedBy: s.decidedBy, decidedAt: s.decidedAt, decidedLevel: s.decidedLevel ?? null, escalatedAt: s.escalatedAt ?? null, autoApproved: s.autoApproved, checks: s.checks, expiresAt: s.expiresAt, createdAt: s.createdAt, updatedAt: s.updatedAt,
 });
+/** Swap requests waiting for a decision: all of them, or only those of the given teams. A person's own requests are left out. Shown to approvers in the employee portal. */
+export async function pendingApprovalSwaps(tx: Tx, teams: string[] | null, exceptEmployee: string | null) {
+  await expire(tx);
+  const rows = await tx.q<any>(`${SQL} AND sw.status = 'PENDING_APPROVAL' AND ($1::uuid[] IS NULL OR re.team_id = ANY($1::uuid[])) AND ($2::uuid IS NULL OR (sw.requester_id <> $2::uuid AND (sw.partner_id IS NULL OR sw.partner_id <> $2::uuid))) ORDER BY sw.updated_at LIMIT 100`, [teams, exceptEmployee]);
+  return rows.map((r) => ({ ...dto(r), warnings: ((r.checks as any)?.warnings ?? []) as string[], escalated: !!r.escalatedAt }));
+}
 async function expire(tx: Tx) { await tx.exec(`UPDATE shift_swaps SET status = 'EXPIRED', updated_at = now() WHERE tenant_id = :t AND status IN ('OPEN', 'PENDING_PARTNER') AND expires_at < now()`); }
 async function load(tx: Tx, id: string) { const r = (await tx.q<any>(`${SQL} AND sw.id = $1`, [id]))[0]; if (!r) throw notFound('Swap request'); return r; }
 

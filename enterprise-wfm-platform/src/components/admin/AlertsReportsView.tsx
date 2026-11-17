@@ -13,7 +13,7 @@ import { HelpTip } from '../common/HelpTip';
 type Field = { key: string; label: string; secret?: boolean; required?: boolean; help?: string; placeholder?: string; options?: { value: string; label: string }[]; default?: string; advanced?: boolean; multiline?: boolean };
 type Provider = { id: string; label: string; kind: 'SMTP' | 'API' | 'HTTP'; help: string; fields: Field[] };
 type Side = { enabled: boolean; provider: string; values: Record<string, string>; saved: Record<string, boolean> };
-type Settings = { email: Side & { from: string }; sms: Side; defaults: Record<string, string[]> };
+type Settings = { email: Side & { from: string }; sms: Side; defaults: Record<string, string[]>; passwordReset?: 'OFF' | 'EMAIL' | 'SMS' | 'EITHER' };
 type Rule = { id: string; name: string; event: string; roles: string[]; channels: string[]; active: boolean };
 type Sched = { id: string; name: string; report: string; groupName: string | null; groupId: string | null; range: string; frequency: string; dayOfWeek: number | null; dayOfMonth: number | null; hour: number; timezone: string; recipients: { emails: string[]; roles: string[] }; enabled: boolean; format: 'CSV' | 'PDF' | 'BOTH'; nextRunAt: string | null; lastRunAt: string | null };
 type SRun = { id: string; status: 'OK' | 'FAILED'; rows: number; error: string | null; ranAt: string; sentTo: number; from: string; to: string; hasCsv: boolean; hasPdf: boolean };
@@ -81,7 +81,7 @@ const Channels: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   // choosing another provider starts its boxes fresh: nothing typed for one provider is sent to another
   const pick = (side: 'email' | 'sms', id: string) => setD({ ...d, [side]: { ...d[side], provider: id, values: {}, saved: {} } });
   const set = (side: 'email' | 'sms', k: string, v: string) => setD({ ...d, [side]: { ...d[side], values: { ...d[side].values, [k]: v } } });
-  const body = () => ({ email: { enabled: d.email.enabled, provider: emailP.id, from: d.email.from, values: d.email.values }, sms: { enabled: d.sms.enabled, provider: smsP.id, values: d.sms.values }, defaults: d.defaults });
+  const body = () => ({ email: { enabled: d.email.enabled, provider: emailP.id, from: d.email.from, values: d.email.values }, sms: { enabled: d.sms.enabled, provider: smsP.id, values: d.sms.values }, defaults: d.defaults, passwordReset: d.passwordReset ?? 'OFF' });
   const save = async (quiet = false) => {
     try { const out = await api<Settings>('/channels/settings', { method: 'PUT', body: body() }); setD(out); if (!quiet) setMsg({ kind: 'ok', text: 'Saved.' }); return true; }
     catch (e: any) { setMsg({ kind: 'err', text: e.message }); return false; }
@@ -119,6 +119,15 @@ const Channels: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
       <Card title="Who gets what by default" sub="Everyone sees these in the app. Tick email or SMS to also send them that way unless a person chooses otherwise in the app.">
         <table className="text-[13px]"><thead className="text-left text-[#6B6B6B]"><tr><th className="pr-8 py-1">Kind of message</th><th className="px-4">Email</th><th className="px-4">SMS</th></tr></thead>
           <tbody>{KINDS.map(([k, l]) => <tr key={k} className="border-t border-[#E5E5E0]"><td className="py-1.5 pr-8">{l}</td>{['EMAIL', 'SMS'].map((ch) => <td key={ch} className="px-4"><input type="checkbox" aria-label={`${l} by ${ch === 'EMAIL' ? 'email' : 'SMS'}`} disabled={!canWrite} checked={(d.defaults[k] ?? []).includes(ch)} onChange={() => toggleDefault(k, ch)} /></td>)}</tr>)}</tbody></table>
+      </Card>
+      <Card title="Forgotten passwords" sub="Let people reset their own password with a one-time code sent to the email address or mobile number on their record. The code is six digits, works once and expires in 10 minutes. With this off, people ask an administrator for a new temporary password.">
+        <div className="max-w-xl">
+          <Field label="How people can reset their password" hint={(d.passwordReset === 'EMAIL' || d.passwordReset === 'EITHER') && !d.email.enabled ? 'Email is not switched on above yet.' : (d.passwordReset === 'SMS' || d.passwordReset === 'EITHER') && !d.sms.enabled ? 'SMS is not switched on above yet.' : 'People without an email address or mobile number on their record cannot use it; they still ask an administrator. Nobody is told whether an account exists.'}>
+            <Select disabled={!canWrite} value={d.passwordReset ?? 'OFF'} onChange={(e) => setD({ ...d, passwordReset: e.target.value as Settings['passwordReset'] })}>
+              <option value="OFF">Off: ask an administrator</option><option value="EMAIL">By email</option><option value="SMS">By SMS</option><option value="EITHER">By email or SMS: the person chooses</option>
+            </Select>
+          </Field>
+        </div>
       </Card>
       {canWrite && <div><Btn variant="primary" disabled={busy} onClick={() => save()}>Save</Btn></div>}
     </div>

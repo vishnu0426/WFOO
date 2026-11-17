@@ -18,6 +18,7 @@ import { closeAll, connectNats, consume, engine, engineReady, startEngineDiscove
 import { authenticate } from './auth.ts';
 import { HttpError, errorHandler } from './http.ts';
 import { authed, publicAuth } from './modules/authRoutes.ts';
+import { passwordResetPublic } from './modules/passwordReset.ts';
 import { platform as platformRoutes } from './modules/platform/routes.ts';
 import { organization as organizationRoutes, workspaces as workspaceRoutes } from './modules/workspaceRoutes.ts';
 import { config as configRoutes } from './modules/configRoutes.ts';
@@ -29,6 +30,8 @@ import { selfService as selfServiceRoutes, selfAdmin as selfAdminRoutes } from '
 import { swapsMe, swapsAdmin } from './modules/swaps.ts';
 import { poolingRoutes, rollupRoutes, sitesRoutes } from './modules/sites.ts';
 import { bidsAdmin, bidsMe, startBidTicker } from './modules/bids/routes.ts';
+import { teamToday } from './modules/teamToday.ts';
+import { approvalsMe } from './modules/approvalsMe.ts';
 import { offersAdmin, offersMe, offerPolicyRoutes, startOfferTicker } from './modules/offers/routes.ts';
 import { intraday } from './modules/intradayRoutes.ts';
 import { overview } from './modules/overviewToday.ts';
@@ -149,6 +152,7 @@ const api = Router();
 api.use((req, res, next) => { if (req.method === 'GET' || req.method === 'HEAD') res.setHeader('Cache-Control', 'private, no-cache'); next(); });
 api.use('/platform', platformRoutes);          // platform / super admin routes (own authentication)
 api.use(publicAuth);                       // sign-in is the only unauthenticated route
+api.use(passwordResetPublic);              // and the forgotten-password code (email or SMS), which is part of signing in
 api.use('/auth/sso', ssoPublic);            // sign in through the organisation's identity provider
 api.use('/integrations', integrationsPublic); // connector-key/webhook-signed ingest: a relay script or a vendor webhook, no user session
 api.use(authenticate);
@@ -162,6 +166,8 @@ api.use('/config', sitesRoutes);            // sites, required skills per group,
 api.use('/config', policyRoutes);          // activity definitions, scheduling policy
 api.use('/holidays', holidayCalendar);      // public holidays by country, added to the holiday calendar
 api.use('/compliance', complianceRoutes);   // labour-law packs and where they apply
+api.use('/me/approvals', approvalsMe);        // what a team lead can approve from the portal and the mobile app
+api.use('/me/team', teamToday);               // who is working today: team leads see their people, colleagues what the organisation allows
 api.use('/me/bids', bidsMe);                 // shift bidding, the person's side
 api.use('/me/offers', offersMe);             // voluntary time off and overtime offers, the person's side
 api.use('/me/swaps', swapsMe);               // shift swaps and the giveaway board, the person's side

@@ -7,7 +7,7 @@
 import { Waiting, LoadFailed, StaleNote } from '../common/loading';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ColDef, ICellRendererParams, IDatasource, IGetRowsParams, GridApi } from 'ag-grid-community';
-import { Download, RefreshCw, X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 import { api, apiPage, download, AdherenceDetail, AdherenceHistory, AdherenceLite, AdherenceStatus, AdherenceSummary, AdherenceTeam, Activity, ACTIVITY_CATEGORY_LABEL, SavedView } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
@@ -15,7 +15,7 @@ import { Grid } from '../forecasting/Grid';
 import { CHART, LineChart } from '../forecasting/charts';
 import { Banner, Btn, Busy, Card, Empty, Input, Kpi, KpiRow, Pill, Select, Table } from '../forecasting/ui';
 import { MultiSelect } from '../common/MultiSelect';
-import { coveredBy, ExplainBox, hm, isOut, REFRESH_OPTIONS, refreshLabel, RUN_COLOR, STATUS, useActivityLooks, useRefreshSetting, useTick } from './adherenceShared';
+import { ActualCell, coveredBy, ExplainBox, hm, inText, isOut, minutesToStart, shiftStartText, REFRESH_OPTIONS, refreshLabel, RUN_COLOR, STATUS, useActivityLooks, useRefreshSetting, useTick } from './adherenceShared';
 
 const NO_TEAM = '~none';
 const SCOPE_KEY = 'rta-scope';
@@ -77,12 +77,16 @@ export const AdherenceScreen: React.FC<{ groupId: string; day: string }> = ({ gr
   const cols = useMemo<ColDef<AdherenceLite>[]>(() => [
     { headerName: 'Agent', field: 'name', flex: 1.2, minWidth: 180, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && <div className="leading-tight py-1"><div className="font-semibold">{p.data.name}</div><div className="text-[12px] text-[#6B6B6B]">{p.data.team ?? 'No team'} · {p.data.employeeNumber}</div></div> },
     { headerName: 'Shift', field: 'shift', width: 140, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && <div className="leading-tight"><div>{p.data.shift ?? '–'}</div>{p.data.timezone !== d?.timezone && <div className="text-[12px] text-[#6B6B6B]">{p.data.timezone}</div>}</div> },
-    { headerName: 'Should be', field: 'scheduled', width: 130, sortable: false, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && (p.data.status === 'NOT_STARTED' ? <span className="text-[#6B6B6B]">–</span> : <span>{schedLabel(p.data.scheduled)}</span>) },
-    { headerName: 'Actually', field: 'actual', flex: 1, minWidth: 190, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && (p.data.status === 'NOT_STARTED' ? <span className="text-[#6B6B6B]">–</span> : <div className="leading-tight"><div>{p.data.actual}</div>{p.data.state && <div className="text-[12px] text-[#6B6B6B]">{p.data.state}{p.data.reason ? ` / ${p.data.reason}` : ''}{p.data.stateSince ? ` since ${p.data.stateSince}` : ''}</div>}</div>) },
-    { headerName: 'Status', field: 'status', width: 170, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && <Pill tone={STATUS[p.data.status].tone}>{STATUS[p.data.status].label}</Pill> },
+    { headerName: 'Should be', field: 'scheduled', width: 130, sortable: false, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && (p.data.status === 'NOT_STARTED' ? <span className="text-[#6B6B6B]">{shiftStartText(p.data.shift) ? `Starts at ${shiftStartText(p.data.shift)}` : '–'}</span> : <span>{schedLabel(p.data.scheduled)}</span>) },
+    { headerName: 'Actually', field: 'actual', flex: 1, minWidth: 190, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => p.data && <ActualCell a={p.data} before={p.data.status === 'NOT_STARTED'} /> },
+    { headerName: 'Status', field: 'status', width: 170, cellRenderer: (p: ICellRendererParams<AdherenceLite>) => {
+      if (!p.data) return null;
+      const soon = p.data.status === 'NOT_STARTED' && !day ? minutesToStart(p.data.shift, p.data.timezone) : null;       // only today has a "starts in"
+      return <div className="leading-tight"><Pill tone={STATUS[p.data.status].tone}>{STATUS[p.data.status].label}</Pill>{soon !== null && <div className="text-[12px] text-[#6B6B6B] mt-0.5">Starts in {inText(soon)}</div>}</div>;
+    } },
     { headerName: 'Out for', field: 'outSeconds', width: 96, type: 'rightAligned', valueFormatter: (p) => (!p.value ? '–' : p.value < 60 ? `${p.value}s` : `${Math.round(p.value / 60)} min`) },
     { headerName: 'Adherence', field: 'dayPercent', width: 110, type: 'rightAligned', valueFormatter: (p) => (p.value === null || p.value === undefined ? '–' : `${p.value}%`) },
-  ], [d?.timezone]);
+  ], [d?.timezone, day]);
 
   // saved views: a person's own filter sets
   const [viewsTick, setViewsTick] = useState(0);
@@ -155,15 +159,20 @@ export const AdherenceScreen: React.FC<{ groupId: string; day: string }> = ({ gr
         </div>
       </div>
 
-      <Card title="People" sub={day ? 'A past day shows how it ended.' : refresh ? `Refreshes every ${refreshLabel(refresh)}${d.ageSeconds > 0 ? ` · figures are ${d.ageSeconds} s old` : ''}.` : 'Refresh is off. Reload the page to update.'}
+      <Card title="People" sub={day ? 'A past day shows how it ended.' : refresh > 0 ? undefined : 'Refresh is off. Reload the page to update.'}
         actions={<>
           <div className="flex rounded border border-[#E5E5E0] bg-[#FAFAF8] p-0.5 text-[12px]" role="group" aria-label="Layout">
             {(['list', 'timeline'] as const).map((l) => <button key={l} onClick={() => setLayout(l)} aria-pressed={layout === l} className={`px-3 py-1.5 rounded font-semibold ${layout === l ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>{l === 'list' ? 'List' : 'Timeline'}</button>)}
           </div>
-          <div className="w-36"><Select value={refresh} onChange={(e) => setRefresh(Number(e.target.value))} aria-label="Refresh" disabled={!!day}>
-            {REFRESH_OPTIONS.map((x) => <option key={x} value={x}>{x === 0 ? 'Refresh off' : `Every ${refreshLabel(x)}`}</option>)}
-          </Select></div>
-          {!day && refresh > 0 && <span className="text-[11px] text-[#6B6B6B] flex items-center gap-1"><RefreshCw className="w-3 h-3" />live</span>}
+          {/* one control for how fresh the numbers are: whether they are live, how old they are, and how often they refresh */}
+          <div className="flex items-center gap-2 rounded border border-[#E5E5E0] bg-[#FAFAF8] py-0.5 pl-2.5 pr-1 text-[12px]" role="group" aria-label="Refresh">
+            {day ? <span className="text-[#6B6B6B]">Past day</span>
+              : refresh > 0 ? <span className="flex items-center gap-1.5 font-semibold"><span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-[#2A7553]" />Live{d.ageSeconds > 0 && <span className="font-normal text-[#6B6B6B]"> · {d.ageSeconds} s old</span>}</span>
+                : <span className="text-[#6B6B6B]">Refresh off</span>}
+            <select value={refresh} onChange={(e) => setRefresh(Number(e.target.value))} aria-label="How often to refresh" disabled={!!day} className="rounded bg-white px-1.5 py-1 text-[12px] outline-none disabled:opacity-50">
+              {REFRESH_OPTIONS.map((x) => <option key={x} value={x}>{x === 0 ? 'Off' : `Every ${refreshLabel(x)}`}</option>)}
+            </select>
+          </div>
         </>}>
         {error && <Banner kind="err" onClose={() => setError('')}>{error}</Banner>}
         {nobody ? (
@@ -179,16 +188,16 @@ export const AdherenceScreen: React.FC<{ groupId: string; day: string }> = ({ gr
                 <button onClick={() => setView('attention')} className={`px-3 py-1.5 rounded font-semibold ${view === 'attention' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>Needs attention ({attention.toLocaleString('en-US')})</button>
                 <button onClick={() => setView('everyone')} className={`px-3 py-1.5 rounded font-semibold ${view === 'everyone' ? 'bg-white text-[#171717] shadow-xs' : 'text-[#737373]'}`}>Everyone ({s.total.toLocaleString('en-US')})</button>
               </div>
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or number" aria-label="Search people" className="!w-52" />
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or number" aria-label="Search people" className="!w-44" />
               {view === 'everyone' && <MultiSelect ariaLabel="Status" allLabel="All statuses" noun={['status', 'statuses']} value={status} onChange={setStatus} options={(Object.keys(STATUS) as AdherenceStatus[]).map((k) => ({ value: k, label: STATUS[k].label }))} />}
               <MultiSelect ariaLabel="Teams" allLabel="All teams" noun={['team', 'teams']} value={teamSel} onChange={setTeamSel} options={teamOptions} />
               {(teamSel.length > 0 || search || (view === 'everyone' && status.length > 0)) && <button className="text-[12px] underline text-[#525252]" onClick={() => { setTeamSel([]); setSearch(''); setStatus([]); }}>Clear filters</button>}
               <div className="flex items-center gap-2 ml-auto">
-                <Select className="!w-44" aria-label="Saved views" value={pickedView} onChange={(e) => { const v = views.data?.find((x) => x.id === e.target.value); setPickedView(e.target.value); if (v) applyView(v); }}>
+                <Select className="!w-36" aria-label="Saved views" value={pickedView} onChange={(e) => { const v = views.data?.find((x) => x.id === e.target.value); setPickedView(e.target.value); if (v) applyView(v); }}>
                   <option value="">Saved views…</option>{views.data?.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
                 </Select>
                 {pickedView && <button className="text-[12px] underline text-[#BC3F3F]" onClick={() => { const v = views.data?.find((x) => x.id === pickedView); if (v) { void deleteView(v); setPickedView(''); } }}>Delete view</button>}
-                <Btn onClick={saveView}>Save this view</Btn>
+                <Btn onClick={saveView} title="Save the current search and filters as a view">Save view</Btn>
                 <Btn onClick={() => download(`/intraday/adherence/export.csv?${filterQs()}`, `adherence-${d.day}.csv`).catch((e) => setError(e.message))}><Download className="w-3.5 h-3.5" />Export</Btn>
               </div>
             </div>
@@ -366,10 +375,10 @@ const AgentDrawer: React.FC<{ groupId: string; day: string; employeeId: string; 
         {a && (
           <>
             <div className="grid grid-cols-2 gap-3 text-[13px]">
-              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Should be</div>{a.status === 'NOT_STARTED' ? '–' : schedLabel(a.scheduled)}{a.scheduledUntil && <span className="text-[#6B6B6B]"> until {a.scheduledUntil}</span>}</div>
-              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Actually</div>{a.status === 'NOT_STARTED' ? '–' : a.actual}{a.state && <div className="text-[12px] text-[#6B6B6B]">{a.state}{a.reason ? ` / ${a.reason}` : ''}{a.stateSince ? ` since ${a.stateSince}` : ''}</div>}</div>
+              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Should be</div>{a.status === 'NOT_STARTED' ? <span className="text-[#6B6B6B]">{shiftStartText(a.shift) ? `Starts at ${shiftStartText(a.shift)}` : '–'}</span> : schedLabel(a.scheduled)}{a.scheduledUntil && <span className="text-[#6B6B6B]"> until {a.scheduledUntil}</span>}</div>
+              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Actually</div><ActualCell a={a} before={a.status === 'NOT_STARTED'} /></div>
               <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Shift</div>{a.shift ?? '–'}</div>
-              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Day so far</div>{a.dayPercent === null ? '–' : `${a.dayPercent}%`}<span className="text-[12px] text-[#6B6B6B]"> ({a.adherentMin} of {a.scheduledMin} min)</span></div>
+              <div><div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B]">Day so far</div>{a.status === 'NOT_STARTED' ? <span className="text-[#6B6B6B]">Not started yet</span> : <>{a.dayPercent === null ? '–' : `${a.dayPercent}%`}<span className="text-[12px] text-[#6B6B6B]"> ({a.adherentMin} of {a.scheduledMin} min)</span></>}</div>
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-[#6B6B6B] mb-2">Timeline</div>

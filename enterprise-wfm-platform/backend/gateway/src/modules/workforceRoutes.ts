@@ -10,6 +10,7 @@ import { approvalAudience, approverLevel, teamLimit } from './approvals.ts';
 import { afterDeparture, applyDeparture, departureImpact, refuseIfLeading, type Departure } from './departures.ts';
 import { audit } from '../audit.ts';
 import { ruleVerdict } from './timeOffRules.ts';
+import { extensionProblem } from './integrations/agentMatch.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { assertCapacity } from './licensing/service.ts';
 import { dropCache, publish } from '../infra.ts';
@@ -28,7 +29,7 @@ const code = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(
 
 const EmpFields = z.object({
   employeeNumber: z.string().trim().min(1).max(40), firstName: z.string().trim().min(1).max(80), lastName: z.string().trim().min(1).max(80),
-  email: z.string().email().nullable().optional(), phone: z.string().max(40).optional(), extension: z.string().trim().max(20).refine((v) => !v.includes('@'), 'An agent extension is a phone extension, not an email address').nullable().optional(), timezone: z.string().max(60).nullable().optional(),
+  email: z.string().email().nullable().optional(), phone: z.string().max(40).optional(), extension: z.string().trim().max(60).superRefine((v, ctx) => { const p = extensionProblem(v); if (p) ctx.addIssue({ code: 'custom', message: p }); }).nullable().optional(), timezone: z.string().max(60).nullable().optional(),
   status: z.enum(['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED']).optional(), hireDate: z.string().regex(isoDay).refine((d) => d >= '1950-01-01' && d <= new Date(Date.now() + 366 * 864e5).toISOString().slice(0, 10), 'must be between 1950 and a year from now').nullable().optional(),
   teamId: uuid.nullable().optional(), location: z.string().max(80).optional(),
   employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY']).optional(),
@@ -125,6 +126,16 @@ async function writeEmployee(tx: Tx, id: string | null, b: Partial<EmpInput>): P
   }
   if (keys.length) await tx.exec(`UPDATE employees SET ${keys.map((k, i) => `${COLS[k]} = $${i + 2}${CASTS[k] ?? ''}`).join(', ')}, updated_at = now(), version = version + 1 WHERE tenant_id = :t AND id = $1`, [id, ...params]);
   return id;
+}
+
+/** Live agent states are matched to people by their agent extension, so two people who have not left cannot share one. (Not case-sensitive: 1001@Agnoshin.com is 1001@agnoshin.com.) */
+async function assertExtensionFree(tx: Tx, extension: string | null | undefined, exceptId: string | null) {
+  const ext = (extension ?? '').trim();
+  if (!ext) return;
+  const [clash] = await tx.q<{ employeeNumber: string; name: string }>(
+    `SELECT employee_number, first_name || ' ' || last_name AS name FROM employees
+      WHERE tenant_id = :t AND status <> 'TERMINATED' AND lower(extension) = lower($1) AND ($2::uuid IS NULL OR id <> $2) LIMIT 1`, [ext, exceptId]);
+  if (clash) throw conflict(`The agent extension ${ext} is already used by ${clash.name} (${clash.employeeNumber}). Each person needs their own, because the phone system's live agent states are matched to people by it.`);
 }
 
 const EMPLOYEE_TEMPLATE = [
@@ -267,6 +278,7 @@ workforce.post('/employees', requires('workforce:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     await checkReportsTo(tx, null, b.reportsTo);
     await assertCapacity(tx, p.tenantId, 'EMPLOYEES', 1);
+    await assertExtensionFree(tx, b.extension, null);
     const id = await writeEmployee(tx, null, b);
     const [e] = await loadEmployees(tx, { id });
     await audit(tx, p, req, { action: 'CREATE', entityType: 'EMPLOYEE', entityId: id, entityName: e.name, after: e });
@@ -296,6 +308,10 @@ workforce.put('/employees/:id', requires('workforce:write'), async (req, res) =>
       await assertCapacity(tx, p.tenantId, 'EMPLOYEES', 1);
     }
     checkEmployee({ weeklyContractHours: b.weeklyContractHours ?? before.weeklyContractHours, maxWeeklyHours: b.maxWeeklyHours ?? before.maxWeeklyHours, primaryGroupId: null, eligibleGroupIds: [] });
+    // only when the extension changes, or the person comes back: someone already sharing one is not stopped from saving their other details
+    if ((b.extension !== undefined && (b.extension ?? '').trim().toLowerCase() !== (before.extension ?? '').trim().toLowerCase()) || (before.status === 'TERMINATED' && b.status && b.status !== 'TERMINATED')) {
+      await assertExtensionFree(tx, b.extension !== undefined ? b.extension : before.extension, id);
+    }
     await guardRoleRemoval(tx, id, before.name, before, b);
     // anything beyond contact details needs a reason, kept in the history with the name of whoever made the change
     const changed = meaningfulChanges(before, b);
@@ -449,6 +465,11 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
     const errors: { line: number; message: string }[] = [];
     const plan: { input: EmpInput; skillList: { skillId: string; proficiency: number }[]; action: 'NEW' | 'UPDATE' | 'UNCHANGED'; line: number; name: string }[] = [];
     const seen = new Set<string>();
+    // extensions held by people who have not left, and who is in this file (someone in the file may be getting a different extension, so they do not count as holding theirs)
+    const fileNumbers = new Set(matrix.slice(1).map((r) => (col('employeeNumber') >= 0 ? (r[col('employeeNumber')] ?? '') : '').trim().toLowerCase()));
+    const holders = new Map<string, { employeeNumber: string; name: string }>();
+    for (const e of existing.values()) if (e.extension && e.status !== 'TERMINATED' && !fileNumbers.has(e.employeeNumber.toLowerCase())) holders.set(e.extension.trim().toLowerCase(), { employeeNumber: e.employeeNumber, name: e.name });
+    const extOwner = new Map<string, string>();      // extension -> employee number, for the rows read so far
     matrix.slice(1).forEach((r, i) => {
       const line = i + 2, get = (k: string) => (col(k) >= 0 ? (r[col(k)] ?? '').trim() : '');
       const fail = (m: string) => errors.push({ line, message: m });
@@ -478,6 +499,12 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
       }
       const parsed = EmpFields.safeParse(input);
       if (!parsed.success) return fail(parsed.error.issues.map((x) => `${x.path.join('.')} ${x.message}`).join('; '));
+      if (input.extension && input.status !== 'TERMINATED') {
+        const key = String(input.extension).trim().toLowerCase(), other = extOwner.get(key), held = holders.get(key);
+        if (other) return fail(`Agent extension ${input.extension} is also given to ${other} in this file. Each person needs their own.`);
+        if (held) return fail(`Agent extension ${input.extension} is already used by ${held.name} (${held.employeeNumber}). Each person needs their own.`);
+        extOwner.set(key, number);
+      }
       try { checkEmployee({ weeklyContractHours: input.weeklyContractHours ?? 40, maxWeeklyHours: input.maxWeeklyHours ?? 40, primaryGroupId: null, eligibleGroupIds: [] }); } catch (e: any) { return fail(e.message); }
       const cur = existing.get(number.toLowerCase());
       const changed = !cur || (Object.keys(input) as string[]).some((k) => {

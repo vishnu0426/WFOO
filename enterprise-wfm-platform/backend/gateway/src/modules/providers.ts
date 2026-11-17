@@ -219,7 +219,7 @@ type Values = Record<string, string>;
 
 export interface Email { enabled: boolean; provider: string; from: string; values: Values }
 export interface Sms { enabled: boolean; provider: string; values: Values }
-export interface Settings { email: Email; sms: Sms; defaults: Record<string, string[]> }
+export interface Settings { email: Email; sms: Sms; defaults: Record<string, string[]>; /** how a person may reset a forgotten password themselves: OFF (ask an administrator), EMAIL, SMS or EITHER */ passwordReset?: 'OFF' | 'EMAIL' | 'SMS' | 'EITHER' }
 
 /** Settings saved before providers existed (a host and port, a gateway address) become a provider choice, so nothing has to be entered again. */
 export function normaliseSettings(raw: any): Settings {
