@@ -70,6 +70,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
   const pickDensity = (v: string) => { const d = v === 'compact' ? 'compact' : 'comfortable'; setDensity(d); try { localStorage.setItem('wfm.timeline.density.v2', d); } catch { /* private mode */ } };
   const pickGroup = (on: boolean) => { setGroupTeams(on); try { localStorage.setItem('wfm.timeline.group', on ? '1' : '0'); } catch { /* private mode */ } };
   const [problem, setProblem] = useState<'ALL' | 'UNDERSTAFFED' | 'VIOLATIONS'>('ALL');
+  const [timing, setTiming] = useState<'ALL' | 'ON_NOW' | 'SOON'>('ALL');
   const [openEmp, setOpenEmp] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(() => { try { return localStorage.getItem('wfm.timeline.panel') !== '0'; } catch { return true; } });
   const togglePanel = () => setPanelOpen((o) => { try { localStorage.setItem('wfm.timeline.panel', o ? '0' : '1'); } catch { /* private mode */ } return !o; });
@@ -226,7 +227,13 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
     const skillOk = skillFilter.length === 0 || !skilledIds || skilledIds.has(employeeId);
     return nameOk && skillOk;
   };
-  const dayShifts = (shifts.data ?? []).filter((s) => s.day === day && passesFilter(s.employeeId, s.employeeName));
+  // "on shift now" / "starting soon" are only meaningful for today on the group's clock (15-minute slots; "soon" = the next 2 hours)
+  const isToday = day === now.day;
+  const onNow = (s: ScheduleShift) => s.startSlot <= now.slot && now.slot < s.startSlot + s.lengthSlots;
+  const startsSoon = (s: ScheduleShift) => s.startSlot > now.slot && s.startSlot <= now.slot + 8;
+  const dayAll = (shifts.data ?? []).filter((s) => s.day === day && passesFilter(s.employeeId, s.employeeName));
+  const onNowCount = isToday ? dayAll.filter(onNow).length : 0, soonCount = isToday ? dayAll.filter(startsSoon).length : 0;
+  const dayShifts = dayAll.filter((s) => !isToday || timing === 'ALL' || (timing === 'ON_NOW' ? onNow(s) : startsSoon(s)));
   const filteredRoster = roster.filter((r) => passesFilter(r.id, r.name));
   const rosterRows = sortRoster(matchRoster(buildRoster((shifts.data ?? []).filter((x) => passesFilter(x.employeeId, x.employeeName)), badKeys), ''), rosterSort, groupTeams);
   const filtering = !!nameQuery.trim() || skillFilter.length > 0;
@@ -557,9 +564,17 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
               {view === 'timeline' && mode === 'day' && <Seg options={[{ id: 'fit', label: 'Fit' }, { id: '15', label: '15m' }, { id: '30', label: '30m' }, { id: '60', label: '1h' }, { id: '120', label: '2h' }]} value={zoom} onChange={setZoom} />}
               {!panelOpen && <button type="button" onClick={togglePanel} className="h-8 rounded-md border border-[#E5E5E0] px-2.5 text-[12px] font-medium hover:bg-[#FAFAF8]" title="Show the issues and details panel">Show issues</button>}
           <div className="w-44"><Input value={nameQuery} onChange={(e) => setNameQuery(e.target.value)} placeholder="Search agent name or ID" aria-label="Search agent" /></div>
-          <Popover align="right" label="Filters" badge={(skillFilter.length ? 1 : 0) + (problem !== 'ALL' ? 1 : 0)} width={270}>
+          <Popover align="right" label="Filters" badge={(skillFilter.length ? 1 : 0) + (problem !== 'ALL' ? 1 : 0) + (isToday && timing !== 'ALL' ? 1 : 0)} width={270}>
             {() => (
               <div className="space-y-3 text-[12px]">
+                <div><div className="font-semibold mb-1">When</div>
+                  <Select value={isToday ? timing : 'ALL'} disabled={!isToday} onChange={(e) => setTiming(e.target.value as 'ALL' | 'ON_NOW' | 'SOON')} aria-label="Shift timing filter">
+                    <option value="ALL">Everyone on shift this day ({dayAll.length})</option>
+                    <option value="ON_NOW">On shift now ({onNowCount})</option>
+                    <option value="SOON">Starting in the next 2 hours ({soonCount})</option>
+                  </Select>
+                  {!isToday && <div className="mt-1 text-[#6B6B6B]">Available when you are looking at today.</div>}
+                </div>
                 <div><div className="font-semibold mb-1">Show</div>
                   <Select value={problem} onChange={(e) => setProblem(e.target.value as 'ALL' | 'UNDERSTAFFED' | 'VIOLATIONS')} aria-label="Problem filter">
                     <option value="ALL">Everyone on shift this day ({dayShifts.length})</option>
@@ -574,7 +589,7 @@ export const TimelinePanel: React.FC<{ versions: ScheduleVersion[]; version: Sch
                     </div>
                   </div>
                 )}
-                {(filtering || problem !== 'ALL') && <button type="button" className="underline text-[#6B6B6B]" onClick={() => { setNameQuery(''); setSkillFilter([]); setProblem('ALL'); }}>Clear all filters</button>}
+                {(filtering || problem !== 'ALL' || timing !== 'ALL') && <button type="button" className="underline text-[#6B6B6B]" onClick={() => { setNameQuery(''); setSkillFilter([]); setProblem('ALL'); setTiming('ALL'); }}>Clear all filters</button>}
               </div>
             )}
           </Popover>

@@ -262,10 +262,13 @@ export const DayTimeline: React.FC<{
 
   const cellTone = (d: number) => (d <= -6 ? 'bg-[#EFA9A9]' : d < 0 ? 'bg-[#F8D4D4]' : d >= 3 ? 'bg-[#F6E3B4]' : 'bg-[#D7EEDF]');
 
+  // the templates with a colour that appear in the shifts shown, once each, for the legend
+  const tplLegend = [...new Map(shifts.filter((s) => s.templateColor && s.templateName).map((s) => [s.templateName!, s.templateColor!] as const)).entries()].sort((a, b) => a[0].localeCompare(b[0]));
   const legend = (
     <>
-      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.shift }} />Shift</span>
-      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.manual }} />By hand</span>
+      {tplLegend.map(([name, c]) => <span key={name} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: withWhiteText(c) }} />{name}</span>)}
+      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.shift }} />{tplLegend.length ? 'Other shifts' : 'Shift'}</span>
+      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.manual }} />{tplLegend.length ? 'By hand (no template colour)' : 'By hand'}</span>
       {(Object.keys(ACT) as Act['type'][]).map((t) => <span key={t} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ACT[t].bg }} />{ACT[t].label}</span>)}
       <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: timelineColors.violation }} />Breaks a rule</span>
       <span className="ml-auto flex items-center gap-3"><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#D7EEDF]" />On target</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F6E3B4]" />Over</span><span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#F8D4D4]" />Short</span></span>
@@ -290,7 +293,7 @@ export const DayTimeline: React.FC<{
                   <div className="relative h-full" style={{ width: track }} onClick={() => onSelect(s)}>
                     {/* the work bar */}
                     <div className={`absolute h-7 rounded-md px-2 flex items-center text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden ${isSel ? 'ring-2 ring-[#171717]' : ''}`}
-                      style={{ top: barTop, left: x(drag && drag.shiftId === s.id && drag.mode === 'shift' ? Math.min(Math.max(s.startSlot + drag.delta, 0), 96 - s.lengthSlots) : s.startSlot), width: s.lengthSlots * px, cursor: canEdit && s.templateId ? 'grab' : 'default', touchAction: 'none', backgroundColor: withWhiteText(flagged ? timelineColors.violation : s.source === 'MANUAL' ? timelineColors.manual : timelineColors.shift) }}
+                      style={{ top: barTop, left: x(drag && drag.shiftId === s.id && drag.mode === 'shift' ? Math.min(Math.max(s.startSlot + drag.delta, 0), 96 - s.lengthSlots) : s.startSlot), width: s.lengthSlots * px, cursor: canEdit && s.templateId ? 'grab' : 'default', touchAction: 'none', backgroundColor: withWhiteText(flagged ? timelineColors.violation : s.templateColor ?? (s.source === 'MANUAL' ? timelineColors.manual : timelineColors.shift)), boxShadow: s.templateColor && s.source === 'MANUAL' && !flagged ? 'inset 0 0 0 2px rgba(255,255,255,0.6)' : undefined }}
                       onPointerDown={(e) => {
                         if (!canEdit || !s.templateId) return;
                         e.currentTarget.setPointerCapture(e.pointerId);

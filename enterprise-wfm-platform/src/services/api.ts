@@ -419,6 +419,8 @@ export type ShiftTemplate = {
   id: string; name: string; code: string; description: string; status: 'ACTIVE' | 'INACTIVE'; workDays: number[]; earliestStart: string; latestStart: string; startStepMinutes: number;
   durationHours: number; paidHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; version: number;
   mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] | null;
+  /** The colour its shifts have on the Schedule Timeline (display only); null = the organisation-wide shift colour. */
+  color?: string | null;
   /** Variable length: the shortest shift in hours (null = fixed at durationHours, which is then the longest) and the gap between offered lengths. */
   minDurationHours?: number | null; lengthStepMinutes?: number; mealPaid?: boolean; paidHoursMin?: number;
   /** A split shift: the "meal" is an unpaid gap of 1 to 6 hours between two parts of the day. */
@@ -457,7 +459,7 @@ export type PublishImpact = {
 };
 export type Violation = { type: string; employeeId: string; employeeName: string; day: string; message: string; severity?: 'BLOCK' | 'WARN' };
 export type ScheduleShift = {
-  id: string; employeeId: string; employeeName: string; employeeNumber: string; teamName?: string | null; day: string; templateId: string | null; templateName: string | null; startTime: string; endTime: string;
+  id: string; employeeId: string; employeeName: string; employeeNumber: string; teamName?: string | null; day: string; templateId: string | null; templateName: string | null; templateColor?: string | null; startTime: string; endTime: string;
   startSlot: number; lengthSlots: number; overnight: boolean; source: 'SOLVER' | 'MANUAL' | 'ROTATION' | 'PATTERN'; activities: { type: 'MEAL' | 'BREAK'; startSlot: number; slots: number; startTime: string; endTime: string }[];
 };
 

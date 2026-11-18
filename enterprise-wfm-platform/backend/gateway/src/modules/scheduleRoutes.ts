@@ -57,7 +57,7 @@ const slotOf = (s: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(s); return 
 // ---------------------------------------------------------------- shift templates
 
 const tplDto = (t: any) => ({
-  id: t.id, name: t.name, code: t.code, description: t.description, status: t.status, workDays: t.workDays,
+  id: t.id, name: t.name, code: t.code, description: t.description, status: t.status, workDays: t.workDays, color: t.color ?? null,
   earliestStart: hhmm(t.earliestStart), latestStart: hhmm(t.latestStart), startStepMinutes: t.startStep * 15,
   durationHours: t.lengthSlots / 4, mealMinutes: t.mealSlots * 15, breakCount: t.breakCount, breakMinutes: t.breakSlots * 15, flexMinutes: t.flexSlots * 15,
   paidHours: paidSlots(t, t.lengthSlots) / 4, version: t.version,
@@ -86,6 +86,7 @@ const TplBody = z.object({
   lengthRules: z.array(z.object({ fromHours: z.number().min(0).max(14), mealMinutes: z.number().int().min(0).max(120), breakCount: z.number().int().min(0).max(4), breakMinutes: z.number().int().min(15).max(60) })).max(6).nullable().optional(),
   groupIds: z.array(uuid).max(200).nullable().optional(), employmentTypes: z.array(z.string().min(1).max(30)).max(10).nullable().optional(), skillIds: z.array(uuid).max(50).nullable().optional(),
   effectiveFrom: z.string().regex(isoDay).nullable().optional(), effectiveTo: z.string().regex(isoDay).nullable().optional(),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'must look like #7B6CA6').nullable().optional(),       // display only; left out keeps the current colour, null clears it
 });
 const toSlots = (b: z.infer<typeof TplBody>) => {
   const e = slotOf(b.earliestStart), l = slotOf(b.latestStart);
@@ -137,6 +138,7 @@ scheduling.post('/templates', requires('workforce:write'), async (req, res) => {
          min_length_slots, length_step, day_windows, length_rules, meal_paid, group_ids, employment_types, skill_ids, effective_from, effective_to, split_shift)
        VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24, $25) RETURNING *`,
       [b.name, b.code ?? b.name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 30), b.description ?? '', [...new Set(b.workDays)].sort(), s.e, s.l, s.step, s.len, s.meal, s.breaks, s.brk, s.flex, s.mealAnchor, s.breakAnchors, ...flexParams(s)]);
+    if (b.color) t!.color = (await tx.one<any>('UPDATE shift_templates SET color = $2 WHERE tenant_id = :t AND id = $1 RETURNING color', [t!.id, b.color.toUpperCase()]))?.color ?? null;
     await audit(tx, p, req, { action: 'CREATE', entityType: 'SHIFT_TEMPLATE', entityId: t!.id, entityName: b.name, after: tplDto(t) });
     return tplDto(t);
   });
@@ -153,6 +155,7 @@ scheduling.put('/templates/:id', requires('workforce:write'), async (req, res) =
          min_length_slots = $16, length_step = $17, day_windows = $18::jsonb, length_rules = $19::jsonb, meal_paid = $20, group_ids = $21, employment_types = $22, skill_ids = $23, effective_from = $24, effective_to = $25, split_shift = $26,
          version = version + 1 WHERE tenant_id = :t AND id = $1 RETURNING *`,
       [id, b.name, b.description ?? '', b.status ?? null, [...new Set(b.workDays)].sort(), s.e, s.l, s.step, s.len, s.meal, s.breaks, s.brk, s.flex, s.mealAnchor, s.breakAnchors, ...flexParams(s)]);
+    if (b.color !== undefined) t!.color = (await tx.one<any>('UPDATE shift_templates SET color = $2 WHERE tenant_id = :t AND id = $1 RETURNING color', [id, b.color ? b.color.toUpperCase() : null]))?.color ?? null;
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SHIFT_TEMPLATE', entityId: id, entityName: b.name, before: tplDto(before), after: tplDto(t) });
     return tplDto(t);
   });
@@ -1238,12 +1241,12 @@ scheduling.get('/versions/:id/shifts', requires('schedule:read'), async (req, re
   const rows = await withTenant(p.tenantId, async (tx) => {
     await loadVersion(tx, id);
     return tx.q<any>(
-      `SELECT s.id, s.employee_id, e.first_name || ' ' || e.last_name AS employee_name, e.employee_number, tm.name AS team_name, s.day::text AS day, s.template_id, t.name AS template_name, s.start_slot, s.length_slots, s.activities, s.source
+      `SELECT s.id, s.employee_id, e.first_name || ' ' || e.last_name AS employee_name, e.employee_number, tm.name AS team_name, s.day::text AS day, s.template_id, t.name AS template_name, t.color AS template_color, s.start_slot, s.length_slots, s.activities, s.source
        FROM schedule_shifts s JOIN employees e ON e.id = s.employee_id LEFT JOIN teams tm ON tm.id = e.team_id LEFT JOIN shift_templates t ON t.id = s.template_id
        WHERE s.tenant_id = :t AND s.version_id = $1 AND ($2::date IS NULL OR s.day >= $2) AND ($3::date IS NULL OR s.day <= $3) AND ($4::uuid IS NULL OR s.employee_id = $4)
        ORDER BY e.last_name, e.first_name, s.day`, [id, q.from ?? null, q.to ?? null, q.employeeId ?? null]);
   });
-  res.json(rows.map((s) => ({ id: s.id, employeeId: s.employeeId, employeeName: s.employeeName, employeeNumber: s.employeeNumber, teamName: s.teamName ?? null, day: s.day, templateId: s.templateId, templateName: s.templateName,
+  res.json(rows.map((s) => ({ id: s.id, employeeId: s.employeeId, employeeName: s.employeeName, employeeNumber: s.employeeNumber, teamName: s.teamName ?? null, day: s.day, templateId: s.templateId, templateName: s.templateName, templateColor: s.templateColor ?? null,
     startTime: hhmm(s.startSlot), endTime: hhmm(s.startSlot + s.lengthSlots), startSlot: s.startSlot, lengthSlots: s.lengthSlots, overnight: s.startSlot + s.lengthSlots > SPD,
     activities: (s.activities ?? []).map((a: any) => ({ ...a, startTime: hhmm(a.startSlot), endTime: hhmm(a.startSlot + a.slots) })), source: s.source })));
 });

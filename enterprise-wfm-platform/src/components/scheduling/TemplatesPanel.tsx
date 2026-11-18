@@ -12,8 +12,8 @@ import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Table } from '../
 
 type Rule = { fromHours: number; mealMinutes: number; breakCount: number; breakMinutes: number };
 type Win = { earliest: string; latest: string };
-type Form = { minDurationHours: number | null; lengthStepMinutes: number; mealPaid: boolean; splitShift: boolean; lengthRules: Rule[]; dayWindows: Record<string, Win>; groupIds: string[]; employmentTypes: string[]; skillIds: string[]; effectiveFrom: string; effectiveTo: string; id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
-const blank = (): Form => ({ minDurationHours: null, lengthStepMinutes: 60, mealPaid: false, splitShift: false, lengthRules: [], dayWindows: {}, groupIds: [], employmentTypes: [], skillIds: [], effectiveFrom: '', effectiveTo: '', id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
+type Form = { color: string | null; minDurationHours: number | null; lengthStepMinutes: number; mealPaid: boolean; splitShift: boolean; lengthRules: Rule[]; dayWindows: Record<string, Win>; groupIds: string[]; employmentTypes: string[]; skillIds: string[]; effectiveFrom: string; effectiveTo: string; id: string | null; name: string; description: string; workDays: number[]; mode: 'FIXED' | 'FLEXIBLE'; earliestStart: string; latestStart: string; endTime: string; startStepMinutes: number; durationHours: number; mealMinutes: number; breakCount: number; breakMinutes: number; flexMinutes: number; status: 'ACTIVE' | 'INACTIVE'; mealAnchorMinutes: number | null; breakAnchorMinutes: (number | null)[] };
+const blank = (): Form => ({ color: null, minDurationHours: null, lengthStepMinutes: 60, mealPaid: false, splitShift: false, lengthRules: [], dayWindows: {}, groupIds: [], employmentTypes: [], skillIds: [], effectiveFrom: '', effectiveTo: '', id: null, name: '', description: '', workDays: [0, 1, 2, 3, 4, 5, 6], mode: 'FLEXIBLE', earliestStart: '08:00', latestStart: '10:00', endTime: '16:30', startStepMinutes: 30, durationHours: 8.5, mealMinutes: 30, breakCount: 2, breakMinutes: 15, flexMinutes: 30, status: 'ACTIVE', mealAnchorMinutes: null, breakAnchorMinutes: [null, null] });
 const resizeBreaks = (arr: (number | null)[], n: number): (number | null)[] => (arr.length === n ? arr : arr.length < n ? [...arr, ...new Array(n - arr.length).fill(null)] : arr.slice(0, n));
 
 const timeToMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
@@ -74,6 +74,7 @@ export const TemplatesPanel: React.FC = () => {
             <Field label="Paid breaks"><Input type="number" min={0} max={4} value={f.breakCount} onChange={(e) => { const n = Number(e.target.value); setF({ ...f, breakCount: n, breakAnchorMinutes: resizeBreaks(f.breakAnchorMinutes, n) }); }} /></Field>
             <Field label="Break length (minutes)"><Input type="number" min={15} max={60} step={15} value={f.breakMinutes} onChange={(e) => setF({ ...f, breakMinutes: Number(e.target.value), breakAnchorMinutes: f.breakAnchorMinutes.map(() => null) })} /></Field>
             <Field label="Break/meal placement window (min)" hint="How far the generator can still nudge a meal or break from where you drop it below, to smooth coverage"><Input type="number" min={0} max={120} step={15} value={f.flexMinutes} onChange={num('flexMinutes')} /></Field>
+            <div className="md:col-span-2"><Field label="Colour on the timeline" hint="Only changes how its shifts look on the Schedule Timeline. Schedules, rules and adherence are not affected."><ColourPick value={f.color} onChange={(c) => setF({ ...f, color: c })} /></Field></div>
             <Field label="Status"><Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as Form['status'] })}><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></Select></Field>
           </div>
           <ActivityTimeline durationHours={f.durationHours} mealMinutes={f.mealMinutes} breakCount={f.breakCount} breakMinutes={f.breakMinutes}
@@ -93,13 +94,13 @@ export const TemplatesPanel: React.FC = () => {
         <Table head={['Template', 'Start window', 'Length', 'Paid', 'Meal / breaks', 'Days', 'Status', '']}>
           {list.data?.map((t) => (
             <tr key={t.id}>
-              <td className="p-3 font-semibold">{t.name}</td>
+              <td className="p-3 font-semibold"><span className="inline-block w-3 h-3 rounded-sm mr-2 align-middle border border-[#D6D6D0]" style={{ backgroundColor: t.color ?? 'transparent' }} title={t.color ? `Timeline colour ${t.color}` : 'No colour set: shown in the standard shift colour'} />{t.name}</td>
               <td className="p-3 font-mono text-[12px]"><span className="text-[#6B6B6B]">starts </span>{t.earliestStart === t.latestStart ? t.earliestStart : `${t.earliestStart}–${t.latestStart}`} <span className="text-[#6B6B6B]">{t.earliestStart === t.latestStart ? '' : `every ${t.startStepMinutes}m`}</span></td>
               <td className="p-3">{t.minDurationHours ? `${t.minDurationHours}–${t.durationHours}h` : `${t.durationHours}h`}</td><td className="p-3">{t.minDurationHours && t.paidHoursMin != null ? `${t.paidHoursMin}–${t.paidHours}h` : `${t.paidHours}h`}</td>
               <td className="p-3 text-[12px]">{t.lengthRules?.length ? `${t.lengthRules.length} rules by length` : `${t.mealMinutes ? `${t.mealMinutes}m meal` : 'no meal'} · ${t.breakCount}×${t.breakMinutes}m`}{t.mealPaid ? ' · paid meal' : ''}</td>
               <td className="p-3 text-[12px]">{t.workDays.length === 7 ? 'Every day' : t.workDays.map((d) => DOW[d]).join(' ')}{t.dayWindows && Object.keys(t.dayWindows).length ? <span className="text-[#6B6B6B]"> · own times on {Object.keys(t.dayWindows).length}</span> : null}{t.groupIds || t.employmentTypes || t.skillIds ? <span className="text-[#6B6B6B]"> · limited</span> : null}{t.effectiveFrom || t.effectiveTo ? <span className="text-[#6B6B6B]"> · {t.effectiveFrom ?? '…'} to {t.effectiveTo ?? '…'}</span> : null}</td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formOf(t), id: null, name: `${t.name} copy` }); }}>Copy</button><button aria-label="Delete template" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) }); }}>Edit</button><button className="text-[12px] underline mr-3" onClick={() => { setError(''); setF({ ...formOf(t), id: null, name: `${t.name} copy`, color: null }); }}>Copy</button><button aria-label="Delete template" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={() => del(t)}><Trash2 className="w-4 h-4 inline" /></button></>}</td>
             </tr>
           ))}
         </Table>
@@ -107,6 +108,16 @@ export const TemplatesPanel: React.FC = () => {
     </Card>
   );
 };
+
+/** Colours picked to be told apart from each other and from the timeline's own "by hand" and "breaks a rule" colours; dark enough for a white label. */
+export const TEMPLATE_PALETTE = ['#7B6CA6', '#3F7CAC', '#2F8F83', '#5B9A4B', '#7A8B3A', '#B8860B', '#D2793C', '#A64D9A', '#8C6D4F', '#5C6BC0'];
+const ColourPick: React.FC<{ value: string | null; onChange: (c: string | null) => void }> = ({ value, onChange }) => (
+  <div className="flex flex-wrap items-center gap-1.5 min-h-9">
+    <button type="button" onClick={() => onChange(null)} aria-pressed={value === null} className={`h-7 px-2 rounded-md border text-[12px] ${value === null ? 'border-[#171717] font-semibold' : 'border-[#E5E5E0] text-[#6B6B6B]'}`}>Standard</button>
+    {TEMPLATE_PALETTE.map((c) => <button key={c} type="button" aria-label={`Colour ${c}`} aria-pressed={value?.toUpperCase() === c} onClick={() => onChange(c)} className={`w-7 h-7 rounded-md border-2 ${value?.toUpperCase() === c ? 'border-[#171717]' : 'border-transparent'}`} style={{ backgroundColor: c }} />)}
+    <input type="color" aria-label="Pick another colour" value={value ?? '#7B6CA6'} onChange={(e) => onChange(e.target.value.toUpperCase())} className="w-7 h-7 p-0 border border-[#E5E5E0] rounded-md bg-white cursor-pointer" />
+  </div>
+);
 
 const minToHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
@@ -176,7 +187,7 @@ const ActivityTimeline: React.FC<{
 
 /** The new template fields, from a template the API returned. */
 const formExtras = (t: ShiftTemplate) => ({
-  minDurationHours: t.minDurationHours ?? null, lengthStepMinutes: t.lengthStepMinutes ?? 60, mealPaid: !!t.mealPaid, splitShift: !!t.splitShift, lengthRules: t.lengthRules ?? [], dayWindows: t.dayWindows ?? {},
+  color: t.color ?? null, minDurationHours: t.minDurationHours ?? null, lengthStepMinutes: t.lengthStepMinutes ?? 60, mealPaid: !!t.mealPaid, splitShift: !!t.splitShift, lengthRules: t.lengthRules ?? [], dayWindows: t.dayWindows ?? {},
   groupIds: t.groupIds ?? [], employmentTypes: t.employmentTypes ?? [], skillIds: t.skillIds ?? [], effectiveFrom: t.effectiveFrom ?? '', effectiveTo: t.effectiveTo ?? '',
 });
 const formOf = (t: ShiftTemplate): Form => ({ ...formExtras(t), id: t.id, name: t.name, description: t.description, workDays: t.workDays, mode: t.earliestStart === t.latestStart ? 'FIXED' : 'FLEXIBLE', earliestStart: t.earliestStart, latestStart: t.latestStart, endTime: minToTime(timeToMin(t.earliestStart) + t.durationHours * 60), startStepMinutes: t.startStepMinutes, durationHours: t.durationHours, mealMinutes: t.mealMinutes, breakCount: t.breakCount, breakMinutes: t.breakMinutes, flexMinutes: t.flexMinutes, status: t.status, mealAnchorMinutes: t.mealAnchorMinutes, breakAnchorMinutes: resizeBreaks(t.breakAnchorMinutes ?? [], t.breakCount) });
