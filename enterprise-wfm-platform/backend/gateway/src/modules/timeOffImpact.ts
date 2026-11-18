@@ -54,7 +54,7 @@ async function gather(tx: Tx, req: any): Promise<Facts> {
 
   let balance: any = null;
   if (pol.entitlements[req.type] !== undefined) {
-    const b = (await balances(tx, req.employeeId, pol, req.startDay.slice(0, 4), Number(req.startDay.slice(5, 7)))).find((x) => x.type === req.type);
+    const b = (await balances(tx, req.employeeId, pol, req.startDay.slice(0, 4), Number(req.startDay.slice(5, 7)), req.startDay)).find((x) => x.type === req.type);
     // a request that is already approved is already inside "used"; do not take its days off twice
     if (b) balance = { type: b.type, entitledDays: b.entitledDays, remainingDays: b.remainingDays, usedDays: b.usedDays, asksFor: n, afterDays: Math.round((b.remainingDays - (req.status === 'APPROVED' ? 0 : n)) * 100) / 100, mode: pol.accrualMode };
   }

@@ -315,14 +315,14 @@ export function rollup(daily: Daily[], grain: 'week' | 'month') {
 
 export const shortLabel = (kind: string) => (kind === 'SHORT' ? 'Short-term' : 'Long-term');
 
-async function historyFor(tx: Tx, group: Group, cutoff: string) {   // demand, not just answered calls: a queue that counts only answered calls gets its abandoned callers added back (see demand.ts)
+async function historyFor(tx: Tx, group: Group, cutoff: string, from: string | null = null) {   // demand, not just answered calls: a queue that counts only answered calls gets its abandoned callers added back (see demand.ts). `from` starts the history later than everything there is.
   const ids = group.queues.map((q) => q.id);
   const daily = await tx.q<any>(
     `SELECT h.queue_id, h.day::text AS day, sum(${DEMAND_SQL})::float8 AS volume, coalesce(sum(${DEMAND_SQL}::float8 * h.aht_sec) / nullif(sum(${DEMAND_SQL}), 0), 0) AS aht
-     FROM interval_history h JOIN queues q ON q.id = h.queue_id WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 GROUP BY h.queue_id, h.day ORDER BY h.day`, [ids, cutoff]);
+     FROM interval_history h JOIN queues q ON q.id = h.queue_id WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 AND ($3::date IS NULL OR h.day >= $3::date) GROUP BY h.queue_id, h.day ORDER BY h.day`, [ids, cutoff, from]);
   const slots = await tx.q<any>(
     `SELECT h.queue_id, h.day::text AS day, h.slot, (${DEMAND_SQL})::float8 AS volume, h.aht_sec::float8 AS aht FROM interval_history h JOIN queues q ON q.id = h.queue_id
-     WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 AND h.day >= ($2::date - 57) ORDER BY h.day, h.slot`, [ids, cutoff]);
+     WHERE h.tenant_id = :t AND h.queue_id = ANY($1::uuid[]) AND h.day < $2 AND h.day >= ($2::date - 57) AND ($3::date IS NULL OR h.day >= $3::date) ORDER BY h.day, h.slot`, [ids, cutoff, from]);
   // a new queue that has been told to borrow the daily pattern of a similar queue uses it until it has enough of its own (see borrowShape.ts)
   const links = await tx.q<{ id: string; shapeFromQueueId: string }>('SELECT id, shape_from_queue_id FROM queues WHERE tenant_id = :t AND id = ANY($1::uuid[]) AND shape_from_queue_id IS NOT NULL', [ids]);
   const donorIds = [...new Set(links.map((l) => l.shapeFromQueueId))];
@@ -361,7 +361,8 @@ export async function loadFactors(tx: Tx, groupId: string): Promise<Factors> {
 
 const WEEKDAY = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
 
-export interface CreateInput { groupId: string; kind: 'SHORT' | 'LONG'; weeks?: number; days?: number; model?: string; name?: string; fromDay?: string; parentVersionId?: string | null }
+/** historyFrom / historyTo: the days of history the models learn from (both included); left out, everything up to yesterday is used. */
+export interface CreateInput { groupId: string; kind: 'SHORT' | 'LONG'; weeks?: number; days?: number; model?: string; name?: string; fromDay?: string; parentVersionId?: string | null; historyFrom?: string; historyTo?: string }
 
 const ENGINE_LABEL = 'wfm-engine 2';
 
@@ -371,8 +372,10 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
     const group = await loadGroup(tx, b.groupId);
     if (!group.queues.length) throw bad('This WFM group has no queues. Add queues under Configuration first.');
     const today = todayIn(group.timezone);
-    const queues = await historyFor(tx, group, today);
-    if (queues.every((q) => q.daily.length < 7)) throw bad('Not enough history: import at least 7 days of interval data first (Data Management).');
+    if (b.historyFrom && b.historyTo && b.historyFrom > b.historyTo) throw bad('The history period ends before it starts.');
+    if (b.historyTo && b.historyTo >= today) throw bad('The history period must end before today: today is not finished yet.');
+    const queues = await historyFor(tx, group, b.historyTo ? addDays(b.historyTo, 1) : today, b.historyFrom ?? null);
+    if (queues.every((q) => q.daily.length < 7)) throw bad(b.historyFrom || b.historyTo ? 'Not enough history in the dates chosen: at least 7 days of interval data are needed. Choose a longer period.' : 'Not enough history: import at least 7 days of interval data first (Data Management).');
     const sourceEvents = await tx.q<any>(`SELECT id, name, kind, start_day::text AS start_day, end_day::text AS end_day, uplift_pct::float8 AS uplift_pct, lead_days, lag_days FROM special_events WHERE tenant_id = :t AND ((wfm_group_id IS NULL AND site_id IS NULL) OR wfm_group_id = $1 OR site_id = (SELECT site_id FROM wfm_groups WHERE id = $1))`, [group.id]);
     const siteId = (await tx.one<{ siteId: string | null }>('SELECT site_id FROM wfm_groups WHERE tenant_id = :t AND id = $1', [group.id]))?.siteId ?? null;
     return { group, today, queues, events: await eventsFor(tx, group), factors: await loadFactors(tx, group.id), sourceEvents, siteId };
@@ -401,7 +404,7 @@ export async function createVersion(p: Principal, req: any, b: CreateInput) {
   }
   const summary = {
     learning: { applied },
-    createdFor: { historyTo: prep.queues[0].daily.at(-1)?.day, model },
+    createdFor: { historyTo: prep.queues[0].daily.at(-1)?.day, historyFrom: b.historyFrom ?? prep.queues.map((q) => q.daily[0]?.day).filter(Boolean).sort()[0] ?? null, historyChosen: !!(b.historyFrom || b.historyTo), model },
     series: resp.series.map((s: any) => {
       const q = group.queues.find((x) => x.idx === s.queue_id);
       return { queueId: q?.id ?? null, name: q?.name ?? 'Group total', model: s.model, scores: s.scores, backtest: s.backtest, notes: s.notes, cleanedDays: s.cleaned_days, sigmaRel: s.sigma_rel, bands: { method: s.band_method || null, p10Coverage: s.p10_coverage, p90Coverage: s.p90_coverage, points: s.band_points } };

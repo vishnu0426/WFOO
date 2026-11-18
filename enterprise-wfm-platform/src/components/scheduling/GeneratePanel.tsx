@@ -15,6 +15,9 @@ import { HelpTip } from '../common/HelpTip';
 import { Banner, Btn, Card, Empty, Field, Input, Select } from '../forecasting/ui';
 import { JobCard } from './JobCard';
 import { TemplatePicker } from './TemplatePicker';
+import { automaticChoice, daysText, forecastChoices, forecastTitle, hasOwnName, longDay, monthDay, periodText, shortSpan, type FvAccuracy } from '../../services/liveForecasts';
+import { ForecastPicker } from './ForecastPicker';
+import { zoneNote } from '../../services/timeZones';
 import { crewNote, forecastFix, optionEstimate, optionsNote, overstaffPct, solveNote, solverHeadline, uncoveredFix } from '../../services/generateFixes';
 import { Metric } from '../wfm/app-shell';
 import { RotationBuild } from './RotationBuild';
@@ -45,13 +48,20 @@ type Readiness = { guests?: { name: string; people: number; scheduled: boolean }
 type Item = { ok: boolean | 'info'; /** shown as a caution, but does not stop the build */ warn?: boolean; text: string; /** a short headline and one line; `text` then becomes the explanation behind "Details" */ title?: string; short?: string; action?: { label: string; onClick: () => void }; /** what would put it right, one button each (the first is the main fix) */ actions?: { label: string; onClick: () => void }[] };
 
 export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (v: ScheduleVersion) => void; go: (sub: string) => void }> = ({ versions, onCreated, go }) => {
-  const { group, can, go: goModule } = useForecast();
+  const { group, can, go: goModule, session } = useForecast();
+  const sitesApi = useApi<{ id: string; name: string; timezone: string }[]>('/config/sites');
   const fcs = useApi<VersionMeta[]>(group ? `/forecast/versions?groupId=${group.id}` : null);
+  const fcAcc = useApi<(FvAccuracy & { versionId: string })[]>(group ? `/forecast/versions-accuracy?groupId=${group.id}` : null);
+  const accuracyOf = useMemo(() => Object.fromEntries((fcAcc.data ?? []).map((a) => [a.versionId, a])), [fcAcc.data]);
   const tpls = useApi<ShiftTemplate[]>('/scheduling/templates');
   // counts and hours only, however large the group: the people themselves are never downloaded here
   const emps = useApi<{ people: number; weeklyHours: number; teams: { id: string; name: string; people: number; weeklyHours: number }[] }>(group ? `/workforce/employees/summary?groupId=${group.id}&status=ACTIVE` : null);
   const coverageWindows = useApi<CoverageWindow[]>(group ? `/config/groups/${group.id}/coverage-windows` : null);
   const [coverageSource, setCoverageSource] = useState<'FORECAST' | 'MANUAL'>('FORECAST');
+  const [fcPick, setFcPick] = useState<string>('AUTO');        // which forecast the schedule follows: 'AUTO' = the live one that covers the dates, or a chosen version
+  const [showOldFc, setShowOldFc] = useState(false);
+  const [showDraftFc, setShowDraftFc] = useState(false);      // forecasts that are not published yet stay hidden unless asked for
+  useEffect(() => { setFcPick('AUTO'); }, [group?.id]);
   const savedWeek = usePayWeek(group?.id);                 // a new schedule starts on the first day of the group's pay week, not always a Monday
   const [fromPick, setFrom] = useState<string | null>(null);
   const from = fromPick ?? nextWeekStart(savedWeek, 0);
@@ -117,7 +127,8 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   useEffect(() => { if (result) resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [result]);
 
   const to = addDays(from, weeks * 7 - 1);
-  const readiness = useApi<Readiness>(group ? `/scheduling/readiness?groupId=${group.id}&from=${from}&weeks=${weeks}&coverageSource=${coverageSource}&timeLimitSec=${limit}&solveWeeks=${solveWeeks}` : null, [from, weeks, coverageSource, group?.id, saved, limit, solveWeeks]);
+  const chosenFc = coverageSource === 'FORECAST' && fcPick !== 'AUTO' ? fcPick : null;
+  const readiness = useApi<Readiness>(group ? `/scheduling/readiness?groupId=${group.id}&from=${from}&weeks=${weeks}&coverageSource=${coverageSource}&timeLimitSec=${limit}&solveWeeks=${solveWeeks}${chosenFc ? `&forecastVersionId=${chosenFc}` : ''}` : null, [from, weeks, coverageSource, group?.id, saved, limit, solveWeeks, chosenFc]);
   const running = useApi<ScheduleJob[]>(group ? `/scheduling/jobs?groupId=${group.id}&active=true` : null, [group?.id]);
   useEffect(() => { if (!jobId && running.data?.length) setJobId(running.data[0].id); }, [running.data]);
   const weekStart = weekPick ?? readiness.data?.payWeek.start ?? 0;
@@ -128,7 +139,15 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     try { await api(`/config/groups/${group.id}`, { method: 'PUT', body: { payWeekStart: weekPick } }); setWeekPick(null); setSaved((n) => n + 1); } catch (e: any) { setError(e.message); }
   };
 
-  const published = fcs.data?.find((v) => v.kind === 'SHORT' && v.status === 'PUBLISHED');
+  // several short-term forecasts can be live, each for its own period: the schedule follows the one chosen, or (Automatic) the live one that covers its dates
+  const choices = useMemo(() => forecastChoices({ from, to: addDays(from, weeks * 7 - 1), forecasts: fcs.data ?? [], withArchived: showOldFc }), [fcs.data, from, weeks, showOldFc]);
+  const picked = fcPick === 'AUTO' ? null : (fcs.data ?? []).find((v) => v.id === fcPick) ?? null;
+  const followed = fcPick === 'AUTO' ? automaticChoice(choices)?.fv : picked;
+  const published = (followed as VersionMeta | undefined) ?? fcs.data?.find((v) => v.kind === 'SHORT' && v.status === 'PUBLISHED');
+  const liveSpan = (() => { const l = (fcs.data ?? []).filter((v) => v.kind === 'SHORT' && v.status === 'PUBLISHED'); return l.length ? { from: l.map((v) => v.fromDay).sort()[0], to: l.map((v) => v.toDay).sort().at(-1)! } : null; })();
+  const pickedChoice = picked ? choices.find((c) => c.fv.id === picked.id) : null;
+  /** the dates the schedule may start on: those of the forecast chosen, else the whole stretch the live forecasts reach */
+  const dateLimit = picked ? { from: picked.fromDay, to: picked.toDay } : liveSpan ?? (published ? { from: published.fromDay, to: published.toDay } : null);
   const active = (tpls.data ?? []).filter((t) => t.status === 'ACTIVE');
   const chosen = active.filter((t) => !skip.includes(t.id));
   const teamsInGroup: [string, string][] = (emps.data?.teams ?? []).map((t) => [t.id, t.name]);
@@ -171,8 +190,13 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
   const ready = coverageReady && chosen.length > 0 && includedCount > 0 && !(readiness.data?.problem && coverageSource === 'FORECAST') && rotationOk;
 
   const items: Item[] = [
-    coverageSource === 'FORECAST'
-      ? (published && fix.kind === 'NONE' ? { ok: true as const, text: `Forecast: ${published.name}` }
+    coverageSource === 'FORECAST' && picked
+      ? (pickedChoice?.covers === 'ALL'
+        ? (picked.status === 'PUBLISHED' ? { ok: true as const, text: `Forecast: ${picked.name}` }
+          : { ok: 'info' as const, warn: true, title: `Forecast v${picked.seq} is not published`, short: 'The schedule is built on a forecast still under review', text: `Forecast v${picked.seq} is ${picked.status === 'DRAFT' ? 'still a draft' : picked.status === 'SUBMITTED' ? 'waiting for approval' : picked.status === 'APPROVED' ? 'approved but not published' : 'archived'}. The schedule is built on it anyway, and is marked as built on a forecast that is not live.` })
+        : { ok: false as const, text: pickedChoice ? pickedChoice.note : `Forecast v${picked.seq} does not cover these dates`, actions: [{ label: 'Follow the live forecast automatically', onClick: () => setFcPick('AUTO') }] })
+      : coverageSource === 'FORECAST'
+      ? (published && fix.kind === 'NONE' ? { ok: true as const, text: `Forecast: ${forecastTitle(published)}${hasOwnName(published) ? ` (v${published.seq})` : ''}` }
         : { ok: false as const, text: fix.kind === 'NONE' ? 'No published short-term forecast' : fix.text, actions: fixActions })
       : { ok: (coverageWindows.data?.length ?? 0) > 0, text: (coverageWindows.data?.length ?? 0) > 0 ? `${coverageWindows.data?.length} coverage window${coverageWindows.data?.length === 1 ? '' : 's'} set` : 'No coverage windows set for this group', action: (coverageWindows.data?.length ?? 0) === 0 ? { label: 'WFM Groups', onClick: () => goModule('wfm-groups', 'configuration') } : undefined },
     { ok: chosen.length > 0, text: chosen.length ? `${chosen.length} shift template${chosen.length === 1 ? '' : 's'} chosen` : 'No shift templates chosen', action: chosen.length === 0 ? { label: 'Shift Templates', onClick: () => go('shift-templates') } : undefined },
@@ -211,6 +235,8 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     ? { ok: false, title: 'Pay week does not match the start day', short: `The schedule starts on ${WEEKDAYS[startDow]}, the pay week on ${WEEKDAYS[weekStart]}`, text: `Starts on a ${WEEKDAYS[startDow]} but the pay week starts on ${WEEKDAYS[weekStart]}: people may not reach full contract hours`, action: { label: `Use ${WEEKDAYS[startDow]} week`, onClick: () => setWeekStart(startDow) } }
     : { ok: true, text: `Pay week starts on ${WEEKDAYS[weekStart]}, the same day the schedule starts` });
   if (weeks === 1 && !hasPriorPublished && !repeat) items.push({ ok: 'info', text: 'No published schedule before this date, so nobody carries a night shift into the first day', action: { label: 'Assume the week repeats', onClick: () => { setRepeat(true); setAdvanced(true); } } });
+  const zoneCheck = group ? zoneNote({ zone: group.timezone, siteZone: sitesApi.data?.find((s) => s.id === group.siteId)?.timezone ?? null, siteName: sitesApi.data?.find((s) => s.id === group.siteId)?.name ?? null, orgZone: session?.tenant?.timezone ?? null }) : null;
+  if (zoneCheck?.kind === 'check') items.push({ ok: 'info', warn: true, title: 'Check the time zone', short: `The group runs on ${group!.timezone}`, text: zoneCheck.text, action: { label: 'Open WFM Groups', onClick: () => goModule('wfm-groups', 'configuration') } });
   if (gaps.length) items.push({ ok: 'info', text: `No chosen template covers ${gaps.slice(0, 3).join(', ')}. Fine if the phones are closed then.` });
 
   // the checklist in three groups: things to fix, things worth a look, and what is fine
@@ -225,7 +251,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
     try {
       const body = {
         ...(rotChoice === 'FILL' && fillPattern?.versionId ? { fillFromVersionId: fillPattern.versionId } : {}),
-        guests: guestsMode, groupId: group.id, from, weeks, ...(weekPick !== null ? { weekStart: weekPick } : {}), timeLimitSec: limit, weights: w, consistentTimes: steady, optimizeBreaks: breaksOn, assumeRepeat: repeat && weeks === 1, templateIds: chosen.map((t) => t.id), coverageSource, solver: solverPick, ...(coverageSource === 'FORECAST' ? { confidence } : {}),
+        guests: guestsMode, groupId: group.id, from, weeks, ...(weekPick !== null ? { weekStart: weekPick } : {}), timeLimitSec: limit, weights: w, consistentTimes: steady, optimizeBreaks: breaksOn, assumeRepeat: repeat && weeks === 1, templateIds: chosen.map((t) => t.id), coverageSource, solver: solverPick, ...(coverageSource === 'FORECAST' ? { confidence } : {}), ...(chosenFc ? { forecastVersionId: chosenFc } : {}),
         ...(scope === 'EMPLOYEE' && skipEmp.length ? { excludeEmployeeIds: skipEmp.map((e) => e.id) } : {}),
         ...(scope === 'TEAM' ? { teamIds: teamsInGroup.filter(([id]) => !skipTeam.includes(id)).map(([id]) => id) } : {}),
       };
@@ -254,7 +280,8 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
 
   const preset = PRESETS.find((p) => sameWeights(w, p.w));
   const stage = elapsed < 4 ? 0 : elapsed < limit ? 1 : 2;
-  const fmtShort = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en', { weekday: 'short', day: 'numeric', month: 'short' });
+  const thisYear = new Date().getFullYear();      // a year is written in a date only when it is not this one
+  const startOk = /^\d{4}-\d{2}-\d{2}$/.test(from);   // the date box is empty while a date is half typed
 
   return (
     <div className="space-y-6">
@@ -279,8 +306,8 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
               );
             })()}
             {solver.backend && solver.backend !== 'cpsat' && <Banner kind="warn">The main solver could not answer this one, so a backup ({solver.backend}) built it. {solver.attempts?.join('; ')}</Banner>}
-            {result.stats.uncoveredDays && result.stats.uncoveredDays.length > 0 && <Banner kind="warn">Neither forecast covers {result.stats.uncoveredDays.join(', ')}, so those days have no staffing target.</Banner>}
-            {result.stats.projectedDays && result.stats.projectedDays.length > 0 && <Banner kind="warn">{result.stats.projectedDays.join(', ')} {result.stats.projectedDays.length > 1 ? 'are' : 'is'} beyond the short-term forecast's reach — staffed from the long-term forecast projected onto intervals by historical shape, lower confidence than a normal day.</Banner>}
+            {result.stats.uncoveredDays && result.stats.uncoveredDays.length > 0 && <Banner kind="warn">Neither forecast covers {daysText(result.stats.uncoveredDays, thisYear)}, so those days have no staffing target.</Banner>}
+            {result.stats.projectedDays && result.stats.projectedDays.length > 0 && <Banner kind="warn">{daysText(result.stats.projectedDays, thisYear)} {result.stats.projectedDays.length > 1 ? 'are' : 'is'} beyond the short-term forecast's reach — staffed from the long-term forecast projected onto intervals by historical shape, lower confidence than a normal day.</Banner>}
             {result.settings?.report && <ReportSummary report={result.settings.report} />}
             <div className="flex flex-wrap gap-2">
               <Btn variant="primary" onClick={() => go('schedule-timeline')}>Open timeline</Btn>
@@ -331,7 +358,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                 ))}
               </div>
               <p className="text-[12px] text-[#525252]">{crewPeople} {crewPeople === 1 ? 'person' : 'people'} in this group follow a rotation pattern: {crewPats.map((p) => `${p.name} (${p.memberCount})`).join(', ')}.</p>
-              {rotChoice === 'FILL' && fillPattern && <p className="text-[12px] text-[#525252]">Fills around {fillPattern.name}{fillPattern.materializedThrough ? `, whose roster runs to ${dayYear(fillPattern.materializedThrough)}` : ''}.{selPat && selPat.id !== fillPattern.id ? ` ${selPat.name} has no roster yet, so ${fillPattern.name} is used.` : ''}</p>}
+              {rotChoice === 'FILL' && fillPattern && <p className="text-[12px] text-[#525252]">Fills around {fillPattern.name}{fillPattern.materializedThrough ? `, whose roster runs to ${monthDay(fillPattern.materializedThrough, thisYear)}` : ''}.{selPat && selPat.id !== fillPattern.id ? ` ${selPat.name} has no roster yet, so ${fillPattern.name} is used.` : ''}</p>}
             </Section>
           )}
 
@@ -346,12 +373,24 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                 <button type="button" className={`px-3 py-1 rounded-md border ${coverageSource === 'FORECAST' ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#E5E5E0]'}`} onClick={() => setCoverageSource('FORECAST')}>From forecast</button>
                 <button type="button" className={`px-3 py-1 rounded-md border ${coverageSource === 'MANUAL' ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]' : 'border-[#E5E5E0]'}`} onClick={() => setCoverageSource('MANUAL')}>Set manually</button>
               </div>
-              {coverageSource === 'FORECAST' && published && <p className="text-[12px] text-[#6B6B6B] mt-1.5">The schedule must fall inside the forecast’s dates: {dayYear(published.fromDay)} to {dayYear(published.toDay)}.</p>}
             </div>
+            {coverageSource === 'FORECAST' && (
+              <Field label="Forecast to follow" hint={fcPick === 'AUTO' ? undefined : pickedChoice?.note}>
+                <div className="space-y-1.5">
+                  <ForecastPicker value={fcPick} onChange={setFcPick} choices={choices} accuracy={accuracyOf} yearOf={thisYear} state={fcs.data ? null : fcs.error ? 'error' : 'loading'}
+                    showUnapproved={showDraftFc} onShowUnapproved={setShowDraftFc} showOld={showOldFc} onShowOld={setShowOldFc} />
+                </div>
+              </Field>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Field label="Starts on" hint={`${fmtShort(from)} to ${fmtShort(to)}`}><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} min={coverageSource === 'FORECAST' ? published?.fromDay : undefined} max={coverageSource === 'FORECAST' ? published?.toDay : undefined} /></Field>
+              <Field label="Starts on">
+                <div className="space-y-1">
+                  <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} min={coverageSource === 'FORECAST' ? dateLimit?.from : undefined} max={coverageSource === 'FORECAST' ? dateLimit?.to : undefined} />
+                  {from && <p className="text-[12px] text-[#525252]">{longDay(from)}</p>}
+                </div>
+              </Field>
               <Field label="Pay week starts on" topic="payWeek" hint={weekPick !== null ? 'For this run only' : payWeek?.source === 'GROUP' ? `Saved for ${group.name}` : payWeek?.source === 'COMPANY' ? 'Company setting' : 'Not set: Monday'}><Select value={weekStart} onChange={(e) => setWeekStart(Number(e.target.value))}>{WEEKDAYS.map((n, i) => <option key={n} value={i}>{n}</option>)}</Select></Field>
-              <Field label="How far ahead" hint={`${fmtShort(from)} to ${fmtShort(to)} · ${weeks} ${weeks === 1 ? 'week' : 'weeks'}`}>
+              <Field label="How far ahead">
                 <div className="space-y-2">
                   <Select
                     value={customOn || ![1, 2, 4, 13, 26, 52].includes(weeks) ? 'custom' : weeks}
@@ -367,6 +406,9 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
                   {(customOn || ![1, 2, 4, 13, 26, 52].includes(weeks)) && (
                     <label className="flex items-center gap-1.5 text-[12px] text-[#6B6B6B]"><Input type="number" min={1} max={52} className="!w-20" value={weeks} onChange={(e) => { setWeeks(Math.min(52, Math.max(1, Number(e.target.value) || 1))); setSolveWeeksPick(null); }} aria-label="Weeks" /> weeks</label>
                   )}
+                  {startOk && <p className="text-[12px] text-[#6B6B6B]">{periodText(from, to, thisYear)} · {weeks} {weeks === 1 ? 'week' : 'weeks'}</p>}
+                  {startOk && coverageSource === 'FORECAST' && (readiness.data?.uncoveredDays.length ?? 0) > 0 && (
+                    <p className="text-[12px] text-[#8F6200]">No forecast for {readiness.data!.uncoveredDays.length} {readiness.data!.uncoveredDays.length === 1 ? 'day' : 'days'} ({daysText(readiness.data!.uncoveredDays, thisYear)}), so {readiness.data!.uncoveredDays.length === 1 ? 'it has' : 'they have'} no staffing target.</p>)}
                 </div>
               </Field>
             </div>
@@ -515,7 +557,7 @@ export const GeneratePanel: React.FC<{ versions: ScheduleVersion[]; onCreated: (
         </Card>
 
         {rotChoice !== 'ROTATION' && <div className="lg:sticky lg:top-4 space-y-3">
-          <Card title="Ready to generate?" sub={`${fmtShort(from)} to ${fmtShort(to)} · ${includedCount} people · ${chosen.length} template${chosen.length === 1 ? '' : 's'}`}>
+          <Card title="Ready to generate?" sub={`${startOk ? `${periodText(from, to, thisYear)} · ` : ''}${includedCount} people · ${chosen.length} template${chosen.length === 1 ? '' : 's'}`}>
             <div className="flex items-center gap-2 rounded-md px-3 py-2 text-[13px] font-semibold" data-testid="verdict" style={{ backgroundColor: !ready ? '#FBEDED' : review ? '#FDF3DC' : '#E6F4EC', color: !ready ? '#9B2C2C' : review ? '#8F6200' : '#2A7553' }}>
               {!ready ? <XCircle className="w-4 h-4 shrink-0" /> : review ? <AlertTriangle className="w-4 h-4 shrink-0" /> : <CheckCircle2 className="w-4 h-4 shrink-0" />}
               {!ready ? `Not ready${attention.length ? ` · ${attention.length} to fix` : ''}` : review ? `Ready · ${review} to review` : 'Ready'}

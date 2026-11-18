@@ -195,6 +195,8 @@ message SchedEmployee {
   bool has_anchor = 17;          // the usual start and end this person was given in the weeks solved before this one (a long plan, one week at a time)
   int32 anchor_start = 18;       // that usual start, in slots
   int32 anchor_end = 19;         // that usual end, in slots (start + length). A person set to PREFER the same times is charged for shifts away from them; one who must have them is only offered shifts near them
+  int32 min_days_off_together = 20; // every pay week that lies wholly inside the period has at least this many days off side by side (0: no rule)
+  repeated int32 weekend_need = 21; // per entry of the request's weekend_months: how many of that month's weekends in this period must be fully off for this person (0 or absent: none). The gateway works it out from the monthly rule, the weekends already off earlier in the month and the weekends still to come
   repeated int32 ext_paid = 16;  // per day of this request: paid slots this person already works for ANOTHER group that day (0 or absent: none). Counts toward the week's hours and days and toward days in a row; one shift a day across groups, so no option is offered on those days
 }
 
@@ -238,6 +240,18 @@ message ScheduleRequest {
   repeated int32 dst_rest_adjust = 23;      // per day: slots to add to the rest required before that day's shift (+4 where the clocks go forward overnight, -4 where they go back), so rest is real elapsed time
   bool deterministic = 24;                  // same input, same schedule: one search thread and a limit counted in solver work instead of seconds. Slower than the default, which searches in parallel against the clock and can return a different (equally valid) schedule from run to run
   string backend = 20;                      // solver to use: empty/AUTO = the engine's failover chain; CPSAT | GUROBI | HIGHS | GREEDY | TIMEFOLD, or a comma list tried in order
+  repeated WeekendMonth weekend_months = 25; // calendar months that touch the period and the weekends in each, for the rule 'at least N full weekends off in a month'. Weekends are whole runs of the weekend days that lie inside the period
+}
+
+// One calendar month's weekends inside the period. Days are indexes from day 0.
+message WeekendMonth {
+  int32 first_day = 1;           // first and last day of the month that fall in the period (a person is judged for a month only when they work some day in this stretch)
+  int32 last_day = 2;
+  repeated DaySet weekends = 3;  // each weekend that lies wholly inside the period, as its days
+}
+
+message DaySet {
+  repeated int32 days = 1;
 }
 
 // People needed per slot for one skill (days * 96 values).
@@ -432,6 +446,7 @@ message ValidateRequest {
   int32 consistency_mode = 14;   // the default for people whose own limits.consist_mode is 0: 0 off, 1 prefer, 2 require
   int32 start_tol_slots = 15;    // how far a shift's start may be from the person's usual start
   int32 end_tol_slots = 16;      // and its end from the usual end
+  repeated WeekendMonth weekend_months = 17;   // the calendar months' weekends for the rule 'full weekends off in a month' (each person's limits.weekend_need says how many)
 }
 
 message Finding {

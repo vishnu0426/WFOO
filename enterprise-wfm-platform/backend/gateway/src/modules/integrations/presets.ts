@@ -14,7 +14,7 @@ export type Category = 'ACD' | 'CRM' | 'HRMS' | 'DATABASE' | 'ONPREM' | 'SFTP';
 export type Method = 'API_PULL' | 'STREAM_SUBSCRIBE' | 'WEBHOOK' | 'ONPREM_RELAY' | 'DATABASE' | 'FILE_SFTP';
 export type AuthType = 'API_KEY_HEADER' | 'BEARER_STATIC' | 'OAUTH2_CLIENT_CREDENTIALS' | 'AWS_SIGV4' | 'MUTUAL_TLS' | 'BASIC' | 'NONE';
 
-export interface FieldSpec { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean }
+export interface FieldSpec { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean; optionLabels?: Record<string, string>; defaultValue?: string; showWhen?: { key: string; value: string } }
 export interface DefaultMap { targetField: string; sourcePath: string; transform?: string }
 
 /** What to do with an event type from the first message, for the types whose meaning is certain (a heartbeat carries no state). Everything else waits for a person. */
@@ -32,6 +32,12 @@ export interface Preset {
   writesTo: 'interval_history' | 'agent_state' | 'employees';
   note?: string;
 }
+
+/** Whether to check the server's certificate and, for a server on a private network, the CA certificate that signed it. */
+const NATS_TLS_FIELDS: FieldSpec[] = [
+  { key: 'tlsRejectUnauthorized', label: 'Server certificate', kind: 'select', options: ['true', 'false'], defaultValue: 'true', optionLabels: { true: 'Check it (recommended)', false: 'Do not check (private network only)' }, help: 'Checking makes sure you are talking to your own server.' },
+  { key: 'tlsCaCert', label: 'CA certificate (optional)', kind: 'file', showWhen: { key: 'tlsRejectUnauthorized', value: 'true' }, help: 'Only if your server\'s certificate was signed by your own company authority. Public certificate, .pem or .crt. Leave empty for a normal public certificate.' },
+];
 
 const authField = (authType: AuthType): FieldSpec[] => {
   switch (authType) {
@@ -107,7 +113,7 @@ export const PRESETS: Preset[] = [
       { key: 'natsServers', label: 'NATS servers', kind: 'text', required: true, help: 'Comma-separated, e.g. nats://192.168.9.81:4222' },
       { key: 'natsUser', label: 'NATS user', kind: 'text', required: true },
       { key: 'natsPass', label: 'NATS password', kind: 'password', required: true },
-      { key: 'tlsRejectUnauthorized', label: 'Verify TLS certificate', kind: 'select', options: ['true', 'false'], help: 'false for a self-signed cluster cert' },
+      ...NATS_TLS_FIELDS,
       { key: 'subject', label: 'Agent-state subject', kind: 'text', required: true, help: 'e.g. cc.acd.workspace.req.> (Workspace -> ACD requests, which is where EVT_AGENT_READY rides)' },
     ],
     defaultMaps: [
@@ -137,7 +143,7 @@ export const PRESETS: Preset[] = [
       { key: 'natsServers', label: 'NATS servers', kind: 'text', required: true, help: 'Comma-separated, e.g. nats://192.168.9.81:4222' },
       { key: 'natsUser', label: 'NATS user', kind: 'text', required: true },
       { key: 'natsPass', label: 'NATS password', kind: 'password', required: true },
-      { key: 'tlsRejectUnauthorized', label: 'Verify TLS certificate', kind: 'select', options: ['true', 'false'], help: 'false for a self-signed cluster cert' },
+      ...NATS_TLS_FIELDS,
       { key: 'subject', label: 'CDR/events subject', kind: 'text', required: true, help: 'The NATS subject VESL Service publishes CDR/events on' },
     ],
     note: 'Same cluster as AGNOSHIN_NATS_RTA, a separate subject for interval volume. Pairs with a DATABASE or API_PULL connector against workspace_admin for historical backfill.',

@@ -10,7 +10,8 @@
  */
 import type { Ctx } from './scheduleRoutes.ts';
 import { serviceLevel } from './erlang.ts';
-import { shiftBlocked } from './compliance/rules.ts';
+import { longestOffRun, shiftBlocked } from './compliance/rules.ts';
+import { weekendNeed } from './weekendRule.ts';
 import { offeredLengths, paidSlots, rulesFor, startsFor, whyNotOffered } from './templateRules.ts';
 import { addShiftCoverage } from './shiftCoverage.ts';
 
@@ -120,7 +121,7 @@ export function evaluateSchedule(a: EvalInput) {
 
 // ---------------------------------------------------------------- shortage analysis
 
-export type CauseKey = 'ON_SHIFT_ELSEWHERE' | 'TIME_OFF' | 'NOT_ALLOWED' | 'AVAILABILITY' | 'COMPLIANCE' | 'WEEKLY_HOURS' | 'DAYS_PER_WEEK' | 'REST' | 'DAYS_IN_A_ROW' | 'NO_TEMPLATE' | 'COULD_WORK';
+export type CauseKey = 'ON_SHIFT_ELSEWHERE' | 'TIME_OFF' | 'NOT_ALLOWED' | 'AVAILABILITY' | 'COMPLIANCE' | 'WEEKLY_HOURS' | 'DAYS_PER_WEEK' | 'REST' | 'DAYS_IN_A_ROW' | 'DAYS_OFF_TOGETHER' | 'WEEKENDS_OFF' | 'NO_TEMPLATE' | 'COULD_WORK';
 const CAUSE_TEXT: Record<CauseKey, string> = {
   ON_SHIFT_ELSEWHERE: 'already working a shift that day that does not cover this time',
   TIME_OFF: 'on approved time off',
@@ -131,6 +132,8 @@ const CAUSE_TEXT: Record<CauseKey, string> = {
   DAYS_PER_WEEK: 'at their days-per-week limit',
   REST: 'would not have enough rest between shifts',
   DAYS_IN_A_ROW: 'would work too many days in a row',
+  DAYS_OFF_TOGETHER: 'would be left without their days off together that week',
+  WEEKENDS_OFF: 'would be left without their full weekends off that month',
   NO_TEMPLATE: 'no shift template covers this time',
   COULD_WORK: 'could work it, but the schedule chose otherwise (other rules, consistent start times or surplus elsewhere)',
 };
@@ -195,6 +198,15 @@ export function buildWhyNot(ctx: Ctx, shifts: QShift[], helpers: Helpers) {
       d = day;
       while (mine.some((x) => x.day === helpers.addDays(d, 1))) { d = helpers.addDays(d, 1); run++; }
       if (run > e.maxConsecutiveDays) { reasons.push('DAYS_IN_A_ROW'); continue; }
+      if ((e.minDaysOffTogether ?? 0) > 0 && ctx.period && wk >= ctx.period.from && helpers.addDays(wk, 6) <= ctx.period.to && longestOffRun(new Set([...mine.map((x) => x.day), day]), wk) < e.minDaysOffTogether) { reasons.push('DAYS_OFF_TOGETHER'); continue; }
+      if ((e.minWeekendsOffMonth ?? 0) > 0 && ctx.weekendPlan) {
+        const mo = ctx.weekendPlan.months.find((m) => m.key === day.slice(0, 7)), hit = mo?.inPeriod.find((w) => w.includes(day));
+        if (mo && hit && !hit.some((x) => mine.some((m) => m.day === x))) {
+          const have = new Set(mine.map((m) => m.day));
+          const off = mo.inPeriod.filter((w) => !w.some((x) => have.has(x))).length;
+          if (off - 1 < weekendNeed(e.minWeekendsOffMonth, mo, ctx.weekendPlan.offBefore.get(e.id)?.[ctx.weekendPlan.months.indexOf(mo)] ?? 0)) { reasons.push('WEEKENDS_OFF'); continue; }
+        }
+      }
       return 'COULD_WORK';
     }
     // when several shapes are blocked for different reasons, report the one that blocks the most of them
@@ -350,6 +362,50 @@ export function optimizeBreaks(a: { days: string[]; shifts: QShift[]; required: 
   return { moved, shiftsChanged: moved.length, phoneShortfallBefore: before, phoneShortfallAfter: shortfall() };
 }
 
+// ---------------------------------------------------------------- which shift templates were used
+
+export interface TemplateUseIn { id: string; name: string; /** every time of day (15-minute slot) a shift of this template may start, on any of its days */ starts: number[]; lengthSlots: number }
+export interface TemplateUse {
+  id: string; name: string; shifts: number; people: number; offered: number;
+  /** hours of shortage, over the whole schedule, that fall in the hours of day this template can cover */
+  shortHours: number;
+  status: 'USED' | 'UNUSED_SHORT' | 'UNUSED';
+  reason: string | null;
+}
+
+/**
+ * One row per shift template offered to the solver: how many shifts it was given, to how many people, how many times it was a possible choice, and, when it was not used, why. A template that was
+ * never chosen although the hours it covers are short is the one to look at first. `shortByTimeOfDay` is, for each of the 96 slots of the day, the shortage summed over the days of the schedule.
+ */
+export function templateUsage(a: {
+  templates: TemplateUseIn[]; shifts: { templateId?: string | null; employeeId: string }[]; offered: Map<string, number>; blocked: Map<string, Map<string, number>>; shortByTimeOfDay: number[]; rosterOnly: boolean;
+}): TemplateUse[] {
+  const shifts = new Map<string, number>(), people = new Map<string, Set<string>>();
+  for (const s of a.shifts) {
+    if (!s.templateId) continue;
+    shifts.set(s.templateId, (shifts.get(s.templateId) ?? 0) + 1);
+    const set = people.get(s.templateId) ?? new Set<string>(); set.add(s.employeeId); people.set(s.templateId, set);
+  }
+  const top = (m?: Map<string, number>) => m ? [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 2).map(([k]) => k).join(' and ') : '';
+  return a.templates.map((t) => {
+    const covered = new Set<number>();
+    for (const st of t.starts) for (let k = 0; k < t.lengthSlots; k++) covered.add((st + k) % SPD);
+    let shortSlots = 0; for (const g of covered) shortSlots += a.shortByTimeOfDay[g] ?? 0;
+    const shortHours = Math.round((shortSlots / 4) * 10) / 10;
+    const n = shifts.get(t.id) ?? 0, offered = a.offered.get(t.id) ?? 0;
+    if (n > 0) return { id: t.id, name: t.name, shifts: n, people: people.get(t.id)?.size ?? 0, offered, shortHours, status: 'USED' as const, reason: null };
+    const status = shortHours > 0 ? 'UNUSED_SHORT' as const : 'UNUSED' as const;
+    const reason = offered === 0
+      ? `Nobody could be given it: ${top(a.blocked.get(t.id)) || 'its days, hours or conditions rule it out for everyone'}.`
+      : a.rosterOnly
+        ? `It was a possible choice ${offered.toLocaleString('en-US')} times, but the optimiser kept the starting roster, so it was never tried.${shortHours > 0 ? ` ${shortHours} hours short fall in the hours it covers.` : ''}`
+        : shortHours > 0
+          ? `It was a possible choice ${offered.toLocaleString('en-US')} times and not chosen, although ${shortHours} hours short fall in the hours it covers. People's rest, hours, availability or the same-start rule probably kept them from taking it.`
+          : `Not needed: the hours it covers were already staffed.`;
+    return { id: t.id, name: t.name, shifts: 0, people: 0, offered, shortHours, status, reason };
+  });
+}
+
 // ---------------------------------------------------------------- generation report
 
 export type RunStatus = 'SUCCEEDED' | 'SUCCEEDED_WITH_WARNINGS';
@@ -358,7 +414,7 @@ export interface ReportException { level: 'WARNING' | 'INFO'; code: string; subj
 export function buildReport(a: {
   pool: any[]; requested: { employeeIds?: string[]; teamIds?: string[] } | null; poolSize: number; shifts: QShift[]; optionsByPerson: Map<string, number>;
   blockedByPerson: Map<string, Map<string, number>>; uncoveredDays: string[]; projectedDays: string[]; coveragePercent: number; targetCoverage: number;
-  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; weightsNote?: string | null; representativeNote?: string | null; skillNote?: string | null; historyNote?: string | null; sharedNote?: string | null; guestNote?: { level: 'WARNING' | 'INFO'; message: string } | null; draftNotes?: { name: string; groupName: string; message: string }[]; repeatNote?: string | null; partNote?: string | null; thinNote?: string | null; rosterOnlyNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null; hoursNote?: { level: 'WARNING' | 'INFO'; message: string } | null;
+  violations: number; solverStatus: string; allEmployees: any[]; groupId: string; templatesUsed: number; consistencyNote?: string | null; weightsNote?: string | null; representativeNote?: string | null; skillNote?: string | null; historyNote?: string | null; sharedNote?: string | null; guestNote?: { level: 'WARNING' | 'INFO'; message: string } | null; draftNotes?: { name: string; groupName: string; message: string }[]; repeatNote?: string | null; partNote?: string | null; thinNote?: string | null; rosterOnlyNote?: string | null; contractNote?: { level: 'WARNING' | 'INFO'; message: string } | null; crewNote?: { level: 'WARNING' | 'INFO'; message: string } | null; hoursNote?: { level: 'WARNING' | 'INFO'; message: string } | null; templateUse?: TemplateUse[] | null;
 }) {
   const scheduled = new Map<string, number>();
   for (const s of a.shifts) scheduled.set(s.employeeId, (scheduled.get(s.employeeId) ?? 0) + 1);
@@ -390,6 +446,8 @@ export function buildReport(a: {
   if (a.guestNote) exceptions.push({ level: a.guestNote.level, code: 'GUESTS', subject: 'Some people are guests from their home group', message: a.guestNote.message });
   if (a.sharedNote) exceptions.push({ level: 'INFO', code: 'SHARED_PEOPLE', subject: 'Some people also work for other groups', message: a.sharedNote });
   for (const d of a.draftNotes ?? []) exceptions.push({ level: 'WARNING', code: 'OVERLAPPING_DRAFT', subject: `Another draft plans the same people: ${d.name} (${d.groupName})`, message: d.message });
+  const idleShort = (a.templateUse ?? []).filter((t) => t.status === 'UNUSED_SHORT');
+  if (idleShort.length) exceptions.push({ level: 'WARNING', code: 'TEMPLATES_UNUSED', subject: `${idleShort.length} shift template${idleShort.length === 1 ? '' : 's'} not used although hours they cover are short`, message: `${idleShort.map((t) => `${t.name} (${t.shortHours} h short in its hours)`).join(', ')}. See "Shift templates used" for the reason for each.` });
   if (a.rosterOnlyNote) exceptions.push({ level: 'WARNING', code: 'STARTING_ROSTER', subject: 'Part of this schedule is the starting roster only', message: a.rosterOnlyNote });
   if (a.representativeNote) exceptions.push({ level: 'INFO', code: 'REPRESENTATIVES', subject: 'A sample was solved and its rosters repeated', message: a.representativeNote });
   if (a.partNote) exceptions.push({ level: 'INFO', code: 'SPLIT', subject: 'The group was solved in parts', message: a.partNote });
@@ -407,6 +465,7 @@ export function buildReport(a: {
     status: (warnings ? 'SUCCEEDED_WITH_WARNINGS' : 'SUCCEEDED') as RunStatus,
     people: { inPool: a.poolSize, scheduled: scheduled.size, notScheduled: unscheduled.length, noPossibleShift: noOptions.length },
     exceptions,
+    templates: a.templateUse ?? [],
     // everyone who got no shift, with the reason, for the downloadable report
     unscheduled: unscheduled.slice(0, 2000).map((e) => ({ id: e.id as string, employeeNumber: (e.employeeNumber ?? '') as string, name: nameOf(e), reason: reasonFor(e) })),
   };

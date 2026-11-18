@@ -23,7 +23,8 @@ import { hhmm } from './workforceRoutes.ts';
 import { reconcileForEmployee } from './rotations.ts';
 import { payWeekFloor, payWeekFor } from './payWeek.ts';
 import { joinedUnpaidMeal, TPL_JOIN_COLS } from './templateRules.ts';
-import { balanceOf, ruleVerdict } from './timeOffRules.ts';
+import { ruleVerdict } from './timeOffRules.ts';
+import { ledgerBalances } from './leaveLedger.ts';
 
 export const selfService = Router();   // mounted at /me
 export const selfAdmin = Router();     // mounted at /self-service (policy and logins, for managers)
@@ -37,6 +38,8 @@ export interface Policy {
   timeOffAutoApprove: boolean; timeOffMinNoticeDays: number; timeOffMaxOffPercent: number; entitlements: Record<string, number>; agentCanEditAvailability: boolean;
   swapAutoApprove: boolean; swapMaxExtraGapSlots: number; swapMinNoticeHours: number; swapBoardHours: number;
   accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>;
+  /** Per leave type, "MM-DD": days carried in from last year must be used by then or they lapse. Empty: they never lapse. */
+  carryExpiry: Record<string, string>;
   /** The team's supervisor decides first; escalateHours later the managers are told. Supervisors limited to their own teams' people when asked. */
   supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
   /** Who besides team leads may see who in their team is working: MANAGERS (nobody else), PEERS_NOW (names on shift now) or PEERS_ROSTER (the week's roster). */
@@ -47,13 +50,14 @@ export async function loadSelfPolicy(tx: Tx): Promise<Policy> {
   const r = (await tx.one<any>('SELECT * FROM self_service_policy WHERE tenant_id = :t AND workspace_id = :w'))!;
   return { timeOffAutoApprove: r.timeOffAutoApprove, timeOffMinNoticeDays: r.timeOffMinNoticeDays, timeOffMaxOffPercent: r.timeOffMaxOffPercent, entitlements: r.entitlements ?? {}, agentCanEditAvailability: r.agentCanEditAvailability,
     swapAutoApprove: r.swapAutoApprove, swapMaxExtraGapSlots: r.swapMaxExtraGapSlots, swapMinNoticeHours: r.swapMinNoticeHours, swapBoardHours: r.swapBoardHours,
-    accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false, teamView: r.teamView ?? 'MANAGERS' };
+    accrualMode: r.accrualMode ?? 'UPFRONT', carryOverDays: r.carryOverDays ?? {}, carryExpiry: r.carryExpiry ?? {}, supervisorFirst: r.supervisorFirst ?? true, escalateHours: r.escalateHours ?? 24, limitSupervisorsToTeams: r.limitSupervisorsToTeams ?? false, teamView: r.teamView ?? 'MANAGERS' };
 }
 const PolicyBody = z.object({
   timeOffAutoApprove: z.boolean(), timeOffMinNoticeDays: z.number().int().min(0).max(365), timeOffMaxOffPercent: z.number().int().min(0).max(100),
   entitlements: z.record(z.enum(TYPES), z.number().min(0).max(366)), agentCanEditAvailability: z.boolean(),
   swapAutoApprove: z.boolean(), swapMaxExtraGapSlots: z.number().int().min(0).max(96), swapMinNoticeHours: z.number().int().min(0).max(720), swapBoardHours: z.number().int().min(1).max(720),
   accrualMode: z.enum(['UPFRONT', 'MONTHLY']).default('UPFRONT'), carryOverDays: z.record(z.enum(TYPES), z.number().min(0).max(366)).default({}),
+  carryExpiry: z.record(z.enum(TYPES), z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Use month-day, for example 03-31')).optional(),   // omitted by older clients: the saved dates stay
   supervisorFirst: z.boolean().default(true), escalateHours: z.number().int().min(1).max(720).default(24), limitSupervisorsToTeams: z.boolean().default(false),
   teamView: z.enum(['MANAGERS', 'PEERS_NOW', 'PEERS_ROSTER']).optional(),   // omitted by older clients: the saved choice stays
 });
@@ -65,8 +69,8 @@ selfAdmin.put('/policy', requires('config:write'), async (req, res) => {
     await tx.exec(
       `UPDATE self_service_policy SET time_off_auto_approve = $1, time_off_min_notice_days = $2, time_off_max_off_percent = $3, entitlements = $4, agent_can_edit_availability = $5,
          swap_auto_approve = $6, swap_max_extra_gap_slots = $7, swap_min_notice_hours = $8, swap_board_hours = $9, accrual_mode = $10, carry_over_days = $11,
-         supervisor_first = $12, escalate_hours = $13, limit_supervisors_to_teams = $14, team_view = coalesce($15, team_view), updated_at = now() WHERE tenant_id = :t`,
-      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours, b.accrualMode, JSON.stringify(b.carryOverDays), b.supervisorFirst, b.escalateHours, b.limitSupervisorsToTeams, b.teamView ?? null]);
+         supervisor_first = $12, escalate_hours = $13, limit_supervisors_to_teams = $14, team_view = coalesce($15, team_view), carry_expiry = coalesce($16::jsonb, carry_expiry), updated_at = now() WHERE tenant_id = :t`,
+      [b.timeOffAutoApprove, b.timeOffMinNoticeDays, b.timeOffMaxOffPercent, JSON.stringify(b.entitlements), b.agentCanEditAvailability, b.swapAutoApprove, b.swapMaxExtraGapSlots, b.swapMinNoticeHours, b.swapBoardHours, b.accrualMode, JSON.stringify(b.carryOverDays), b.supervisorFirst, b.escalateHours, b.limitSupervisorsToTeams, b.teamView ?? null, b.carryExpiry ? JSON.stringify(b.carryExpiry) : null]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SELF_SERVICE_POLICY', entityId: 'policy', entityName: 'Self-service rules', before, after: b });
     return loadSelfPolicy(tx);
   });
@@ -281,16 +285,12 @@ selfService.get('/home', requires('self:use'), async (req, res) => {
 // ---------------------------------------------------------------- time off
 
 const yearOf = (day: string) => day.slice(0, 4);
-async function usedIn(tx: Tx, employeeId: string, year: string) {
-  const rows = await tx.q<any>(
-    `SELECT type, sum(LEAST(end_day, $3::date) - GREATEST(start_day, $2::date) + 1)::int AS days FROM time_off
-     WHERE tenant_id = :t AND employee_id = $1 AND status IN ('REQUESTED','APPROVED') AND end_day >= $2::date AND start_day <= $3::date GROUP BY type`, [employeeId, `${year}-01-01`, `${year}-12-31`]);
-  return new Map(rows.map((r) => [r.type as string, r.days as number]));
-}
-/** Balance per leave type for a year: the entitlement (all at once, or building up monthly up to `asOfMonth`), days carried over from last year, and what is used. */
-export async function balances(tx: Tx, employeeId: string, pol: Policy, year: string, asOfMonth = 12) {
-  const used = await usedIn(tx, employeeId, year), prev = pol.carryOverDays && Object.keys(pol.carryOverDays).length ? await usedIn(tx, employeeId, String(Number(year) - 1)) : new Map<string, number>();
-  return Object.entries(pol.entitlements).map(([type, entitled]) => balanceOf({ type, entitled, mode: pol.accrualMode ?? 'UPFRONT', asOfMonth, usedThisYear: used.get(type) ?? 0, lastYearEntitled: entitled, lastYearUsed: prev.get(type) ?? 0, carryOverCap: pol.carryOverDays?.[type] ?? 0 }));
+/**
+ * Balance per leave type for a year: the entitlement (all at once, or building up monthly up to `asOfMonth`), the days carried in (from the closed record of the
+ * year before, or an estimate until it is closed), hand adjustments, and what is used. `asOfDay` is the day asked about, to know whether the carry expiry has passed.
+ */
+export async function balances(tx: Tx, employeeId: string, pol: Policy, year: string, asOfMonth = 12, asOfDay?: string) {
+  return ledgerBalances(tx, employeeId, pol, year, asOfMonth, asOfDay);
 }
 
 const toDto = (t: any) => ({ id: t.id, type: t.type, startDate: t.startDay, endDate: t.endDay, days: t.days, status: t.status, reason: t.reason, decidedBy: t.decidedBy, decidedAt: t.decidedAt, autoDecided: t.autoDecided, decisionNote: t.decisionNote, createdAt: t.createdAt, decidedLevel: t.decidedLevel ?? null, escalatedAt: t.escalatedAt ?? null });
@@ -302,7 +302,7 @@ selfService.get('/time-off', requires('self:use'), async (req, res) => {
     const w = await whoAmI(tx, p), pol = await loadSelfPolicy(tx);
     const rows = await tx.q<any>(`${OWN_SQL} ORDER BY o.start_day DESC LIMIT 100`, [w.employeeId]);
     const wf = rows.some((r) => r.status === 'REQUESTED') ? await waitingFor(tx, w.employeeId) : null;       // who has the requests that are still waiting
-    return { requests: rows.map((r) => ({ ...toDto(r), waitingFor: r.status === 'REQUESTED' ? wf : null })), balances: await balances(tx, w.employeeId, pol, yearOf(w.today), Number(w.today.slice(5, 7))), rules: { accrual: pol.accrualMode, autoApprove: pol.timeOffAutoApprove, minNoticeDays: pol.timeOffMinNoticeDays, maxOffPercent: pol.timeOffMaxOffPercent }, today: w.today };
+    return { requests: rows.map((r) => ({ ...toDto(r), waitingFor: r.status === 'REQUESTED' ? wf : null })), balances: await balances(tx, w.employeeId, pol, yearOf(w.today), Number(w.today.slice(5, 7)), w.today), rules: { accrual: pol.accrualMode, autoApprove: pol.timeOffAutoApprove, minNoticeDays: pol.timeOffMinNoticeDays, maxOffPercent: pol.timeOffMaxOffPercent }, today: w.today };
   }));
 });
 
@@ -327,7 +327,7 @@ async function assessTimeOff(tx: Tx, w: Me, pol: Policy, b: { type: string; star
   if (!sick && ahead < pol.timeOffMinNoticeDays) reasons.push(`It is only ${Math.max(0, ahead)} day${ahead === 1 ? '' : 's'} away; the rule asks for ${pol.timeOffMinNoticeDays} days' notice.`);
   const ent = pol.entitlements[b.type];
   if (ent !== undefined) {
-    const bal = (await balances(tx, w.employeeId, pol, yearOf(b.startDate), Number(b.startDate.slice(5, 7)))).find((x) => x.type === b.type);
+    const bal = (await balances(tx, w.employeeId, pol, yearOf(b.startDate), Number(b.startDate.slice(5, 7)), b.startDate)).find((x) => x.type === b.type);
     if (bal && n > bal.remainingDays) reasons.push(`You have ${bal.remainingDays} ${b.type.toLowerCase()} day${bal.remainingDays === 1 ? '' : 's'} ${pol.accrualMode === 'MONTHLY' ? 'available by then' : 'left'} and this asks for ${n}.`);
   }
   const scheduled = (await tx.one<{ n: number }>(

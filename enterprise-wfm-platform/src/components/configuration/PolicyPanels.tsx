@@ -30,11 +30,13 @@ function usePolicy() {
   return { draft, setDraft, save, discard, changed: !!draft && !!res.data && JSON.stringify(draft) !== JSON.stringify(res.data), error, saved, loading: res.loading && !draft, loadError: res.error, canWrite: can('config:write'), current: res.data };
 }
 
-const LIMITS: { k: 'minRestHours' | 'maxWeeklyHours' | 'maxConsecutiveDays' | 'maxDaysPerWeek'; label: string; hint: string; unit: string; min: number; max: number; step: number }[] = [
+const LIMITS: { k: 'minRestHours' | 'maxWeeklyHours' | 'maxConsecutiveDays' | 'maxDaysPerWeek' | 'minDaysOffTogether' | 'minWeekendsOffMonth'; label: string; hint: string; unit: string; min: number; max: number; step: number }[] = [
   { k: 'minRestHours', label: 'Rest between shifts', hint: 'At least this long from the end of one shift to the start of the next', unit: 'hours', min: 0, max: 24, step: 0.5 },
   { k: 'maxWeeklyHours', label: 'Most hours in a week', hint: 'Paid hours in the pay week', unit: 'hours', min: 1, max: 100, step: 0.5 },
   { k: 'maxConsecutiveDays', label: 'Most days in a row', hint: 'Longest run of working days without a day off', unit: 'days', min: 1, max: 14, step: 1 },
   { k: 'maxDaysPerWeek', label: 'Most days in a week', hint: 'Working days in the pay week', unit: 'days', min: 1, max: 7, step: 1 },
+  { k: 'minDaysOffTogether', label: 'Days off together', hint: 'Every full pay week has at least this many days off side by side', unit: 'days', min: 1, max: 3, step: 1 },
+  { k: 'minWeekendsOffMonth', label: 'Weekends off in a month', hint: "Every month has at least this many full weekends off (all of the group's weekend days)", unit: 'weekends', min: 1, max: 4, step: 1 },
 ];
 
 export const SchedulingRulesPanel: React.FC = () => {

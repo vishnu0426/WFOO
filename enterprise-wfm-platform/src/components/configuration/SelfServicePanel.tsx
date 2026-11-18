@@ -13,7 +13,7 @@ import { Banner, Btn, Busy, Card, Field, Input, Select } from '../forecasting/ui
 type Policy = {
   timeOffAutoApprove: boolean; timeOffMinNoticeDays: number; timeOffMaxOffPercent: number; entitlements: Record<string, number>; agentCanEditAvailability: boolean;
   swapAutoApprove: boolean; swapMaxExtraGapSlots: number; swapMinNoticeHours: number; swapBoardHours: number;
-  accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>;
+  accrualMode: 'UPFRONT' | 'MONTHLY'; carryOverDays: Record<string, number>; carryExpiry?: Record<string, string>;
   supervisorFirst: boolean; escalateHours: number; limitSupervisorsToTeams: boolean;
   teamView?: 'MANAGERS' | 'PEERS_NOW' | 'PEERS_ROSTER';
 };
@@ -146,6 +146,11 @@ export const SelfServicePanel: React.FC = () => {
               <div className="grid grid-cols-3 gap-2">{TYPES.filter((t) => d.entitlements[t.id] !== undefined).map((t) => (
                 <label key={t.id} className="text-[11px] text-[#6B6B6B]">{t.label}<Input type="number" min={0} max={366} placeholder="0" disabled={!canWrite} value={d.carryOverDays?.[t.id] ?? ''} onChange={(e) => { const c = { ...(d.carryOverDays ?? {}) }; if (e.target.value === '') delete c[t.id]; else c[t.id] = Number(e.target.value); set('carryOverDays', c); }} /></label>
               ))}</div>
+            </Field>
+            <Field label="Carried days must be used by" hint="Month and day, for example 03-31. Carried days not used by then lapse. Leave empty: they never lapse">
+              <div className="grid grid-cols-3 gap-2">{TYPES.filter((t) => (d.carryOverDays?.[t.id] ?? 0) > 0).map((t) => (
+                <label key={t.id} className="text-[11px] text-[#6B6B6B]">{t.label}<Input placeholder="MM-DD" maxLength={5} disabled={!canWrite} value={d.carryExpiry?.[t.id] ?? ''} onChange={(e) => { const c = { ...(d.carryExpiry ?? {}) }; if (e.target.value === '') delete c[t.id]; else c[t.id] = e.target.value; setD({ ...d, carryExpiry: c }); }} /></label>
+              ))}{TYPES.every((t) => (d.carryOverDays?.[t.id] ?? 0) === 0) && <span className="col-span-3 text-[11px] text-[#6B6B6B]">Set a limit for carried days first.</span>}</div>
             </Field>
           </div>
         </div>

@@ -6,6 +6,7 @@
  * Visual theme matches the Enterprise WFM white theme (#FAFAF8, #FFFFFF, #E5E5E0, #171717, #2F7D5A).
  * Features Interactive Hierarchical Tree View (Platform to Organisations to Workspaces & Admins).
  */
+import { ZoneSelect } from './ZoneSelect';
 import React, { useEffect, useState } from 'react';
 import { NewOrganisationForm } from './NewOrganisationForm';
 import { AccountPage } from './AccountPage';
@@ -278,11 +279,6 @@ interface TreeData {
 const PLATFORM_TOKEN_KEY = 'wfm_platform_token';
 const BASE = '/api/v1/platform';
 
-const COMMON_TIMEZONES = [
-  'UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Dubai', 'Asia/Kolkata',
-  'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Asia/Riyadh', 'Asia/Manila', 'America/Toronto'
-];
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'INR', 'AUD', 'CAD', 'SGD', 'JPY', 'AED', 'SAR', 'PHP'];
 
@@ -1689,7 +1685,6 @@ export const PlatformAdminPortal: React.FC = () => {
         {tab === 'NEW_ORG' && (
           <NewOrganisationForm
             existingCodes={organizations.map((o) => o.code)}
-            timezones={COMMON_TIMEZONES}
             currencies={CURRENCIES}
             plans={catalogue.filter((x) => x.status === 'ACTIVE')}
             templates={countryTemplates}
@@ -3668,13 +3663,7 @@ export const PlatformAdminPortal: React.FC = () => {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-[#737373] mb-1">Timezone</label>
-                      <select
-                        value={newWsForm.timezone}
-                        onChange={(e) => setNewWsForm({ ...newWsForm, timezone: e.target.value })}
-                        className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                      >
-                        {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                      </select>
+                      <ZoneSelect value={newWsForm.timezone} onChange={(z) => setNewWsForm({ ...newWsForm, timezone: z })} />
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-[#737373] mb-1">Currency</label>
@@ -3882,13 +3871,7 @@ export const PlatformAdminPortal: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[12px] font-semibold text-[#171717] mb-1">Timezone</label>
-                  <select
-                    value={editOrgForm.timezone}
-                    onChange={(e) => setEditOrgForm({ ...editOrgForm, timezone: e.target.value })}
-                    className="w-full p-2 border border-[#E5E5E0] rounded text-[13px] bg-white text-[#171717] focus:outline-none focus:border-[#171717]"
-                  >
-                    {COMMON_TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                  </select>
+                  <ZoneSelect value={editOrgForm.timezone} onChange={(z) => setEditOrgForm({ ...editOrgForm, timezone: z })} />
                 </div>
                 <div>
                   <label className="block text-[12px] font-semibold text-[#171717] mb-1">Currency</label>

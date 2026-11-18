@@ -17,6 +17,7 @@ import { OrgChartPanel } from './OrgChartPanel';
 import { LoansPanel } from './LoansPanel';
 import { Confirm } from '../configuration/groups/shared';
 import { DeleteTeamDialog, LeadSetup, RowMenu, SpreadNotice } from './TeamsExtras';
+import { PeopleFinder, setTeam, TeamMembers } from './TeamMembers';
 import { AvailabilityGrid } from './AvailabilityGrid';
 import { TimeOffPanel } from './TimeOffPanel';
 import { CoverageSummary, DeleteSkillDialog, FixSkillDialog, LevelBar, PeopleLink, RiskFlag } from './SkillsExtras';
@@ -52,7 +53,8 @@ const TeamsPanel: React.FC = () => {
   // teams come a page at a time and can be searched, so a company with thousands of them opens as fast as one with ten
   const [find, setFind] = useState(''); const [shown, setShown] = useState(100);
   const teams = useApi<Team[]>(`/workforce/teams?limit=${shown}${find.trim() ? `&q=${encodeURIComponent(find.trim())}` : ''}`, [tick]);
-  const [f, setF] = useState<{ id: string | null; name: string; description: string; location: string; managerId: string; deputyId: string } | null>(null);
+  const [f, setF] = useState<{ id: string | null; name: string; description: string; location: string; managerId: string; deputyId: string; people: Employee[] } | null>(null);
+  const [openTeam, setOpenTeam] = useState<string | null>(null);          // the team whose people are showing under its row
   const [error, setError] = useState('');
   const w = can('workforce:write');
   const [lines, setLines] = useState<Team | null>(null);          // putting everyone in a team under its supervisor
@@ -70,12 +72,16 @@ const TeamsPanel: React.FC = () => {
     if (!f) return; setError('');
     try {
       const body = { name: f.name, description: f.description, location: f.location, managerId: f.managerId || null, deputyId: f.deputyId || null };
-      if (f.id) await api(`/workforce/teams/${f.id}`, { method: 'PUT', body }); else await api('/workforce/teams', { method: 'POST', body });
+      if (f.id) await api(`/workforce/teams/${f.id}`, { method: 'PUT', body });
+      else {
+        const made = await api<Team>('/workforce/teams', { method: 'POST', body });
+        if (f.people.length) { const r = await setTeam(f.people.map((e) => e.id), made.id, 'Added when the team was created'); setNotice({ kind: 'ok', text: `${made.name} created with ${r.updated} ${r.updated === 1 ? 'person' : 'people'}.${r.skipped.length ? ` ${r.skipped.length} could not be added.` : ''}` }); setOpenTeam(made.id); }
+      }
       setF(null); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); }
   };
   return (
-    <Card title="Teams" actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', description: '', location: '', managerId: '', deputyId: '' }); }}><Plus className="w-3.5 h-3.5" />Add team</Btn>}>
+    <Card title="Teams" actions={w && <Btn variant="primary" onClick={() => { setError(''); setF({ id: null, name: '', description: '', location: '', managerId: '', deputyId: '', people: [] }); }}><Plus className="w-3.5 h-3.5" />Add team</Btn>}>
       {f && (
         <div className="border border-[#E5E5E0] rounded-lg p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
           <Field label="Name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
@@ -83,6 +89,7 @@ const TeamsPanel: React.FC = () => {
           <Field label="Team lead (supervisor)" hint="Approves and covers this team"><PersonPicker ariaLabel="Team lead" value={f.managerId} statuses="ONBOARDING,ACTIVE,LEAVE" only="supervisor" placeholder="Choose the team lead" onChange={(id) => setF({ ...f, managerId: id })} /></Field>
           <Field label="Deputy" hint="Covers when the lead is away"><PersonPicker ariaLabel="Deputy" value={f.deputyId} statuses="ONBOARDING,ACTIVE,LEAVE" only="supervisor" placeholder="Choose a deputy (optional)" onChange={(id) => setF({ ...f, deputyId: id })} /></Field>
           <div className="md:col-span-4"><Field label="Description"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field></div>
+          {!f.id && <div className="md:col-span-4"><Field label="People" hint="Optional. You can also add them later from the team."><PeopleFinder team={null} chosen={f.people} onChange={(people) => setF({ ...f, people })} /></Field></div>}
           <div className="md:col-span-4 flex items-center gap-2"><Btn variant="primary" disabled={!f.name.trim()} onClick={save}>Save team</Btn><Btn onClick={() => setF(null)}>Cancel</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
@@ -92,12 +99,15 @@ const TeamsPanel: React.FC = () => {
       {teams.data === null ? <LoadState state={teams} what="the teams" skeleton={<TableSkeleton rows={6} cols={6} />}>{() => null}</LoadState> : teams.data.length === 0 ? <Empty title={find.trim() ? 'No team matches that search' : 'No teams yet'}>{find.trim() ? 'Try part of the name.' : 'Teams group people under a team lead. Create one, then assign people to it.'}</Empty> : (
         <Table head={['Team', 'Team lead', 'Deputy', 'Location', 'People', 'Status', '']} right={[4]}>
           {teams.data?.map((t) => (
-            <tr key={t.id}>
+            <React.Fragment key={t.id}>
+            <tr>
               <td className="p-3"><div className="font-semibold">{t.name}</div><div className="text-[11px] text-[#6B6B6B]">{t.description}</div></td>
-              <td className="p-3">{t.managerName ?? (t.status === 'ACTIVE' ? (w ? <button className="text-[12px] font-semibold text-[#8F6200] underline" onClick={() => { setLeadFor(t.id); setLeadOpen(true); }}>No lead: assign</button> : <span className="text-[#8F6200]">No lead</span>) : <span className="text-[#6B6B6B]">–</span>)}</td><td className="p-3">{t.deputyName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono">{t.memberCount}</td>
+              <td className="p-3">{t.managerName ?? (t.status === 'ACTIVE' ? (w ? <button className="text-[12px] font-semibold text-[#8F6200] underline" onClick={() => { setLeadFor(t.id); setLeadOpen(true); }}>No lead: assign</button> : <span className="text-[#8F6200]">No lead</span>) : <span className="text-[#6B6B6B]">–</span>)}</td><td className="p-3">{t.deputyName ?? '–'}</td><td className="p-3">{t.location || '–'}</td><td className="p-3 text-right font-mono"><button type="button" className="underline decoration-dotted underline-offset-2 hover:text-[#171717]" aria-expanded={openTeam === t.id} aria-label={`${t.memberCount} people in ${t.name}`} onClick={() => setOpenTeam(openTeam === t.id ? null : t.id)}>{t.memberCount}</button></td>
               <td className="p-3"><Pill tone={t.status === 'ACTIVE' ? 'good' : 'neutral'}>{t.status === 'ACTIVE' ? 'Active' : 'Inactive'}</Pill></td>
-              <td className="p-3 text-right whitespace-nowrap">{w && <><button className="text-[12px] underline mr-2" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '', deputyId: t.deputyId ?? '' })}>Edit</button><RowMenu label={`More actions for ${t.name}`} items={[...(t.managerId ? [{ label: 'Set reporting lines', onClick: () => { setLinesError(''); setLines(t); } }] : []), { label: 'Delete team…', danger: true, onClick: () => setDeleting(t) }]} /></>}</td>
+              <td className="p-3 text-right whitespace-nowrap">{<button className="text-[12px] underline mr-2" onClick={() => setOpenTeam(openTeam === t.id ? null : t.id)}>{openTeam === t.id ? 'Hide people' : 'People'}</button>}{w && <><button className="text-[12px] underline mr-2" onClick={() => setF({ id: t.id, name: t.name, description: t.description, location: t.location, managerId: t.managerId ?? '', deputyId: t.deputyId ?? '', people: [] })}>Edit</button><RowMenu label={`More actions for ${t.name}`} items={[...(t.managerId ? [{ label: 'Set reporting lines', onClick: () => { setLinesError(''); setLines(t); } }] : []), { label: 'Delete team…', danger: true, onClick: () => setDeleting(t) }]} /></>}</td>
             </tr>
+            {openTeam === t.id && <tr><td colSpan={7} className="p-3"><TeamMembers team={t} canWrite={w} onChanged={() => setTick((x) => x + 1)} notify={(text) => setNotice({ kind: 'ok', text })} /></td></tr>}
+            </React.Fragment>
           ))}
         </Table>
       )}

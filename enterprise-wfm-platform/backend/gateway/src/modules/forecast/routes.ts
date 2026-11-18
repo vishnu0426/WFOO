@@ -10,7 +10,7 @@ import {
   runStaffing, scenarioResult, shortLabel, staffingHealth, todayIn, versionDto, versionRecords, versionRows, type Daily, type Group, type Overrides, type QRow, type Rec,
 } from './service.ts';
 import { LEARNING, evaluate, learn } from './learning.ts';
-import { WINDOW_DAYS, headlineFrom } from './accuracyHeadline.ts';
+import { WINDOW_DAYS, headlineFrom, versionAccuracies } from './accuracyHeadline.ts';
 import { normalise, parseCsv, type DateFormat } from '../csv.ts';
 import { planRows, summarisePlan, withPlainVolumeHeader } from './planningImport.ts';
 import { DEMAND_SQL } from './demand.ts';
@@ -19,6 +19,7 @@ import { advise, analyseQueue, type QueueQuality } from './historyQuality.ts';
 import { BIAS, GOOD, POOR, trendOf } from './accuracyTrend.ts';
 import { payWeekFor } from '../payWeek.ts';
 import { compareDays } from './compare.ts';
+import { MAX_LIVE_PER_GROUP, publishEffect } from './liveSelection.ts';
 
 export const forecast = Router();
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -178,6 +179,7 @@ forecast.get('/registry', requires('forecast:read'), async (req, res) => {
 const CreateBody = z.object({
   groupId: uuid, kind: z.enum(['SHORT', 'LONG']).default('SHORT'), weeks: z.number().int().min(1).max(18).optional(), days: z.number().int().min(30).max(730).optional(),
   model: z.enum(MODELS).optional(), name: z.string().min(1).max(120).optional(), fromDay: z.string().regex(isoDay).optional(),
+  historyFrom: z.string().regex(isoDay).optional(), historyTo: z.string().regex(isoDay).optional(),
 });
 forecast.post('/versions', requires('forecast:create'), async (req, res) => {
   const p = me(req), b = parse(CreateBody, req.body);
@@ -436,6 +438,7 @@ async function move(req: any, res: any, from: Status[], to: Status, action: 'SUB
   const p = me(req), id = String(req.params.id);
   const reason = String(req.body?.reason ?? '').trim();
   if (reasonRequired && reason.length < 3) throw bad('A reason is required');
+  let replaced: string[] = [];
   const out = await withTenant(p.tenantId, async (tx) => {
     const v = await tx.one<any>('SELECT * FROM forecast_versions WHERE tenant_id = :t AND id = $1 FOR UPDATE', [id]);
     if (!v) throw notFound('Forecast version');
@@ -444,7 +447,17 @@ async function move(req: any, res: any, from: Status[], to: Status, action: 'SUB
       const t = await tx.one<{ fourEyes: boolean }>('SELECT four_eyes FROM tenants WHERE id = :t');
       if (t?.fourEyes && v.submittedById === p.userId) throw new HttpError(403, 'FOUR_EYES', 'Four-eyes rule: the person who submitted a forecast cannot approve it.');
     }
-    if (action === 'PUBLISH') await tx.exec(`UPDATE forecast_versions SET status = 'ARCHIVED' WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = $2 AND status = 'PUBLISHED' AND id <> $3`, [v.wfmGroupId, v.kind, id]);
+    if (action === 'PUBLISH') {
+      if (v.kind === 'LONG') await tx.exec(`UPDATE forecast_versions SET status = 'ARCHIVED' WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = $2 AND status = 'PUBLISHED' AND id <> $3`, [v.wfmGroupId, v.kind, id]);   // one live long-term forecast per group
+      else {
+        // short-term: several can be live, each for its own stretch of days. Only a live forecast with the same horizon is replaced (archived); the rest stay live.
+        const live = await tx.q<any>(`SELECT id, seq, name, from_day::text AS from_day, to_day::text AS to_day, published_at FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND status = 'PUBLISHED' AND id <> $2`, [v.wfmGroupId, id]);
+        const effect = publishEffect({ id, fromDay: String(v.fromDay), toDay: String(v.toDay) }, live);
+        if (effect.tooMany) throw conflict(`This group already has ${MAX_LIVE_PER_GROUP} live forecasts for other periods. Archive one that is no longer needed first.`);
+        if (effect.replaces.length) await tx.exec(`UPDATE forecast_versions SET status = 'ARCHIVED' WHERE tenant_id = :t AND id = ANY($1::uuid[])`, [effect.replaces.map((r) => r.id)]);
+        replaced = effect.replaces.map((r) => r.name);
+      }
+    }
     const upd: Record<typeof action, { set: string; params: unknown[] }> = {
       SUBMIT: { set: 'submitted_by = $2, submitted_by_id = $3, submitted_at = now()', params: [p.name, p.userId] },
       APPROVE: { set: 'approved_by = $2, approved_at = now()', params: [p.name] },
@@ -453,12 +466,12 @@ async function move(req: any, res: any, from: Status[], to: Status, action: 'SUB
       ARCHIVE: { set: 'rev = rev', params: [] },
     };
     await tx.exec(`UPDATE forecast_versions SET status = '${to}', ${upd[action].set} WHERE tenant_id = :t AND id = $1`, [id, ...upd[action].params]);
-    await audit(tx, p, req, { action: action === 'ARCHIVE' ? 'UPDATE' : action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to }, diffSummary: action === 'ARCHIVE' ? 'archived' : undefined });
+    await audit(tx, p, req, { action: action === 'ARCHIVE' ? 'UPDATE' : action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to }, diffSummary: action === 'ARCHIVE' ? 'archived' : replaced.length ? `replaced ${replaced.join(', ')} (same period)` : undefined });
     return tx.one<any>('SELECT * FROM forecast_versions WHERE tenant_id = :t AND id = $1', [id]);
   });
   if (action === 'PUBLISH') { await dropCache(p.tenantId, 'sched:*'); }
   publish(p.tenantId, ['forecast', action.toLowerCase()], { id, name: out.name, status: out.status, by: p.name });
-  res.json(versionDto(out));
+  res.json({ ...versionDto(out), replaced });
 }
 forecast.post('/versions/:id/submit', requires('forecast:submit'), (req, res) => move(req, res, ['DRAFT'], 'SUBMITTED', 'SUBMIT'));
 forecast.post('/versions/:id/approve', requires('forecast:approve'), (req, res) => move(req, res, ['SUBMITTED'], 'APPROVED', 'APPROVE'));
@@ -630,6 +643,27 @@ export async function headlineFor(tenantId: string, groupId: string) {
 forecast.get('/accuracy-headline', requires('forecast:read'), async (req, res) => {
   const p = me(req), q = parse(z.object({ groupId: uuid }), req.query);
   res.json(await headlineFor(p.tenantId, q.groupId));
+});
+
+/**
+ * How each short-term forecast of a group did against what really arrived, for the picker on Generate Schedule. The same definition as the headline (100% - WAPE), but per version
+ * and over the days of that forecast that have passed (up to the last 28), so a forecast for next week has no figure yet. Versions with nothing to compare are left out.
+ */
+forecast.get('/versions-accuracy', requires('forecast:read'), async (req, res) => {
+  const p = me(req), q = parse(z.object({ groupId: uuid }), req.query);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const group = await loadGroup(tx, q.groupId);
+    const to = todayIn(group.timezone), from = addDays(to, -WINDOW_DAYS);
+    const rows = await tx.q<any>(
+      `SELECT fi.version_id, fi.queue_id, fi.day::text AS day, fi.volume::float8 AS forecast, a.actual
+         FROM forecast_intervals fi JOIN forecast_versions fv ON fv.id = fi.version_id
+         JOIN (SELECT queue_id, day, sum(volume)::float8 AS actual FROM interval_history WHERE tenant_id = :t AND queue_id = ANY($4::uuid[]) AND day >= $2::date AND day < $3::date GROUP BY queue_id, day) a
+           ON a.queue_id = fi.queue_id AND a.day = fi.day
+        WHERE fi.tenant_id = :t AND fv.wfm_group_id = $1 AND fv.kind = 'SHORT' AND fi.slot = -1 AND fi.day >= $2::date AND fi.day < $3::date AND fv.created_at < (fi.day + 1)::timestamptz`,
+      [q.groupId, from, to, group.queues.map((x) => x.id)]);
+    return [...versionAccuracies(rows.map((r) => ({ versionId: r.versionId, queueId: r.queueId, day: r.day, forecast: r.forecast, actual: r.actual }))).values()];
+  });
+  res.json(out);
 });
 
 /** How the published forecasts really did, week after week (the accuracy trend screen and the Today page show this one result). */

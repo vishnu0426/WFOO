@@ -27,6 +27,7 @@ import { payWeekFor, weekendDaysFor } from './payWeek.ts';
 import { paidSlots } from './templateRules.ts';
 import { analysePattern, compileWeekly, type TemplateLite, type WeeklyStep } from './rotationPlan.ts';
 import { loadRuleSets } from './compliance/routes.ts';
+import { limitsFrom } from './compliance/rules.ts';
 import { CATALOG, checkPerson, touchesNight, type Finding } from './compliance/rules.ts';
 
 export const rotations = Router();
@@ -132,9 +133,10 @@ rotations.post('/analyse', requires('schedule:read'), async (req, res) => {
     const templates = new Map<string, TemplateLite>(rows.map((t) => [t.id, { id: t.id, name: t.name, startSlot: t.earliestStart, lengthSlots: t.lengthSlots, paidSlots: paidSlots(t, t.lengthSlots), active: t.status === 'ACTIVE' }]));
     const pol = await loadPolicy(tx);
     const pay = await payWeekFor(tx, b.wfmGroupId);
+    const lawLimits = limitsFrom((await loadRuleSets(tx, b.wfmGroupId)).group);
     const a = analysePattern({
-      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), weekend: await weekendDaysFor(tx, b.wfmGroupId), templates,
-      limits: { minRestHours: pol.minRestHours, maxWeeklyHours: pol.maxWeeklyHours, maxConsecutiveDays: pol.maxConsecutiveDays, maxDaysPerWeek: pol.maxDaysPerWeek },
+      cycleDays: b.sequence.length, sequence: b.sequence, crews: b.crews, anchorDow: dowOf(b.anchorDate), weekStart: pay.start, weekend: await weekendDaysFor(tx, b.wfmGroupId), templates,
+      limits: { minRestHours: pol.minRestHours, maxWeeklyHours: pol.maxWeeklyHours, maxConsecutiveDays: pol.maxConsecutiveDays, maxDaysPerWeek: pol.maxDaysPerWeek, minDaysOffTogether: Math.max(pol.minDaysOffTogether ?? 0, lawLimits.minDaysOffTogether ?? 0) || null },
       contractHours: g.fteHoursWeek ? Number(g.fteHoursWeek) : null,
     });
     const extra = await legalAndFairness(tx, b, rows, pay.start, await weekendDaysFor(tx, b.wfmGroupId));

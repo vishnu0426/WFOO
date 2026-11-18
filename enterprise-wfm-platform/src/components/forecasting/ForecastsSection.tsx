@@ -9,6 +9,7 @@ import { api, CHANNEL_LABEL, download, isNew, MODEL_LABEL, STATUS_LABEL, type Ve
 import { useForecast } from "../../services/forecastStore";
 import { COLUMNS_KEY, OPTIONAL_COLUMNS, defaultBase, groupFamilies, horizonLabel, originOf, readColumns, rowActions, shortWhen, type Family, type OptionalColumn, type RowAction } from "../../services/forecastLineage";
 import { OTHER_MEASURES } from "../../services/accuracyTerms";
+import { publishLines } from "../../services/liveForecasts";
 import { useApi } from "./hooks";
 import { Empty } from "./ui";
 import { Confirm } from "../configuration/groups/shared";
@@ -78,7 +79,7 @@ export function ForecastsSection() {
   };
   const confirm = async (reason: string) => {
     if (!pending) return; const { kind, v } = pending;
-    if (kind === "publish") await post(v, "publish", {}, `Published v${v.seq}. Staffing coverage and the auto-scheduler now use it; the previous live version is archived.`);
+    if (kind === "publish") await post(v, "publish", {}, `Published v${v.seq}. Staffing coverage and the auto-scheduler now use it for ${horizonLabel(v.fromDay, v.toDay)}.${v.kind === "SHORT" && publishLines(v, all.data ?? []).replaces.length ? " The live version for the same period is archived." : ""}`);
     else if (kind === "return") await post(v, "reject", { reason }, `Returned v${v.seq} to draft.`);
     else if (kind === "archive") await post(v, "archive", { reason }, `Archived v${v.seq}. Clone it to work on it again.`);
     else {
@@ -128,7 +129,7 @@ export function ForecastsSection() {
           </td>
           <td className={cell} title={title}>
             <button className="font-medium hover:underline" onClick={() => openVersion(h)}>{title}</button>
-            <div className="text-[12px] text-subtle-foreground">{f.live ? `Live: v${f.live.seq}` : "Nothing live"}{schedOf(f.groupId, f.kind) && <button type="button" data-testid="refresh-chip" onClick={() => setRefreshFor({ groupId: f.groupId, kind: f.kind as "SHORT" | "LONG" })} className="ml-2 rounded-full border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface" title="Open the auto-refresh schedule">Auto-refresh {schedOf(f.groupId, f.kind)!.description.replace(/^every /, "")}</button>}{isNew(h) && <>{" "}<span className="ml-1 rounded-full bg-info-bg px-1.5 py-0.5 text-[11px] font-medium text-info">NEW</span></>}</div>
+            <div className="text-[12px] text-subtle-foreground">{f.live ? `Live: ${f.liveAll.map((x) => `v${x.seq}`).join(", ")}${f.liveAll.length > 1 ? ` (${f.liveAll.length} periods)` : ""}` : "Nothing live"}{schedOf(f.groupId, f.kind) && <button type="button" data-testid="refresh-chip" onClick={() => setRefreshFor({ groupId: f.groupId, kind: f.kind as "SHORT" | "LONG" })} className="ml-2 rounded-full border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-surface" title="Open the auto-refresh schedule">Auto-refresh {schedOf(f.groupId, f.kind)!.description.replace(/^every /, "")}</button>}{isNew(h) && <>{" "}<span className="ml-1 rounded-full bg-info-bg px-1.5 py-0.5 text-[11px] font-medium text-info">NEW</span></>}</div>
           </td>
           <td className={cell}><StatusPill status={h.status} /></td>
           <td className={cell} title={`${h.fromDay} to ${h.toDay}`}>{horizonLabel(h.fromDay, h.toDay)}</td>
@@ -230,7 +231,10 @@ export function ForecastsSection() {
       {cmp && <CompareDrawer version={cmp.v} members={cmp.members} baseId={cmp.base} onBase={(id) => setCmp({ ...cmp, base: id })} onClose={() => setCmp(null)} />}
       {pending?.kind === "publish" && (
         <Confirm title={`Publish v${pending.v.seq}?`} confirmLabel="Publish" busy={busy} error={error} onCancel={() => setPending(null)} onConfirm={() => void confirm("")}>
-          <p>Staffing coverage and the auto-scheduler will use v{pending.v.seq}. The version that is live for this forecast now is archived.</p>
+          <p>Staffing coverage and the auto-scheduler will use v{pending.v.seq} for {horizonLabel(pending.v.fromDay, pending.v.toDay)}.</p>
+          {pending.v.kind === "SHORT"
+            ? <ul className="mt-2 list-disc space-y-1 pl-5">{publishLines(pending.v, all.data ?? []).lines.map((l) => <li key={l}>{l}</li>)}</ul>
+            : <p className="mt-2">The long-term forecast that is live now is archived.</p>}
         </Confirm>)}
       {pending?.kind === "return" && (
         <Confirm title={`Return v${pending.v.seq} to draft?`} confirmLabel="Return to draft" reason busy={busy} error={error} onCancel={() => setPending(null)} onConfirm={(r) => void confirm(r)}>

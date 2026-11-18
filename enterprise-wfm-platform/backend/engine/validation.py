@@ -215,6 +215,9 @@ def validate_schedule_request(req, max_options):
 
     if not 1 <= len(req.employees) <= MAX_EMPLOYEES:
         bad(f"a request needs between 1 and {MAX_EMPLOYEES:,} employees (got {len(req.employees):,})")
+    for mo in req.weekend_months:
+        if any(not 0 <= d < req.days for w in mo.weekends for d in w.days):
+            bad("a weekend in weekend_months has a day outside the period")
     ids = set()
     for e in req.employees:
         if e.id <= 0:
@@ -222,9 +225,15 @@ def validate_schedule_request(req, max_options):
         elif e.id in ids:
             bad(f"employee id {e.id} appears twice")
         ids.add(e.id)
-        for name in ("max_week_slots", "min_week_slots", "max_consecutive", "rest_slots", "max_days_week", "prior_run", "prior_week_slots", "prior_week_days", "prior_lead_days", "prior_weekend"):
+        for name in ("max_week_slots", "min_week_slots", "max_consecutive", "rest_slots", "max_days_week", "prior_run", "prior_week_slots", "prior_week_days", "prior_lead_days", "prior_weekend", "min_days_off_together"):
             if getattr(e, name) < 0:
                 bad(f"employee {e.id}: {name} cannot be negative")
+        if e.min_days_off_together > 7:
+            bad(f"employee {e.id}: min_days_off_together cannot be above 7")
+        if len(e.weekend_need) > len(req.weekend_months):
+            bad(f"employee {e.id}: weekend_need has more entries than the request has months")
+        if any(n < 0 or n > 5 for n in e.weekend_need):
+            bad(f"employee {e.id}: weekend_need must be between 0 and 5")
         if e.max_week_slots and e.min_week_slots > e.max_week_slots:
             bad(f"employee {e.id}: the contract minimum ({e.min_week_slots} slots) is above the weekly maximum ({e.max_week_slots})")
         if e.max_days_week > 7:

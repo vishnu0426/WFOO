@@ -8,7 +8,12 @@ import { Waiting } from '../common/loading';
 import React, { useEffect, useRef, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
-import { addDays, api, CHANNEL_LABEL, DOW, dayYear, dec, fmtDate, int, MODEL_LABEL, pct } from "../../services/api";
+import { addDays, api, CHANNEL_LABEL, DOW, dayYear, dec, fmtDate, int, MODEL_LABEL, pct, type VersionMeta } from "../../services/api";
+import { dayCount, defaultHistory, publishLines, queueDaysIn } from "../../services/liveForecasts";
+import { fmtLong, fmtShortDay, lengthText } from "../../services/dateRange";
+import { DateRangeField } from "../common/DateRangeField";
+import { Segmented } from "./RefScope";
+import { HelpTip } from "../common/HelpTip";
 import { useForecast } from "../../services/forecastStore";
 import { useApi, useVersionFull } from "./hooks";
 import { HistoryHealth } from "./HistoryHealth";
@@ -37,11 +42,11 @@ function useDebounced<T>(value: T, ms = 450): T {
   return v;
 }
 
-function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
+function Field({ label, hint, tip, children }: { label: string; hint?: React.ReactNode; tip?: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-1 items-start gap-x-6 gap-y-1.5 border-b px-6 py-3.5 md:grid-cols-[220px_1fr]">
       <div>
-        <div className="text-[13px] font-medium">{label}</div>
+        <div className="text-[13px] font-medium">{label}{tip && <HelpTip title={label} text={tip} />}</div>
         {hint && <div className="text-[12px] text-subtle-foreground">{hint}</div>}
       </div>
       <div className="max-w-xl">{children}</div>
@@ -106,6 +111,16 @@ export function BuilderSection() {
   const shortest = mine.length ? Math.min(...mine.map((c) => c.days)) : 0;
   const firstDay = mine.map((c) => c.firstDay).filter(Boolean).sort()[0] ?? "";
   const lastDay = mine.map((c) => c.lastDay).filter(Boolean).sort().at(-1) ?? "";
+  const histEnd = lastDay && lastDay > addDays(fmtDate(new Date()), -1) ? addDays(fmtDate(new Date()), -1) : lastDay;      // history never reaches today, whatever dates the data has
+  // the history the models learn from: opens as the last 12 months that have data, and can be changed
+  const [histFrom, setHistFrom] = useState("");
+  const [histTo, setHistTo] = useState("");
+  const histKey = `${group?.id}|${firstDay}|${lastDay}`;
+  useEffect(() => {
+    const d = defaultHistory(mine, fmtDate(new Date()));
+    setHistFrom(d?.from ?? ""); setHistTo(d?.to ?? "");
+  }, [histKey]);
+  const everyForGroup = useApi<VersionMeta[]>(group ? `/forecast/versions?groupId=${group.id}` : null, [group?.id]);
   const previewUrl = group ? `/forecast/preview?groupId=${group.id}${dow !== null ? `&dow=${dow}` : ""}&sl=${wiD.sl}&answer=${wiD.answer}&occ=${wiD.occ}&shrink=${wiD.shrink}${wiD.aht ? `&aht=${wiD.aht}` : ""}` : null;
   const preview = useApi<Preview>(previewUrl, [previewUrl]);
   const last = useVersionFull(version && group && version.wfmGroupId === group.id ? version : null).full;
@@ -122,10 +137,18 @@ export function BuilderSection() {
   const weeks = Math.ceil(daysAhead / 7);
   const horizonProblem = kind === "SHORT" ? (weeks < 1 || weeks > 18 ? "A short-term forecast covers 1 to 18 weeks." : "") : (daysAhead < 30 || daysAhead > 730 ? "A long-term forecast covers 30 to 730 days." : "");
 
+  const histProblem = !histFrom || !histTo ? "" : histFrom > histTo ? "The history ends before it starts." : histTo >= fmtDate(new Date()) ? "The history must end before today." : dayCount(histFrom, histTo) < 7 ? "Choose at least 7 days of history." : "";
+  const histQueues = histFrom && histTo && !histProblem ? queueDaysIn(mine, histFrom, histTo) : [];
+  const liveShort = (everyForGroup.data ?? []).filter((v) => v.kind === "SHORT" && v.status === "PUBLISHED");
+  const willPublish = kind === "SHORT" && hStart && hEnd && !horizonProblem ? publishLines({ fromDay: hStart, toDay: hEnd }, everyForGroup.data ?? []) : null;
+
+  const todayStr = fmtDate(new Date());
+  const [showEffect, setShowEffect] = useState(false);
+
   const create = async (openIt = true) => {
     setBusy(true); setError(""); setNotice(null);
     try {
-      const body: any = { groupId: group.id, kind, model: model || undefined, name: name.trim() || undefined, fromDay: hStart || undefined };
+      const body: any = { groupId: group.id, kind, model: model || undefined, name: name.trim() || undefined, fromDay: hStart || undefined, ...(histFrom && histTo && !histProblem ? { historyFrom: histFrom, historyTo: histTo } : {}) };
       if (kind === "SHORT") body.weeks = weeks; else body.days = daysAhead;
       const v = await api("/forecast/versions", { method: "POST", body });
       await reload(v.id);
@@ -141,6 +164,7 @@ export function BuilderSection() {
   const chart = shown.map((s) => ({ time: `${String(Math.floor(s.slot / 4)).padStart(2, "0")}:${String((s.slot % 4) * 15).padStart(2, "0")}`, forecast: s.volume, requiredStaff: s.required }));
   const canCreate = can("forecast:create");
   const blockers = createBlockers({ canCreate, shortestHistoryDays: shortest, horizonProblem, busy });
+  if (histProblem) blockers.push(histProblem);
   const sections: FormSection[] = [
     { id: "scope", label: "Scope" }, { id: "period", label: "Period", badge: horizonProblem ? { text: "Check", tone: "bad" } : null }, { id: "service", label: "Service parameters" }, { id: "model", label: "Model" },
     { id: "history", label: "History check", badge: fsum && fsum.total ? { text: String(fsum.total), tone: fsum.blocks ? "bad" : "warn" } : null },
@@ -163,106 +187,105 @@ export function BuilderSection() {
           <SectionNav variant="rail" sections={sections} active={spy.active} onGo={spy.go} />
           <div className="min-w-0">
           <div id="sec-scope" className="scroll-mt-14"><Section title="Scope">
-            <Field label="Forecast name" hint="Your name is used exactly as typed. Blank = numbered automatically">
+            <Field label="Forecast name" tip="Used exactly as typed. Left blank, it is numbered automatically.">
               <input className={input} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder="e.g. April campaign plan" />
             </Field>
-            <Field label="WFM group" hint="Determines queues and service targets">
+            <Field label="WFM group" tip="Determines the queues and the service targets.">
               <select className={input} value={group.id} onChange={(e) => setGroupId(e.target.value)} aria-label="WFM group">
                 {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </Field>
-            <Field label="Channels" hint="From the group's queues">
+            {kind === "SHORT" && liveShort.length > 0 && (
+              <Field label="Based on" tip="Start from the period of a live forecast, to make a new version of it. You can still change the dates.">
+                <select className={input} aria-label="Based on" value={liveShort.find((v) => v.fromDay === hStart && v.toDay === hEnd)?.id ?? ""} onChange={(e) => { const v = liveShort.find((x) => x.id === e.target.value); if (v) { setHStart(v.fromDay); setHEnd(v.toDay); } }}>
+                  <option value="">Nothing: choose the dates myself</option>
+                  {liveShort.map((v) => <option key={v.id} value={v.id}>{`v${v.seq} · ${fmtLong(v.fromDay)} to ${fmtLong(v.toDay)}`}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label="Channels" tip="From the group's queues.">
               {mine.length === 0 ? <span className="text-[13px] text-subtle-foreground">No queues in this group yet</span> : (
                 <div className="flex flex-wrap gap-1.5">
                   {[...new Set(mine.map((c) => c.channel))].map((c) => <Chip key={c} label={CHANNEL_LABEL[c] ?? c} on />)}
                 </div>
               )}
             </Field>
-            <Field label="Queues" hint="History each queue has to learn from">
+            <Field label="Queues" tip="The history each queue has to learn from.">
               <div className="flex flex-wrap gap-1.5">
-                {mine.map((c) => (
-                  <span key={c.queueId} className="rounded-md border bg-surface px-2.5 py-1 text-[13px]" title={c.missingIntervals ? `${int(c.missingIntervals)} intervals missing` : undefined}>
-                    {c.name} <span className="text-subtle-foreground">· {c.days} days</span>
-                  </span>
-                ))}
+                {mine.map((c) => {
+                  const shown = Math.min(c.days, c.lastDay && c.firstDay && histEnd ? dayCount(c.firstDay, c.lastDay > histEnd ? histEnd : c.lastDay) : c.days);
+                  return (
+                    <span key={c.queueId} className="rounded-md border bg-surface px-2.5 py-1 text-[13px]" title={c.missingIntervals ? `${int(c.missingIntervals)} intervals missing` : undefined}>
+                      {c.name} <span className="text-subtle-foreground">· {shown} days</span>
+                    </span>
+                  );
+                })}
               </div>
             </Field>
           </Section></div>
 
           <div id="sec-period" className="scroll-mt-14"><Section title="Period">
-            <Field label="Type" hint={kind === "SHORT" ? "15-minute intervals, drives the schedule" : "Daily volumes, drives capacity planning"}>
-              <div className="flex gap-1.5">
-                <Chip label="Short-term" on={kind === "SHORT"} onClick={() => setKind("SHORT")} />
-                <Chip label="Long-term" on={kind === "LONG"} onClick={() => setKind("LONG")} />
-              </div>
+            <Field label="Type" tip={kind === "SHORT" ? "Short-term: 15-minute intervals, drives the schedule." : "Long-term: daily volumes, drives capacity planning."}>
+              <Segmented value={kind} onChange={(id) => setKind(id as "SHORT" | "LONG")} options={[{ id: "SHORT", label: "Short-term" }, { id: "LONG", label: "Long-term" }]} />
             </Field>
-            <Field label="Historical period" hint="Used for training and backtest">
-              <div className="flex gap-2">
-                <input type="date" value={firstDay} disabled className={input} aria-label="History from" />
-                <input type="date" value={lastDay} disabled className={input} aria-label="History to" />
+            <Field label="Historical period" tip="The days the models learn from and are tested on. Days with no data cannot be chosen.">
+              <div className="max-w-md">
+                <DateRangeField ariaLabel="Historical period" from={histFrom} to={histTo} min={firstDay || undefined} max={histEnd || undefined} disabled={!firstDay} onChange={(f, t) => { setHistFrom(f); setHistTo(t); }} />
               </div>
-              {shortest === 0 && <div className="mt-1.5"><Banner kind="warn">No interval history for this group yet. Import it under Data Management › Staged Ingestion first.</Banner></div>}
-              {shortest > 0 && shortest < 28 && <div className="mt-1.5 text-[12px] text-warning">Only {shortest} days of history. Results will be rough until there are at least 8 weeks.</div>}
+              <HistoryStatus problem={histProblem} queues={histQueues} none={shortest === 0} />
             </Field>
-            <Field label="Forecast horizon" hint={horizonProblem ? <span className="text-critical">{horizonProblem}</span> : kind === "SHORT" ? `${weeks} week${weeks === 1 ? "" : "s"}` : `${daysAhead} days`}>
-              <div className="flex gap-2">
-                <input type="date" value={hStart} onChange={(e) => e.target.value && setHStart(e.target.value)} className={input} aria-label="Horizon start" />
-                <input type="date" value={hEnd} min={hStart} onChange={(e) => e.target.value && setHEnd(e.target.value)} className={input} aria-label="Horizon end" />
+            <Field label="Forecast horizon" tip={kind === "SHORT" ? "The days the forecast covers: up to 18 weeks." : "The days the forecast covers: 30 days to two years."}>
+              <div className="flex max-w-md items-center gap-3">
+                <div className="flex-1"><DateRangeField ariaLabel="Forecast horizon" from={hStart} to={hEnd} min={todayStr} maxDays={kind === "SHORT" ? 126 : 730} onChange={(f, t) => { setHStart(f); setHEnd(t); }} /></div>
+                {hStart && hEnd && <span className="shrink-0 text-[13px] font-medium tabular-nums">{lengthText(hStart, hEnd)}</span>}
               </div>
+              <div className={`mt-1 text-[12px] ${horizonProblem ? "text-critical" : "text-subtle-foreground"}`}>{horizonProblem || (hStart && hEnd ? `${fmtShortDay(hStart)} to ${fmtShortDay(hEnd)}` : "")}</div>
             </Field>
-            <Field label="Interval" hint={kind === "SHORT" ? "Short-term forecasts are 15-minute" : "Long-term forecasts are daily"}>
-              <div className="num flex gap-1.5">
-                {kind === "SHORT"
-                  ? [15, 30, 60].map((v) => <Chip key={v} label={`${v} min`} on={v === 15} disabled={v !== 15} title={v === 15 ? undefined : "Only 15-minute intervals are supported"} />)
-                  : <Chip label="Daily" on />}
-              </div>
-            </Field>
+            <Field label="Interval"><div className="num py-1 text-[13px]">{kind === "SHORT" ? "15 minutes" : "Daily"}</div></Field>
           </Section></div>
 
           <div id="sec-service" className="scroll-mt-14"><Section title="Service parameters">
             <Field label="Forecast metric"><select className={input} value="Offered volume" disabled aria-label="Forecast metric"><option>Offered volume</option></select></Field>
-            <Field label="AHT" hint={`Seconds per contact${pv?.ahtHistory ? `, ${pv.ahtHistory}s in your history` : ""}`}>
-              <input type="number" min={1} className={input} value={wi.aht ?? pv?.ahtHistory ?? ""} placeholder="–" aria-label="AHT" onChange={(e) => setWi({ ...wi, aht: e.target.value === "" ? null : Math.max(1, Math.min(7200, +e.target.value)) })} />
-            </Field>
-            <Field label="Service goal" hint={goalSentence(wi.sl, wi.answer)}>
-              <div className="num flex flex-wrap items-center gap-2 text-[13px]">
-                <span>Answer</span>
-                <input type="number" min={1} max={99} className={`${input} !w-20`} value={wi.sl} aria-label="Service goal" onChange={(e) => setWi({ ...wi, sl: Math.max(1, Math.min(99, +e.target.value || 1)) })} />
-                <span>% of contacts within</span>
-                <input type="number" min={1} max={600} className={`${input} !w-20`} value={wi.answer} aria-label="Threshold seconds" onChange={(e) => setWi({ ...wi, answer: Math.max(1, Math.min(600, Math.round(+e.target.value) || 1)) })} />
-                <span>seconds</span>
+            <Field label="AHT" tip={`Average handle time, in seconds per contact${pv?.ahtHistory ? `. Your history shows ${pv.ahtHistory}s.` : "."}`}>
+              <div className="num flex items-center gap-2 text-[13px]">
+                <input type="number" min={1} className={`${input} !w-24`} value={wi.aht ?? pv?.ahtHistory ?? ""} placeholder="–" aria-label="AHT" onChange={(e) => setWi({ ...wi, aht: e.target.value === "" ? null : Math.max(1, Math.min(7200, +e.target.value)) })} />
+                <span className="text-subtle-foreground">sec</span>
               </div>
             </Field>
-            <Field label="Occupancy target" hint={occupancySentence(wi.occ)}>
+            <Field label="Service goal" tip={goalSentence(wi.sl, wi.answer) + ". These targets start at the group's saved values: change them under Configuration › WFM Groups."}>
+              <div className="num flex flex-wrap items-center gap-2 text-[13px]">
+                <input type="number" min={1} max={99} className={`${input} !w-20`} value={wi.sl} aria-label="Service goal" onChange={(e) => setWi({ ...wi, sl: Math.max(1, Math.min(99, +e.target.value || 1)) })} />
+                <span className="text-subtle-foreground">% in</span>
+                <input type="number" min={1} max={600} className={`${input} !w-20`} value={wi.answer} aria-label="Threshold seconds" onChange={(e) => setWi({ ...wi, answer: Math.max(1, Math.min(600, Math.round(+e.target.value) || 1)) })} />
+                <span className="text-subtle-foreground">sec</span>
+              </div>
+            </Field>
+            <Field label="Occupancy target" tip={occupancySentence(wi.occ)}>
               <div className="num flex items-center gap-2 text-[13px]">
                 <input type="number" min={31} max={100} className={`${input} !w-20`} value={wi.occ} aria-label="Occupancy target" onChange={(e) => setWi({ ...wi, occ: Math.max(31, Math.min(100, +e.target.value || 31)) })} />
-                <span>% of logged-in time, at most</span>
+                <span className="text-subtle-foreground">% max</span>
               </div>
             </Field>
-            <Field label="Shrinkage" hint={shrinkageSentence(wi.shrink) + (group.shrinkageSource === "CATEGORIES" ? ". This is the total of the group's shrinkage categories." : "")}>
+            <Field label="Shrinkage" tip={shrinkageSentence(wi.shrink) + (group.shrinkageSource === "CATEGORIES" ? ". This is the total of the group's shrinkage categories." : "")}>
               <div className="num flex items-center gap-2 text-[13px]">
                 <input type="number" min={0} max={90} className={`${input} !w-20`} value={wi.shrink} aria-label="Shrinkage" onChange={(e) => setWi({ ...wi, shrink: Math.max(0, Math.min(90, +e.target.value || 0)) })} />
-                <span>% of paid time, added to the gross requirement</span>
+                <span className="text-subtle-foreground">%</span>
               </div>
             </Field>
             {changed ? (
-              <div className="flex flex-wrap items-center gap-3 border-b bg-warning-bg/60 px-6 py-3 text-[12px] text-warning">
-                <span>Preview only: the forecast is created with {group.name}'s saved targets ({group.serviceLevelGoal}/{group.serviceLevelThresholdSec}s, {group.targetOccupancy}% occupancy, {shrinkOf(group)}% shrinkage).</span>
-                <button className="font-medium underline" onClick={() => setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: shrinkOf(group), aht: null })}>Reset to the group</button>
-                <button className="font-medium underline" onClick={() => go("wfm-groups", "configuration")}>Change the group's targets</button>
+              <div className="flex flex-wrap items-center gap-3 border-b bg-warning-bg/60 px-6 py-2.5 text-[12px] text-warning">
+                <span>Preview only. The forecast uses {group.name}'s saved targets.</span>
+                <button className="font-medium underline" onClick={() => setWi({ sl: group.serviceLevelGoal, answer: group.serviceLevelThresholdSec, occ: group.targetOccupancy, shrink: shrinkOf(group), aht: null })}>Reset</button>
+                <button className="font-medium underline" onClick={() => go("wfm-groups", "configuration")}>Change in WFM Groups</button>
               </div>
-            ) : (
-              <div className="border-b px-6 py-3 text-[12px] text-subtle-foreground">
-                These start at the group's saved targets, and changing them re-runs the preview.{" "}
-                <button className="underline" onClick={() => go("wfm-groups", "configuration")}>Change the group's own targets in Configuration › WFM Groups</button>.
-              </div>
-            )}
+            ) : null}
           </Section></div>
 
           <div id="sec-model" className="scroll-mt-14"><Section title="Model">
             <div className="mx-6 my-4 rounded-md border bg-info-bg/60 p-4">
               <div className="flex items-center gap-2 text-[13px] font-semibold">
                 <Sparkles className="size-4 text-info" /> Auto ensemble recommended
+                <HelpTip title="Automatic model" text={`${lastSeries && lastPick ? `Last forecast used ${MODEL_LABEL[lastSeries.model] ?? lastSeries.model}. ` : ""}Every method is tested on your last 4 weeks and the most accurate one is kept for each queue.`} />
               </div>
               <div className="num mt-2 grid grid-cols-3 gap-4 text-[13px]">
                 <div>
@@ -278,16 +301,13 @@ export function BuilderSection() {
                   <div className="font-semibold">4 weeks</div>
                 </div>
               </div>
-              <p className="mt-2 text-[13px] text-muted-foreground">
-                {lastSeries && lastPick ? `Last forecast used ${MODEL_LABEL[lastSeries.model] ?? lastSeries.model}. ` : ""}Every method is tested on your last 4 weeks and the most accurate one is kept for each queue.
-              </p>
               <div className="mt-3 flex gap-2">
                 <button onClick={() => { setModel("auto"); setAdvanced(false); }} className="rounded-md bg-primary px-2.5 py-1.5 text-[13px] font-medium text-primary-foreground">Use recommended</button>
                 <button onClick={() => setAdvanced(true)} className="rounded-md border bg-background px-2.5 py-1.5 text-[13px] font-medium">Choose manually</button>
               </div>
             </div>
             {advanced && (
-              <Field label="Model" hint="Advanced: skips the test and uses this one">
+              <Field label="Model" tip="Advanced: skips the test and uses this one.">
                 <select className={input} value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
                   {Object.entries(MODEL_LABEL).map(([id, l]) => <option key={id} value={id}>{l}</option>)}
                 </select>
@@ -334,15 +354,11 @@ export function BuilderSection() {
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-                  <div className="border-t px-6 py-4 text-[13px] text-muted-foreground">
+                  <div className="border-t px-6 py-3 text-[13px] text-muted-foreground">
                     <div className="flex items-center gap-1.5 font-medium text-foreground">
                       <Wand2 className="size-3.5" /> Traceability
+                      <HelpTip title="How this is calculated" text={`Volume is the average ${DOW[pv.dow]} over the last ${pv.basis.weeks} weeks. AHT ${pv.aht ?? "–"}s, service goal ${pct(pv.targets.serviceLevel)} in ${pv.targets.answerSec}s (${pv.targets.method === "erlang_a" ? "Erlang A" : "Erlang C"}), occupancy cap ${pct(pv.targets.occupancyCap)}, shrinkage ${pct(pv.targets.shrinkage)}. Once the forecast is created, click any point on the dashboard to see the steps for that interval.`} />
                     </div>
-                    <p className="mt-1">
-                      Required staff derives from volume (the average {DOW[pv.dow]} over the last {pv.basis.weeks} weeks), AHT {pv.aht ?? "–"}s, a service goal of {pct(pv.targets.serviceLevel)} in {pv.targets.answerSec}s
-                      ({pv.targets.method === "erlang_a" ? "Erlang A" : "Erlang C"}), an occupancy cap of {pct(pv.targets.occupancyCap)} and {pct(pv.targets.shrinkage)} shrinkage. After creating the forecast, click any
-                      point on the dashboard to see each step for that interval.
-                    </p>
                   </div>
                 </>
               )}
@@ -358,6 +374,15 @@ export function BuilderSection() {
       <StickyFooter summary={summary}
         notes={<>
           {blockers.map((b) => <div key={b} className="text-critical">{b}</div>)}
+          {histProblem && <div className="text-critical">{histProblem}</div>}
+          {willPublish && (
+            <div className="text-subtle-foreground" data-testid="publish-effect">
+              <span className="font-medium text-foreground">When published: </span>
+              <span className={willPublish.replaces.length ? "text-warning" : ""}>{willPublish.replaces.length ? `Replaces ${willPublish.replaces.map((f) => `v${f.seq}`).join(", ")}` : "Adds a live forecast"}</span>
+              {" "}<button type="button" className="underline" aria-expanded={showEffect} onClick={() => setShowEffect((s) => !s)}>{showEffect ? "Hide" : "Details"}</button>
+              {showEffect && <ul className="mt-1 list-disc space-y-0.5 pl-5">{willPublish.lines.map((l) => <li key={l}>{l}</li>)}</ul>}
+            </div>
+          )}
           {fsum && footerNote(fsum) && <div className={footerNote(fsum)!.tone === "bad" ? "text-critical" : "text-warning"}>{footerNote(fsum)!.text}. <button type="button" className="underline" onClick={() => spy.go("history")}>Review it</button></div>}
         </>}>
         {canCreate ? (
@@ -367,6 +392,20 @@ export function BuilderSection() {
           </>
         ) : <Pill>You do not have permission to create forecasts</Pill>}
       </StickyFooter>
+    </div>
+  );
+}
+
+/** One line about the history chosen: how many days, and whether every queue has enough. Only the queues with too little are named. */
+function HistoryStatus({ problem, queues, none }: { problem: string; queues: { name: string; days: number; total: number; thin: boolean }[]; none: boolean }) {
+  if (problem) return <div className="mt-1 text-[12px] text-critical">{problem}</div>;
+  if (none) return <div className="mt-1.5"><Banner kind="warn">No interval history for this group yet. Import it under Data Management › Staged Ingestion first.</Banner></div>;
+  if (!queues.length) return null;
+  const thin = queues.filter((q) => q.thin), total = queues[0].total;
+  return (
+    <div className="mt-1 text-[12px]" aria-label="Days of data in these dates">
+      <div className={thin.length ? "text-warning" : "text-subtle-foreground"}>{total} days · {thin.length === 0 ? `all ${queues.length} ${queues.length === 1 ? "queue has" : "queues have"} enough data` : `${queues.length - thin.length} of ${queues.length} queues have enough data`}</div>
+      {thin.map((q) => <div key={q.name} className="text-warning">{q.name}: about {q.days} days, too little for a steady forecast</div>)}
     </div>
   );
 }

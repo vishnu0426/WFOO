@@ -10,6 +10,7 @@ import { me, permissionsFor, requires, type Principal } from '../auth.ts';
 import { approvalSettings, myTeamIds } from './approvals.ts';
 import { TO_SQL, toDto } from './workforceRoutes.ts';
 import { pendingApprovalSwaps } from './swaps.ts';
+import { offRequestList } from './offRequests.ts';
 
 export const approvalsMe = Router();
 const LIMIT = 100;
@@ -24,6 +25,7 @@ async function scopeOf(tx: Tx, p: Principal) {
   return {
     emp,
     timeOff: fullTimeOff ? { teams: null as string[] | null } : teamIds.length ? { teams: teamIds } : null,
+    off: fullTimeOff ? { teams: null as string[] | null } : teamIds.length ? { teams: teamIds } : null,         // requests about days off are decided by the same people as time off
     swaps: fullSwaps ? { teams: null as string[] | null } : teamIds.length ? { teams: teamIds } : null,
   };
 }
@@ -55,7 +57,8 @@ approvalsMe.get('/count', requires('self:use'), async (req, res) => {
     if (!sc || (!sc.timeOff && !sc.swaps)) return { access: false, count: 0 };
     const t = sc.timeOff ? (await pendingTimeOff(tx, sc.timeOff.teams, sc.emp)).items.length : 0;
     const s = sc.swaps ? (await pendingApprovalSwaps(tx, sc.swaps.teams, sc.emp)).length : 0;
-    return { access: true, count: t + s };
+    const o = sc.off ? (await offRequestList(tx, { statuses: ['REQUESTED'], teams: sc.off.teams, excludeEmployee: sc.emp })).items.length : 0;
+    return { access: true, count: t + s + o };
   }));
 });
 
@@ -63,9 +66,10 @@ approvalsMe.get('/', requires('self:use'), async (req, res) => {
   const p = me(req);
   res.json(await withTenant(p.tenantId, async (tx) => {
     const sc = await scopeOf(tx, p).catch(() => null);
-    if (!sc || (!sc.timeOff && !sc.swaps)) return { access: false, timeOff: [], swaps: [], truncated: false };
+    if (!sc || (!sc.timeOff && !sc.swaps)) return { access: false, timeOff: [], swaps: [], offRequests: [], truncated: false };
     const t = sc.timeOff ? await pendingTimeOff(tx, sc.timeOff.teams, sc.emp) : { items: [], truncated: false };
     const s = sc.swaps ? await pendingApprovalSwaps(tx, sc.swaps.teams, sc.emp) : [];
-    return { access: true, timeOff: t.items, swaps: s, truncated: t.truncated };
+    const o = sc.off ? await offRequestList(tx, { statuses: ['REQUESTED'], teams: sc.off.teams, excludeEmployee: sc.emp }) : { items: [], truncated: false };
+    return { access: true, timeOff: t.items, swaps: s, offRequests: o.items, truncated: t.truncated || o.truncated };
   }));
 });

@@ -13,7 +13,7 @@ export const GLOSSARY = {
   confidence: { title: 'How sure to be of having enough people', body: 'Higher settings plan for a busier day than the forecast, so cover holds more often, at the cost of more people on shift.', example: 'At 80, about 80 days in 100 are fully covered.' },
   solver: { title: 'Solver', body: 'The method that builds the schedule. Automatic tries the best one first and switches to a backup if it fails. All are open source, and the result says which one answered.' },
   solverTime: { title: 'Solver time', body: 'More time can find a better roster. Large groups need 60 seconds or more.' },
-  alwaysEnforced: { title: 'Always enforced', body: 'These rules are never traded off: one shift a day, rest between shifts, weekly maximum, days in a row, days per week, availability, approved time off and template days.' },
+  alwaysEnforced: { title: 'Always enforced', body: 'These rules are never traded off: one shift a day, rest between shifts, weekly maximum, days in a row, days per week, days off together and weekends off in a month (when a rule sets them), availability, approved weekends-off requests, approved time off and template days.' },
   longSchedule: { title: 'Long schedules', body: 'A long schedule is built in the background, four weeks at a time, each starting where the one before ended. Weeks close to today are solved shift by shift. Weeks far ahead depend on a less certain forecast, so they repeat the last solved cycle and are re-solved as they come closer.' },
   gracePeriod: { title: 'Grace period', body: 'Extra days after a licence expires during which everything keeps working, so renewal never interrupts your operation.' },
 } satisfies Record<string, HelpEntry>;

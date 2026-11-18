@@ -5,16 +5,17 @@ import { useLoad } from '../ui';
 import { TimeOff } from './TimeOff';
 import { Swaps } from './Swaps';
 import { Opportunities } from './Opportunities';
+import { DaysOff } from './DaysOff';
 
-type Sub = 'timeoff' | 'swaps' | 'opportunities';
-const SUBS: { id: Sub; label: string }[] = [{ id: 'timeoff', label: 'Time off' }, { id: 'swaps', label: 'Swaps' }, { id: 'opportunities', label: 'Opportunities' }];
+type Sub = 'timeoff' | 'daysoff' | 'swaps' | 'opportunities';
+const SUBS: { id: Sub; label: string }[] = [{ id: 'timeoff', label: 'Time off' }, { id: 'daysoff', label: 'Days off' }, { id: 'swaps', label: 'Swaps' }, { id: 'opportunities', label: 'Opportunities' }];
 
 export const Requests: React.FC<{ prefill?: RequestPrefill | null; onPrefillConsumed?: () => void }> = ({ prefill, onPrefillConsumed }) => {
   const [sub, setSub] = useState<Sub>('timeoff');
   const bids = useLoad<Bid[]>('/me/bids');
   const openBids = (bids.data ?? []).filter((b) => b.status === 'OPEN').length;
   // a prefill that carries a date or a shift is consumed by the tab it opens; a bare one (from the Inbox) only picks the tab, so clear it here
-  useEffect(() => { if (!prefill) return; setSub(prefill.tab); if (prefill.tab === 'opportunities' || (prefill.tab === 'swaps' && !prefill.shiftId) || (prefill.tab === 'timeoff' && !prefill.date)) onPrefillConsumed?.(); }, [prefill]);
+  useEffect(() => { if (!prefill) return; setSub(prefill.tab); if (prefill.tab === 'opportunities' || prefill.tab === 'daysoff' || (prefill.tab === 'swaps' && !prefill.shiftId) || (prefill.tab === 'timeoff' && !prefill.date)) onPrefillConsumed?.(); }, [prefill]);
 
   return (
     <div className="space-y-4">
@@ -24,6 +25,7 @@ export const Requests: React.FC<{ prefill?: RequestPrefill | null; onPrefillCons
         ))}
       </div>
       {sub === 'timeoff' && <TimeOff initialDate={prefill?.tab === 'timeoff' ? prefill.date : undefined} onConsumed={onPrefillConsumed} />}
+      {sub === 'daysoff' && <DaysOff />}
       {sub === 'swaps' && <Swaps initialShiftId={prefill?.tab === 'swaps' ? prefill.shiftId : undefined} onConsumed={onPrefillConsumed} />}
       {sub === 'opportunities' && <Opportunities />}
     </div>

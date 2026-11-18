@@ -2,7 +2,7 @@
  * The Forecasts list as people think of it: one forecast per group and type, with its numbered versions underneath. Pure functions (no React, no browser), tested on their own.
  *
  * A "forecast" here is a WFM group's short-term or long-term forecast, and its versions are what it has been through: a draft cloned from the live one, an edit, a new build. Publishing
- * one version archives the one that was live, so there is never more than one live version per forecast; that is the one pinned to the top.
+ * one version archives the live one for the same period (a short-term forecast can have several live, one per period; a long-term forecast has one); the live ones are pinned to the top.
  */
 export type VersionStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'PUBLISHED' | 'ARCHIVED';
 /** What this module needs to know about a version (the screen's own version type has more, and is what comes back out). Kept free of the app's other modules so the gateway's tests can use it. */
@@ -17,8 +17,10 @@ export interface Family<V extends VersionLike = VersionLike> {
   members: V[];
   /** The versions that match the current filters: the live one first, then drafts and reviews newest first, then archived ones. */
   versions: V[];
-  /** The live (published) version among them, if any. */
+  /** The live (published) version among them, if any (the newest one when several short-term forecasts are live for different periods). */
   live: V | null;
+  /** Every live version among them: a group can have several short-term forecasts live at once, each for its own period. */
+  liveAll: V[];
   /** What the row shows: the live version, else the newest one still in play, else the newest archived one. */
   headline: V;
   updatedAt: string;
@@ -42,7 +44,7 @@ export function groupFamilies<V extends VersionLike>(all: V[], o: { status?: Ver
     const shown = every.filter(matches).sort(byInterest);
     if (!shown.length) continue;
     out.push({
-      key, groupId: every[0].wfmGroupId, kind: every[0].kind, members: [...every].sort(byInterest), versions: shown, live: shown.find((v) => v.status === 'PUBLISHED') ?? null, headline: shown[0],
+      key, groupId: every[0].wfmGroupId, kind: every[0].kind, members: [...every].sort(byInterest), versions: shown, live: shown.find((v) => v.status === 'PUBLISHED') ?? null, liveAll: shown.filter((v) => v.status === 'PUBLISHED'), headline: shown[0],
       updatedAt: shown.map(updatedAt).sort().at(-1)!, total: every.length, inProgress: every.filter((v) => v.status === 'DRAFT' || v.status === 'SUBMITTED' || v.status === 'APPROVED').length,
     });
   }

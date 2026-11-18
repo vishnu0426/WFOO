@@ -479,7 +479,7 @@ export async function liveReforecast(tenantId: string, groupId: string, day: str
   const nowSlot = Math.floor(localClock(group.timezone) / 15);
   if (nowSlot >= SPD || !(await engineReady())) return null;
   const { v, actuals } = await withTenant(tenantId, async (tx) => ({
-    v: await tx.one<any>(`SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND status = 'PUBLISHED' ORDER BY seq DESC LIMIT 1`, [groupId]),
+    v: await tx.one<any>(`SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND status = 'PUBLISHED' ORDER BY (from_day <= $2::date AND to_day >= $2::date) DESC, published_at DESC NULLS LAST, seq DESC LIMIT 1`, [groupId, day]),
     actuals: await tx.q<any>(
       `SELECT h.slot, sum(h.volume)::int AS volume, sum(h.volume * h.aht_sec)::float8 / nullif(sum(h.volume), 0) AS aht
        FROM interval_history h JOIN queues qu ON qu.id = h.queue_id WHERE h.tenant_id = :t AND qu.wfm_group_id = $1 AND h.day = $2 AND h.slot < $3 GROUP BY h.slot`, [groupId, day, nowSlot]),
@@ -513,7 +513,7 @@ export async function coverageFor(tenantId: string, q: z.infer<typeof CoverageQ>
     const group = await loadGroup(tx, q.groupId);
     const day = q.day ?? todayIn(group.timezone);
     const v = await tx.one<any>(
-      `SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND ($2::uuid IS NULL OR id = $2) AND ($2::uuid IS NOT NULL OR status = 'PUBLISHED') ORDER BY seq DESC LIMIT 1`, [q.groupId, q.versionId ?? null]);
+      `SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND ($2::uuid IS NULL OR id = $2) AND ($2::uuid IS NOT NULL OR status = 'PUBLISHED') ORDER BY (from_day <= $3::date AND to_day >= $3::date) DESC, published_at DESC NULLS LAST, seq DESC LIMIT 1`, [q.groupId, q.versionId ?? null, day]);   // several can be live: the one covering this day, the most recently published first
     // the same weekday a week earlier, for the "historical" bars
     const lastWeek = await tx.q<any>(
       `SELECT h.slot, sum(h.volume)::int AS volume FROM interval_history h JOIN queues qu ON qu.id = h.queue_id

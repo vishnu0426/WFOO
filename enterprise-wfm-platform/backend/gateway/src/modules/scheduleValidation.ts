@@ -3,6 +3,7 @@
  * shifts with their meals and breaks), each person's limits, everything else the person is committed to (shifts for other groups, approved leave) and the requirement, and
  * says whether the roster obeys every rule. Publishing needs it to pass, whoever made the roster: a solver, a rotation, or a person by hand.
  */
+import { engineMonths, weekendNeeds } from './weekendRule.ts';
 import { engine } from '../infra.ts';
 import { HttpError } from '../http.ts';
 import { cleanWeekend, weekendMask } from './payWeek.ts';
@@ -46,17 +47,20 @@ export async function validationRequest(tenantId: string, live: { ctx: any; shif
     if (t.loan || !people.has(t.employeeId)) continue;
     for (const [d, i] of dayIdx) if (d >= t.startDay && d <= t.endDay) commitments.push({ employee: people.get(t.employeeId), day: i, start_slot: 0, length_slots: SPD, kind: 'LEAVE', label: 'on approved time off' });
   }
+  // full weekends off in a calendar month, when the context was loaded for the same days as the check
+  const wPlan = ctx.weekendPlan && ctx.period?.from === days[0] ? ctx.weekendPlan : null;
   const employees = [...people].map(([id, n]) => {
     const e = ofPerson.get(id) ?? {};
+    const need: number[] = wPlan && (e.minWeekendsOffMonth ?? 0) > 0 ? weekendNeeds(e.minWeekendsOffMonth, wPlan.months, wPlan.offBefore.get(id) ?? []) : [];
     return {
-      limits: { id: n, consist_mode: ({ DEFAULT: 0, OFF: 1, PREFER: 2, REQUIRE: 3 } as Record<string, number>)[e.shiftConsistency ?? 'DEFAULT'] ?? 0, max_week_slots: Math.round(Number(e.maxWeeklyHours ?? 0) * 4), min_week_slots: Math.round(Number(e.weeklyContractHours ?? 0) * 4), max_consecutive: e.maxConsecutiveDays ?? 0, rest_slots: Math.round(Number(e.minRestHours ?? 0) * 4), max_days_week: e.workDaysPerWeek ?? 0 },
+      limits: { id: n, consist_mode: ({ DEFAULT: 0, OFF: 1, PREFER: 2, REQUIRE: 3 } as Record<string, number>)[e.shiftConsistency ?? 'DEFAULT'] ?? 0, max_week_slots: Math.round(Number(e.maxWeeklyHours ?? 0) * 4), min_week_slots: Math.round(Number(e.weeklyContractHours ?? 0) * 4), max_consecutive: e.maxConsecutiveDays ?? 0, min_days_off_together: e.minDaysOffTogether ?? 0, weekend_need: need.some((v) => v > 0) ? need : [], rest_slots: Math.round(Number(e.minRestHours ?? 0) * 4), max_days_week: e.workDaysPerWeek ?? 0 },
       allow_overnight: e.allowOvernight !== false, allow_weekend: e.allowWeekend !== false, name: `${e.firstName ?? ''} ${e.lastName ?? ''}`.trim() || id,
     };
   });
   const adjust = restAdjust(days, ctx.tz ?? 'UTC');
   return {
     request: {
-      days: days.length, first_dow: dowOf(days[0]), week_start: ctx.weekStart ?? 0, weekend_mask: weekendMask(ctx.weekendDays ?? cleanWeekend(pol.scheduling.weekendDays)), employees, shifts: outShifts, commitments,
+      days: days.length, first_dow: dowOf(days[0]), week_start: ctx.weekStart ?? 0, weekend_mask: weekendMask(ctx.weekendDays ?? cleanWeekend(pol.scheduling.weekendDays)), weekend_months: wPlan ? engineMonths(wPlan.months, days[0]) : [], employees, shifts: outShifts, commitments,
       required: live.required, dst_rest_adjust: adjust.some((v) => v !== 0) ? adjust : [], target_coverage: pol.scheduling.targetCoverage / 100,
       // the company's rule on usual start and end times; a person who must have them is held to them (their own setting, above, overrides this one)
       consistency_mode: { OFF: 0, PREFER: 1, REQUIRE: 2 }[pol.scheduling.consistentTimes.mode as 'OFF'] ?? 0, start_tol_slots: Math.round(pol.scheduling.consistentTimes.startToleranceMin / 15), end_tol_slots: Math.round(pol.scheduling.consistentTimes.endToleranceMin / 15),

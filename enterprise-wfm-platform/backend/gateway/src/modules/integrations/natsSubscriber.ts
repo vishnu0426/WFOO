@@ -18,6 +18,7 @@ import { decideAgentMessage, type EventRule } from './agentMessage.ts';
 import { bareNumber, pickAgent } from './agentMatch.ts';
 import { recordFeedEvent, type FeedEvent, type FeedOutcome } from './feedLog.ts';
 import { forgetAllConnectors, forgetConnector, worthRecording } from './recordThrottle.ts';
+import { CA_KEY, inspectCa, natsTlsOptions } from './natsTls.ts';
 
 const sc = StringCodec();
 const live = new Map<string, { nc: NatsConnection; sub: Subscription }>();
@@ -170,7 +171,7 @@ export async function startSubscription(connector: any): Promise<void> {
   try {
     nc = await connect({
       servers, user: cfg.natsUser || undefined, pass: cfg.natsPass || undefined,
-      tls: { rejectUnauthorized: cfg.tlsRejectUnauthorized !== 'false' } as any,
+      tls: natsTlsOptions(cfg) as any,
       name: `wfm-connector-${connector.id}`, maxReconnectAttempts: -1,
     });
   } catch (e: any) { return mark(connector.id, connector.tenantId, false, `Could not connect to ${servers.join(',')}: ${e.message}`); }
@@ -207,7 +208,9 @@ export function friendlyNatsError(message: string): string {
   if (/ECONNREFUSED|CONNECTION_REFUSED/i.test(message)) return 'Nothing is listening at that address and port. Check the server address, the port and that the server is running.';
   if (/ETIMEDOUT|timeout|timed out|CONNECTION_TIMEOUT/i.test(message)) return 'No answer in time. Check the address and port, and that no firewall is blocking this server.';
   if (/ENOTFOUND|EAI_AGAIN/i.test(message)) return 'That host name could not be found. Check the spelling of the server address.';
-  if (/certificate|self.signed|CERT_|TLS|SSL/i.test(message)) return 'The server\'s certificate was not accepted. On a private network you can turn certificate checking off in the connector settings.';
+  if (/does not match|altnames|hostname/i.test(message)) return 'The certificate is not issued for the address you typed (for example you used an IP address and it names a host). Use the host name from the certificate, or ask for a certificate that includes this address.';
+  if (/expired/i.test(message)) return 'The server\'s certificate has expired. Ask whoever runs the NATS server to renew it.';
+  if (/certificate|self.signed|CERT_|TLS|SSL|unable to verify/i.test(message)) return 'The server\'s certificate was not trusted. Upload the CA certificate that signed it, or, on a private network, turn certificate checking off.';
   return message;
 }
 
@@ -219,13 +222,22 @@ export async function testNatsConnection(cfg: Record<string, string>, listenMs =
   const servers = String(cfg.natsServers ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const subject = String(cfg.subject ?? '').trim();
   if (!servers.length || !subject) return { ok: false, steps: [{ name: 'Settings', status: 'fail', detail: 'The server address and the subject must both be set.' }], messages: 0, sample: null };
+  const checked = cfg.tlsRejectUnauthorized !== 'false';
+  const pem = (cfg[CA_KEY] ?? '').trim();
+  const certStep = (outcome: 'ok' | 'fail', detail?: string): TestStep =>
+    !checked ? { name: 'Server certificate', status: 'warn', detail: 'Not checked, as set. The connection is encrypted but the server\'s identity is not verified: fine on a private network, not over the internet.' }
+      : outcome === 'ok' ? { name: 'Server certificate', status: 'ok', detail: pem ? 'Trusted through the CA certificate you uploaded.' : 'Trusted by the public certificate authorities.' }
+      : { name: 'Server certificate', status: 'fail', detail: detail! };
+  if (checked && pem) { try { inspectCa(pem); } catch (e: any) { return { ok: false, steps: [certStep('fail', e.message)], messages: 0, sample: null }; } }
   let nc: NatsConnection;
   try {
-    nc = await connect({ servers, user: cfg.natsUser || undefined, pass: cfg.natsPass || undefined, tls: { rejectUnauthorized: cfg.tlsRejectUnauthorized !== 'false' } as any, name: 'wfm-connection-test', timeout: 6000, reconnect: false });
+    nc = await connect({ servers, user: cfg.natsUser || undefined, pass: cfg.natsPass || undefined, tls: natsTlsOptions(cfg) as any, name: 'wfm-connection-test', timeout: 6000, reconnect: false });
   } catch (e: any) {
-    return { ok: false, steps: [{ name: 'Reach the server and log in', status: 'fail', detail: friendlyNatsError(String(e?.message ?? e)) }], messages: 0, sample: null };
+    const why = friendlyNatsError(String(e?.message ?? e));
+    const certProblem = /certificate|self.signed|CERT_|altnames|hostname|unable to verify|expired/i.test(String(e?.message ?? e));
+    return { ok: false, steps: certProblem ? [certStep('fail', why)] : [...(checked && /authorization|authentication/i.test(String(e?.message ?? e)) ? [certStep('ok')] : []), { name: 'Reach the server and log in', status: 'fail', detail: why }], messages: 0, sample: null };
   }
-  const steps: TestStep[] = [{ name: 'Reach the server and log in', status: 'ok', detail: `Connected to ${nc.getServer()}` }];
+  const steps: TestStep[] = [certStep('ok'), { name: 'Reach the server and log in', status: 'ok', detail: `Connected to ${nc.getServer()}` }];
   let denied: string | null = null, messages = 0, sample: { subject: string; bytes: number } | null = null;
   try {
     const sub = nc.subscribe(subject);                          // no queue group: it sees the same messages as the live subscription and takes none of them

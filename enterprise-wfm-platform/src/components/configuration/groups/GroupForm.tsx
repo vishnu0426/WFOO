@@ -3,12 +3,17 @@
  * what already exists that the change touches.
  */
 import React, { useMemo, useState } from 'react';
-import { api, Employee, GroupDto, Team } from '../../../services/api';
+import { api, Employee, GroupDto, RotationPattern, Team } from '../../../services/api';
 import { Banner, Btn, Card, Field, Input, Select } from '../../forecasting/ui';
 import { PersonPicker } from '../../common/PersonPicker';
 import { useApi } from '../../forecasting/hooks';
-import { CATEGORIES, LIBRARY, type SavedTemplate } from '../../scheduling/rotationLibrary';
+import { LIBRARY, type SavedTemplate } from '../../scheduling/rotationLibrary';
+import { Combobox } from '../../common/Combobox';
+import type { ComboGroup } from '../../../services/comboFilter';
 import { DAYS_LONG, GroupImpact, IMPACT_LABEL, Section, Site, useDebounced } from './shared';
+import { ZoneField } from './ZoneField';
+import { useForecast } from '../../../services/forecastStore';
+import { defaultZone } from '../../../services/timeZones';
 
 export type GroupFormValues = {
   name: string; description: string; siteId: string | null; managerId: string | null; timezone: string; defaultRotationRef: string | null; serviceLevelGoal: number; serviceLevelThresholdSec: number; targetOccupancy: number;
@@ -99,7 +104,30 @@ export const GroupForm: React.FC<{
   const [busy, setBusy] = useState(false);
   const [impact, setImpact] = useState<GroupImpact | null>(null);
   const library = useApi<SavedTemplate[]>('/scheduling/rotations/templates');
-  const zones = useMemo(() => { try { return (Intl as any).supportedValuesOf('timeZone') as string[]; } catch { return ['UTC', 'Asia/Kolkata', 'Europe/London', 'America/New_York']; } }, []);
+  const { session, go } = useForecast();
+  const siteGroups = useMemo<ComboGroup[]>(() => [{ label: 'Sites', items: [{ value: '', label: 'No site' }, ...sites.filter((s) => s.status !== 'CLOSED' || s.id === f.siteId).map((s) => ({ value: s.id, label: s.name + (s.status === 'CLOSED' ? ' (closed)' : ''), right: s.regionName ?? undefined, keywords: s.code + ' ' + s.country + ' ' + s.timezone }))] }], [sites, f.siteId]);
+  // only what has been created: the patterns made for this group on Rotation Patterns, and the patterns saved to the organisation's library. The built-in shapes are offered when a pattern is created, not here.
+  const made = useApi<RotationPattern[]>(id ? '/scheduling/rotations?groupId=' + id : null, [id]);
+  const createdPatterns = (made.data ?? []).filter((p) => p.templateRef);
+  const nothingCreated = !!made.data || !id ? createdPatterns.length === 0 && (library.data ?? []).length === 0 : false;
+  const rotationGroups = useMemo<ComboGroup[]>(() => {
+    const seen = new Set<string>(['']);
+    const fresh = <T extends { value: string }>(list: T[]) => list.filter((i) => !seen.has(i.value) && (seen.add(i.value), true));
+    const patterns = fresh(createdPatterns.map((p) => ({ value: p.templateRef as string, label: p.name, right: p.cycleDays + '-day cycle' + (p.status === 'INACTIVE' ? ' · inactive' : '') })));
+    const saved = fresh((library.data ?? []).map((t) => ({ value: t.id, label: t.name })));
+    const cur = f.defaultRotationRef, builtIn = cur ? LIBRARY.find((p) => p.id === cur) : undefined;
+    return [
+      { label: 'No pattern', items: [{ value: '', label: 'None' }] },
+      ...(patterns.length ? [{ label: 'Created for this group', items: patterns }] : []),
+      ...(saved.length ? [{ label: 'Your library', items: saved }] : []),
+      ...(cur && !seen.has(cur) ? [{ label: 'Current choice', items: [{ value: cur, label: builtIn ? builtIn.label : 'A pattern that is no longer available' }] }] : []),
+    ];
+  }, [made.data, library.data, f.defaultRotationRef]);
+  const orgZone = session?.tenant?.timezone ?? null;
+  const site = sites.find((s) => s.id === f.siteId) ?? null, siteZone = site?.timezone ?? null;
+  // a new group starts on its site's clock (else the organisation's), and follows the site until someone chooses a zone themselves
+  const [zoneTouched, setZoneTouched] = useState(!!id);
+  React.useEffect(() => { if (!id && !zoneTouched) setF((s) => (s.timezone === defaultZone(siteZone, orgZone) ? s : { ...s, timezone: defaultZone(siteZone, orgZone) })); }, [id, zoneTouched, siteZone, orgZone]);
   const set = <K extends keyof GroupFormValues>(k: K, v: GroupFormValues[K]) => setF((s) => ({ ...s, [k]: v }));
   const num = (k: keyof GroupFormValues) => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value) as never);
   const moved = id ? movedBy(initial, f) : [];
@@ -121,16 +149,15 @@ export const GroupForm: React.FC<{
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
             <Field label="Name"><Input value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} autoFocus={!id} /></Field>
             <Field label="Site" hint="Where this group's people work">
-              <Select value={f.siteId ?? ''} onChange={(e) => set('siteId', e.target.value || null)}><option value="">No site</option>{sites.filter((s) => s.status !== 'CLOSED' || s.id === f.siteId).map((s) => <option key={s.id} value={s.id}>{s.name}{s.regionName ? ` (${s.regionName})` : ''}{s.status === 'CLOSED' ? ' - closed' : ''}</option>)}</Select>
+              <Combobox value={f.siteId ?? ''} onChange={(v) => set('siteId', v || null)} ariaLabel="Site" placeholder="No site" searchPlaceholder="Search sites…" groups={siteGroups} />
+            </Field>
+            <Field label="Time zone" hint="The clock this group's days, schedules and adherence run on">
+              <ZoneField value={f.timezone} siteZone={siteZone} siteName={site?.name} orgZone={orgZone} onChange={(z, byPerson) => { if (byPerson) setZoneTouched(true); set('timezone', z); }} />
             </Field>
             <Field label="Group manager" hint="Gets what is escalated above the team supervisors"><PersonPicker ariaLabel="Group manager" value={f.managerId ?? ''} statuses="ONBOARDING,ACTIVE,LEAVE" only="manager" placeholder="Choose the manager (optional)" onChange={(id) => set('managerId', id || null)} /></Field>
-            <Field label="Rotation pattern" hint="Optional. The pattern this group normally follows. Rotation Patterns and Generate Schedule start from it; the group still has its own people and roster.">
-              <Select value={f.defaultRotationRef ?? ''} onChange={(e) => set('defaultRotationRef', e.target.value || null)}>
-                <option value="">None</option>
-                {CATEGORIES.filter((c) => c.id !== 'CUSTOM').map((c) => { const inCat = LIBRARY.filter((p) => (p.category ?? 'STANDARD') === c.id); return inCat.length ? <optgroup key={c.id} label={c.label}>{inCat.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</optgroup> : null; })}
-                {(library.data ?? []).length > 0 && <optgroup label="Your library">{(library.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>}
-                {f.defaultRotationRef && !LIBRARY.some((p) => p.id === f.defaultRotationRef) && !(library.data ?? []).some((t) => t.id === f.defaultRotationRef) && <option value={f.defaultRotationRef}>A pattern that is no longer in the library</option>}
-              </Select>
+            <Field label="Rotation pattern" hint="Optional. Where Rotation Patterns and Generate Schedule start.">
+              <Combobox value={f.defaultRotationRef ?? ''} onChange={(v) => set('defaultRotationRef', v || null)} ariaLabel="Rotation pattern" placeholder="None" searchPlaceholder="Search patterns…" groups={rotationGroups} />
+              {nothingCreated && <div className="mt-1 text-[12px] text-[#6B6B6B]">No patterns created yet. <button type="button" className="underline" onClick={() => go('rotations', 'scheduling')}>Create one in Rotation Patterns</button></div>}
             </Field>
             <div className="md:col-span-2"><Field label="Description"><Input value={f.description} maxLength={500} onChange={(e) => set('description', e.target.value)} /></Field></div>
           </div>
@@ -156,7 +183,6 @@ export const GroupForm: React.FC<{
 
         <Section title="Working week">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-start">
-            <Field label="Time zone" hint="The clock this group's days, schedules and adherence run on"><Select value={f.timezone} onChange={(e) => set('timezone', e.target.value)}>{(zones.includes(f.timezone) ? zones : [f.timezone, ...zones]).map((z) => <option key={z} value={z}>{z}</option>)}</Select></Field>
             <Field label="Pay week starts on" hint="Weekly hours and overtime are counted from this day">
               <Select value={f.payWeekStart ?? ''} onChange={(e) => set('payWeekStart', e.target.value === '' ? null : Number(e.target.value))}><option value="">Company setting</option>{DAYS_LONG.map((n, i) => <option key={n} value={i}>{n}</option>)}</Select>
             </Field>

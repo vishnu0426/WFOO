@@ -16,7 +16,7 @@ const P: Record<string, { title: string; body: React.ReactNode }> = {
           <p><b>How sure to be:</b> a higher setting plans for a busier day than the forecast.</p>
         </HelpSection>
         <HelpSection title="What is always respected">
-          <p>One shift a day, rest between shifts, weekly maximums, days in a row, availability, approved time off and template days.</p>
+          <p>One shift a day, rest between shifts, weekly maximums, days in a row, days off together and weekends off in a month (when set), availability, approved time off and weekends-off requests, and template days.</p>
         </HelpSection>
         <HelpSection title="After it runs">
           <p>The result shows coverage, any shortage by day and skill, and a quality score. Open Schedule Quality for the detail.</p>

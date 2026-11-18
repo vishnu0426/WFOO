@@ -13,6 +13,7 @@ import { StaleBanner } from './StaleBanner';
 import { CHART, LineChart } from '../forecasting/charts';
 import { Banner, Btn, Busy, Card, Empty, Input, Kpi, KpiRow, Pill, Select, Table } from '../forecasting/ui';
 import { StressTest } from './StressTest';
+import { TemplatesUsed } from './TemplatesUsed';
 
 const GRADE: Record<Evaluation['grade'], { label: string; tone: 'good' | 'warn' | 'bad' }> = { EXCELLENT: { label: 'Excellent', tone: 'good' }, GOOD: { label: 'Good', tone: 'good' }, FAIR: { label: 'Fair', tone: 'warn' }, POOR: { label: 'Poor', tone: 'bad' } };
 const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -279,6 +280,7 @@ export const QualityPanel: React.FC<{ versions: ScheduleVersion[]; version: Sche
               <Kpi label="People scheduled" value={`${r.people.scheduled} of ${r.people.inPool}`} />
               <Kpi label="Not scheduled" value={r.people.notScheduled} sub={`${r.people.noPossibleShift} with no possible shift`} tone={r.people.noPossibleShift ? 'warn' : undefined} />
             </KpiRow>
+            {r.templates && r.templates.length > 0 && <TemplatesUsed rows={r.templates} />}
             {r.exceptions.length === 0 && <p className="text-[13px] text-[#2A7553]">Nothing to report: everyone was scheduled and no check raised a concern.</p>}
             <div className="space-y-2">
               {r.exceptions.map((e, i) => (

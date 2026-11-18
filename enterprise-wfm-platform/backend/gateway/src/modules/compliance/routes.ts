@@ -23,7 +23,10 @@ export async function ensureBuiltIns(tx: Tx) {
   }
 }
 
-const packDto = (p: any, used = 0) => ({ id: p.id, code: p.code, name: p.name, region: p.region, description: p.description, rules: p.rules as Rule[], builtIn: p.builtIn, version: p.version, usedBy: used });
+const packDto = (p: any, used = 0) => {
+  const meta = p.builtIn ? BUILT_INS.find((b) => b.code === p.code) : undefined;      // the law and what a ready-made pack leaves out, from the product, not the database
+  return { id: p.id, code: p.code, name: p.name, region: p.region, description: p.description, rules: p.rules as Rule[], builtIn: p.builtIn, version: p.version, usedBy: used, law: meta?.law ?? null, notes: meta?.notes ?? null, starter: !!meta?.starter };
+};
 
 /** The rules that apply to each person of a WFM group: their own override, else their team's pack, else the group's, else the site's, else the region's, else the organisation's, else none. */
 export interface RuleSets { forTeam: (teamId: string | null | undefined, employeeId?: string | null) => Rule[]; group: Rule[]; packName: (teamId: string | null | undefined, employeeId?: string | null) => string | null }
@@ -106,6 +109,26 @@ compliance.get('/assignments', requires('config:read'), async (req, res) => {
      LEFT JOIN employees e ON e.id = a.scope_id AND a.scope_type = 'EMPLOYEE' LEFT JOIN sites si ON si.id = a.scope_id AND a.scope_type = 'SITE' LEFT JOIN regions rg ON rg.id = a.scope_id AND a.scope_type = 'REGION'
      WHERE a.tenant_id = :t ORDER BY a.scope_type, scope_name`));
   res.json(rows.map((r) => ({ scopeType: r.scopeType, scopeId: r.scopeId, scopeName: r.scopeName, packId: r.packId, packName: r.packName })));
+});
+
+/**
+ * How many people choosing a pack for a place would affect: everyone not yet left in the organisation, a region, a site, a WFM group, a team, or one person.
+ * Shown before a choice is saved, with what that place follows today (the screen already has the assignments).
+ */
+compliance.get('/impact', requires('config:read'), async (req, res) => {
+  const q = parse(z.object({ scopeType: z.enum(['TENANT', 'REGION', 'SITE', 'GROUP', 'TEAM', 'EMPLOYEE']), scopeId: uuid.optional() }), req.query);
+  if (q.scopeType !== 'TENANT' && !q.scopeId) throw bad('Say which region, site, group, team or employee');
+  const base = `SELECT count(*)::int AS n FROM employees e WHERE e.tenant_id = :t AND e.status <> 'TERMINATED'`;
+  const where: Record<string, string> = {
+    TENANT: '',
+    REGION: ` AND e.primary_group_id IN (SELECT g.id FROM wfm_groups g JOIN sites s ON s.id = g.site_id AND s.tenant_id = g.tenant_id WHERE g.tenant_id = :t AND s.region_id = $1)`,
+    SITE: ` AND e.primary_group_id IN (SELECT g.id FROM wfm_groups g WHERE g.tenant_id = :t AND g.site_id = $1)`,
+    GROUP: ` AND e.primary_group_id = $1`,
+    TEAM: ` AND e.team_id = $1`,
+    EMPLOYEE: ` AND e.id = $1`,
+  };
+  const n = await withTenant(me(req).tenantId, (tx) => tx.one<{ n: number }>(base + where[q.scopeType], q.scopeType === 'TENANT' ? [] : [q.scopeId]));
+  res.json({ people: n?.n ?? 0 });
 });
 
 compliance.put('/assignments', requires('config:write'), async (req, res) => {

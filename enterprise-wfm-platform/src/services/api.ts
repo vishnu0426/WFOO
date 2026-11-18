@@ -404,7 +404,7 @@ export type ShiftConsistency = 'DEFAULT' | 'REQUIRE' | 'PREFER' | 'OFF';
 export type Employee = {
   id: string; employeeNumber: string; firstName: string; lastName: string; name: string; email: string | null; phone: string; extension: string | null; timezone: string | null; status: EmployeeStatus; hireDate: string | null;
   teamId: string | null; teamName: string | null; location: string; employmentType: EmploymentType; weeklyContractHours: number; maxWeeklyHours: number; workDaysPerWeek: number; minRestHours: number;
-  maxConsecutiveDays: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; primaryGroupId: string | null; primaryGroupName: string | null; eligibleGroupIds: string[]; version: number;
+  maxConsecutiveDays: number; minDaysOffTogether?: number; minWeekendsOffMonth?: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; primaryGroupId: string | null; primaryGroupName: string | null; eligibleGroupIds: string[]; version: number;
   preferredTemplateId: string | null; preferredTemplateName: string | null;
   shiftConsistency: ShiftConsistency; fixedStartSlot: number | null;
   /** May be chosen as a team's supervisor / a group's manager. Only says what the person is: access comes from the role on their login. */
@@ -414,6 +414,21 @@ export type Employee = {
   skills: { skillId: string; name: string; code: string; proficiency: number }[];
 };
 export type AvailabilityWindow = { id?: string; dayOfWeek: number; startTime: string; endTime: string; kind: 'AVAILABLE' | 'UNAVAILABLE' | 'PREFERRED'; effectiveFrom?: string | null; effectiveTo?: string | null };
+/** A request about days off: weekends off together for some dates, or a standing rule on days off together / weekends off in a month. `context` is what the approver needs to decide. */
+export type OffRequest = {
+  id: string; employeeId: string; employeeName: string; team: string | null; kind: 'WEEKEND_OFF' | 'STANDING'; startDate: string | null; endDate: string | null; minDaysTogether: number | null; minWeekendsMonth: number | null;
+  status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; reason: string; decidedBy: string | null; decidedAt: string | null; decisionNote: string; createdAt: string; escalatedAt?: string | null; escalated?: boolean;
+  waitingFor?: { level: 'SUPERVISOR' | 'MANAGER'; names: string[] } | null;
+  context?: { weekends: { from: string; to: string }[]; scheduledShifts: number; teamSize: number; teamOff: number } | { now: { daysTogether: number; weekendsMonth: number }; effective: { daysTogether: number; weekendsMonth: number }; after: { daysTogether: number; weekendsMonth: number } } | null;
+};
+/** One line saying what was asked for. */
+export const offRequestText = (r: Pick<OffRequest, 'kind' | 'startDate' | 'endDate' | 'minDaysTogether' | 'minWeekendsMonth'> & { context?: OffRequest['context'] }) => {
+  if (r.kind === 'WEEKEND_OFF') {
+    const n = r.context && 'weekends' in r.context ? r.context.weekends.length : 0;
+    return `Weekends off together${n ? ` (${n})` : ''}: ${r.startDate ? dayYear(r.startDate) : ''}${r.endDate && r.endDate !== r.startDate ? ` to ${dayYear(r.endDate)}` : ''}`;
+  }
+  return `Standing rule: ${[r.minDaysTogether ? `${r.minDaysTogether} days off together each week` : '', r.minWeekendsMonth ? `${r.minWeekendsMonth} full ${r.minWeekendsMonth === 1 ? 'weekend' : 'weekends'} off each month` : ''].filter(Boolean).join(' and ')}`;
+};
 export type TimeOff = { id: string; employeeId: string; employeeName: string; type: string; startDate: string; endDate: string; days: number; status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; reason: string; decidedBy: string | null; decidedAt: string | null; createdAt: string; escalatedAt?: string | null; decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null };
 export type ShiftTemplate = {
   id: string; name: string; code: string; description: string; status: 'ACTIVE' | 'INACTIVE'; workDays: number[]; earliestStart: string; latestStart: string; startStepMinutes: number;
@@ -490,13 +505,14 @@ export const SCHED_STATUS_LABEL: Record<string, string> = { DRAFT: 'Draft', PUBL
 
 export type Activity = { id: string; name: string; code: string; shortCode: string; category: 'WORK' | 'BREAK' | 'MEAL' | 'TRAINING' | 'MEETING' | 'COACHING' | 'ABSENCE' | 'OTHER'; countsAsWork: boolean; paid: boolean; shrinkage: boolean; ignoreAdherence: boolean; color: string; textColor: string | null; status: 'ACTIVE' | 'INACTIVE'; version: number };
 export const ACTIVITY_CATEGORY_LABEL: Record<Activity['category'], string> = { WORK: 'Queue work', BREAK: 'Break', MEAL: 'Meal', TRAINING: 'Training', MEETING: 'Meeting', COACHING: 'Coaching', ABSENCE: 'Absence', OTHER: 'Other' };
-export type SchedulingPolicy = { minRestHours: number | null; maxWeeklyHours: number | null; maxConsecutiveDays: number | null; maxDaysPerWeek: number | null; adherenceGraceSeconds: number; timelineColors: { shift: string; manual: string; violation: string }; weights: Record<'understaffing' | 'overstaffing' | 'contractHours' | 'preferences' | 'fairness', number>; scheduling: SchedulingDefaults; updatedBy: string | null; updatedAt: string | null };
+export type SchedulingPolicy = { minRestHours: number | null; maxWeeklyHours: number | null; maxConsecutiveDays: number | null; maxDaysPerWeek: number | null; minDaysOffTogether?: number | null; minWeekendsOffMonth?: number | null; adherenceGraceSeconds: number; timelineColors: { shift: string; manual: string; violation: string }; weights: Record<'understaffing' | 'overstaffing' | 'contractHours' | 'preferences' | 'fairness', number>; scheduling: SchedulingDefaults; updatedBy: string | null; updatedAt: string | null };
 export type ConsistentTimes = { mode: 'OFF' | 'PREFER' | 'REQUIRE'; startToleranceMin: number; endToleranceMin: number };
 export type SchedulingDefaults = { consistentTimes: ConsistentTimes; targetCoverage: number; enforcePublishChecks: boolean; breakSlackMin: number; payWeekStart: number; weekendDays: number[]; partTimeToleranceHours: number | null; overtime?: 'FREE' | 'WHEN_SHORT' | 'NEVER'; holidays?: 'ALLOW' | 'AVOID' | 'CLOSED'; requireApproval?: boolean; changeNoticeHours?: number };
 
 // ---- schedule quality: report, evaluation, shortage
 export type ReportException = { level: 'WARNING' | 'INFO'; code: string; subject: string; message: string; people?: { id: string; name: string }[] };
-export type GenerationReport = { available: boolean; status?: 'SUCCEEDED' | 'SUCCEEDED_WITH_WARNINGS'; people?: { inPool: number; scheduled: number; notScheduled: number; noPossibleShift: number }; exceptions?: ReportException[]; unscheduled?: { id: string; employeeNumber: string; name: string; reason: string }[]; breaks?: { shiftsChanged: number; phoneShortfallBefore: number; phoneShortfallAfter: number } | null };
+export type TemplateUse = { id: string; name: string; shifts: number; people: number; offered: number; shortHours: number; status: 'USED' | 'UNUSED_SHORT' | 'UNUSED'; reason: string | null };
+export type GenerationReport = { available: boolean; templates?: TemplateUse[]; status?: 'SUCCEEDED' | 'SUCCEEDED_WITH_WARNINGS'; people?: { inPool: number; scheduled: number; notScheduled: number; noPossibleShift: number }; exceptions?: ReportException[]; unscheduled?: { id: string; employeeNumber: string; name: string; reason: string }[]; breaks?: { shiftsChanged: number; phoneShortfallBefore: number; phoneShortfallAfter: number } | null };
 export type Evaluation = {
   available: boolean; reason?: string; score: number; grade: 'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR';
   summary: { method: string; target: number; answerSec: number; serviceLevel: number; serviceLevelBusyDay: number; serviceLevelQuietDay: number; volumeMeetingTarget: number; intervals: number; intervalsBelowTarget: number; averageOccupancy: number; breakShare: number };
@@ -593,7 +609,7 @@ export type RotationPreview =
 export type RotationMember = { employeeId: string; name: string; employeeNumber: string; crewName: string; startCycleDay: number | null; effectiveFrom: string | null; effectiveTo: string | null };
 
 // ---------------------------------------------------------------- Integration Station
-export type IntegrationField = { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean };
+export type IntegrationField = { key: string; label: string; kind: 'text' | 'password' | 'file' | 'select' | 'textarea'; options?: string[]; help?: string; required?: boolean; optionLabels?: Record<string, string>; defaultValue?: string; showWhen?: { key: string; value: string } };
 export type IntegrationReadiness = { level: 'VERIFIED' | 'TESTED' | 'FROM_DOCS' | 'NOT_READY'; label: string; note: string };
 export type IntegrationGuide = { what: string; needs: string[]; limits: string[] };
 export type IntegrationPreset = { id: string; label: string; method: string; authType: string; fields: IntegrationField[]; note: string | null; guide?: IntegrationGuide | null; readiness?: IntegrationReadiness; writesTo: string; canPull?: boolean };

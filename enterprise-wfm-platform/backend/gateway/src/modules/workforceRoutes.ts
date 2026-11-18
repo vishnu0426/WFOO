@@ -2,6 +2,7 @@
  * Workforce: employees, teams, skills, weekly availability and time off.
  * Everything the scheduler needs to know about a person lives here; the scheduler reads it, it never writes it.
  */
+import { summariseEmployees, type SummaryRow } from './employeeSummary.ts';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { withTenant, type Tx } from '../db.ts';
@@ -36,7 +37,7 @@ const EmpFields = z.object({
   employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY']).optional(),
   weeklyContractHours: z.number().min(0).max(80).optional(), maxWeeklyHours: z.number().gt(0).max(84).optional(),
   workDaysPerWeek: z.number().int().min(1).max(7).optional(), minRestHours: z.number().min(0).max(24).optional(),
-  maxConsecutiveDays: z.number().int().min(1).max(14).optional(), allowWeekend: z.boolean().optional(), allowOvernight: z.boolean().optional(), nightShiftConsent: z.boolean().optional(),
+  maxConsecutiveDays: z.number().int().min(1).max(14).optional(), minDaysOffTogether: z.number().int().min(0).max(3).optional(), minWeekendsOffMonth: z.number().int().min(0).max(4).optional(), allowWeekend: z.boolean().optional(), allowOvernight: z.boolean().optional(), nightShiftConsent: z.boolean().optional(),
   primaryGroupId: uuid.nullable().optional(), eligibleGroupIds: z.array(uuid).max(50).optional(),
   preferredTemplateId: uuid.nullable().optional(),
   // same start and end time every day: DEFAULT follows the company setting. fixedStartSlot assigns the person's usual start (15-minute slot of the day).
@@ -53,7 +54,7 @@ type EmpInput = z.infer<typeof EmpFields>;
 const COLS: Record<keyof EmpInput, string> = {
   employeeNumber: 'employee_number', firstName: 'first_name', lastName: 'last_name', email: 'email', phone: 'phone', extension: 'extension', timezone: 'timezone', status: 'status', hireDate: 'hire_date',
   teamId: 'team_id', location: 'location', employmentType: 'employment_type', weeklyContractHours: 'weekly_contract_hours', maxWeeklyHours: 'max_weekly_hours',
-  workDaysPerWeek: 'work_days_per_week', minRestHours: 'min_rest_hours', maxConsecutiveDays: 'max_consecutive_days', allowWeekend: 'allow_weekend', allowOvernight: 'allow_overnight', nightShiftConsent: 'night_shift_consent',
+  workDaysPerWeek: 'work_days_per_week', minRestHours: 'min_rest_hours', maxConsecutiveDays: 'max_consecutive_days', minDaysOffTogether: 'min_days_off_together', minWeekendsOffMonth: 'min_weekends_off_month', allowWeekend: 'allow_weekend', allowOvernight: 'allow_overnight', nightShiftConsent: 'night_shift_consent',
   primaryGroupId: 'primary_group_id', eligibleGroupIds: 'eligible_group_ids', preferredTemplateId: 'preferred_template_id',
   shiftConsistency: 'shift_consistency', fixedStartSlot: 'fixed_start_slot', isSupervisor: 'is_supervisor', isManager: 'is_manager',
   reportsTo: 'reports_to', terminationDate: 'termination_date', terminationReason: 'termination_reason',
@@ -64,7 +65,7 @@ const empDto = (e: any, skills: any[] = []) => ({
   id: e.id, employeeNumber: e.employeeNumber, firstName: e.firstName, lastName: e.lastName, name: `${e.firstName} ${e.lastName}`, email: e.email, phone: e.phone, extension: e.extension, timezone: e.timezone,
   status: e.status, hireDate: e.hireDate, teamId: e.teamId, teamName: e.teamName ?? null, location: e.location, employmentType: e.employmentType,
   weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours,
-  maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
+  maxConsecutiveDays: e.maxConsecutiveDays, minDaysOffTogether: e.minDaysOffTogether ?? 0, minWeekendsOffMonth: e.minWeekendsOffMonth ?? 0, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
   primaryGroupId: e.primaryGroupId, primaryGroupName: e.primaryGroupName ?? null, eligibleGroupIds: e.eligibleGroupIds, version: e.version,
   preferredTemplateId: e.preferredTemplateId, preferredTemplateName: e.preferredTemplateName ?? null, isSupervisor: !!e.isSupervisor, isManager: !!e.isManager,
   reportsTo: e.reportsTo ?? null, reportsToName: e.reportsToName ?? null, terminationDate: e.terminationDate ?? null, terminationReason: e.terminationReason ?? null,
@@ -188,13 +189,10 @@ workforce.get('/employees', requires('workforce:read'), async (req, res) => {
 /** Counts, contracted hours and the teams for whoever a filter matches: what a screen that plans for a whole group needs, without downloading the group. */
 workforce.get('/employees/summary', requires('workforce:read'), async (req, res) => {
   const f = parse(z.object({ groupId: uuid.optional(), teamId: uuid.optional(), status: z.string().optional() }), req.query);
-  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<{ team_id: string | null; team_name: string | null; people: number; hours: string }>(
+  const rows = await withTenant(me(req).tenantId, (tx) => tx.q<SummaryRow>(
     `SELECT e.team_id, t.name AS team_name, count(*)::int AS people, coalesce(sum(e.weekly_contract_hours), 0)::text AS hours
        FROM employees e LEFT JOIN teams t ON t.id = e.team_id WHERE ${EMP_WHERE} GROUP BY e.team_id, t.name ORDER BY t.name NULLS LAST`, empParams(f)));
-  res.json({
-    people: rows.reduce((n, r) => n + r.people, 0), weeklyHours: rows.reduce((n, r) => n + Number(r.hours), 0),
-    teams: rows.filter((r) => r.team_id).map((r) => ({ id: r.team_id, name: r.team_name, people: r.people, weeklyHours: Number(r.hours) })),
-  });
+  res.json(summariseEmployees(rows));
 });
 workforce.get('/employees/:id', requires('workforce:read'), async (req, res) => {
   const id = parse(uuid, req.params.id);
@@ -225,7 +223,7 @@ workforce.get('/attrition', requires('workforce:read'), async (req, res) => {
 
 /** The words for what changed, shown when a reason is asked for. */
 const WORDS: Record<string, string> = { employeeNumber: 'the employee number', firstName: 'the name', lastName: 'the name', status: 'the status', hireDate: 'the hire date', teamId: 'the team', employmentType: 'the employment type',
-  weeklyContractHours: 'the contract hours', maxWeeklyHours: 'the maximum hours', workDaysPerWeek: 'the days per week', minRestHours: 'the rest between shifts', maxConsecutiveDays: 'the days in a row',
+  weeklyContractHours: 'the contract hours', maxWeeklyHours: 'the maximum hours', workDaysPerWeek: 'the days per week', minRestHours: 'the rest between shifts', maxConsecutiveDays: 'the days in a row', minDaysOffTogether: 'the days off together', minWeekendsOffMonth: 'the weekends off each month',
   allowWeekend: 'weekend work', allowOvernight: 'overnight work', nightShiftConsent: 'night-work consent', primaryGroupId: 'the main WFM group', eligibleGroupIds: 'the groups they can work in',
   preferredTemplateId: 'the preferred shift', shiftConsistency: 'the same-start rule', fixedStartSlot: 'the assigned start time', isSupervisor: 'the supervisor mark', isManager: 'the manager mark',
   reportsTo: 'who they report to', terminationDate: 'the last working day', terminationReason: 'the reason for leaving' };

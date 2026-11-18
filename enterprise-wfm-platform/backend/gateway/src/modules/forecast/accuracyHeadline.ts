@@ -33,3 +33,37 @@ export function headlineFrom(cur: Window, prev: Window | null): Headline {
     previousAccuracyPct, deltaPts: previousAccuracyPct !== null && accuracyPct !== null && state === 'OK' ? r1(accuracyPct - previousAccuracyPct) : null,
   };
 }
+
+
+// ---------------------------------------------------------------- one forecast version
+
+export interface VersionAccuracy {
+  versionId: string;
+  /** days of this forecast that have already passed and have real volume to compare with */
+  days: number;
+  /** 100 - WAPE over those days, in percent, one decimal; null when nothing could be compared */
+  accuracyPct: number | null;
+  /** NONE: nothing to compare yet; SPARSE: fewer than MIN_DAYS compared days (an early reading); OK: enough days */
+  state: 'NONE' | 'SPARSE' | 'OK';
+}
+export interface DayRow { versionId: string; queueId: string; day: string; forecast: number; actual: number }
+
+/**
+ * How each forecast version did against what really arrived, using the headline's own definition (daily volume per queue, 100% minus the summed miss as a share of real volume).
+ * Only days that have passed count, and a day only counts for a forecast made before that day ended. A version with no passed days has no figure: that is "not measured yet", never zero.
+ */
+export function versionAccuracies(rows: DayRow[]): Map<string, VersionAccuracy> {
+  const by = new Map<string, { a: number; err: number; days: Set<string> }>();
+  for (const r of rows) {
+    if (!(r.forecast > 0)) continue;
+    const t = by.get(r.versionId) ?? { a: 0, err: 0, days: new Set<string>() };
+    t.a += r.actual; t.err += Math.abs(r.actual - r.forecast); t.days.add(r.day);
+    by.set(r.versionId, t);
+  }
+  const out = new Map<string, VersionAccuracy>();
+  for (const [versionId, t] of by) {
+    const days = t.days.size;
+    out.set(versionId, { versionId, days, accuracyPct: t.a > 0 ? r1(100 - (t.err / t.a) * 100) : null, state: t.a <= 0 ? 'NONE' : days < MIN_DAYS ? 'SPARSE' : 'OK' });
+  }
+  return out;
+}

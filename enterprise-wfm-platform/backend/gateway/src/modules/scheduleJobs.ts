@@ -25,6 +25,7 @@ import {
   type GenInput, type Generated,
 } from './scheduleRoutes.ts';
 import { paidSlots } from './templateRules.ts';
+import { longestOffRun } from './compliance/rules.ts';
 import { matchWeeks } from './weekMatch.ts';
 import { addShiftCoverage } from './shiftCoverage.ts';
 import { holidayDays } from './holidayDays.ts';
@@ -159,6 +160,10 @@ async function fillPattern(p: Principal, versionId: string, groupId: string, cyc
       for (let k = 1; mine.has(addDays(D, -k)); k++) run++;
       for (let k = 1; mine.has(addDays(D, k)); k++) run++;
       if (run > e.maxConsecutiveDays) { dropped++; continue; }
+      if ((e.minDaysOffTogether ?? 0) > 0) {                // keep the person's days off side by side in a whole week
+        const wkFirst = mondayOf(D, weekStart);
+        if (wkFirst >= fillFrom && addDays(wkFirst, 6) <= fillTo && longestOffRun(new Set([...mine.keys(), D]), wkFirst) < e.minDaysOffTogether) { dropped++; continue; }
+      }
       const wk = `${sh.employeeId}|${mondayOf(D, weekStart)}`, paid = paidSlots(tpl.get(sh.templateId), sh.lengthSlots);
       if ((weekPaid.get(wk) ?? 0) + paid > Number(e.maxWeeklyHours) * 4) { dropped++; continue; }
       weekPaid.set(wk, (weekPaid.get(wk) ?? 0) + paid);

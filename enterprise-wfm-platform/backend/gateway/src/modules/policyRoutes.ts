@@ -249,13 +249,13 @@ const SchedDefaults = z.object({
 });
 const PolBody = z.object({
   minRestHours: z.number().min(0).max(24).nullable(), maxWeeklyHours: z.number().min(1).max(100).nullable(),
-  maxConsecutiveDays: z.number().int().min(1).max(14).nullable(), maxDaysPerWeek: z.number().int().min(1).max(7).nullable(), adherenceGraceSeconds: z.number().int().min(0).max(3600), weights: Weights,
+  maxConsecutiveDays: z.number().int().min(1).max(14).nullable(), maxDaysPerWeek: z.number().int().min(1).max(7).nullable(), minDaysOffTogether: z.number().int().min(0).max(3).nullable().optional(), minWeekendsOffMonth: z.number().int().min(0).max(4).nullable().optional(), adherenceGraceSeconds: z.number().int().min(0).max(3600), weights: Weights,
   timelineColors: z.object({ shift: Hex, manual: Hex, violation: Hex }),
   scheduling: SchedDefaults.optional(),     // omitted by older clients: the saved defaults stay as they are
 });
 const polDto = (r: any) => ({
   minRestHours: r?.minRestHours == null ? null : Number(r.minRestHours), maxWeeklyHours: r?.maxWeeklyHours == null ? null : Number(r.maxWeeklyHours),
-  maxConsecutiveDays: (r?.maxConsecutiveDays ?? null) as number | null, maxDaysPerWeek: (r?.maxDaysPerWeek ?? null) as number | null,
+  maxConsecutiveDays: (r?.maxConsecutiveDays ?? null) as number | null, maxDaysPerWeek: (r?.maxDaysPerWeek ?? null) as number | null, minDaysOffTogether: (r?.minDaysOffTogether ?? null) as number | null, minWeekendsOffMonth: (r?.minWeekendsOffMonth ?? null) as number | null,
   adherenceGraceSeconds: (r?.adherenceGraceSeconds ?? 300) as number,
   timelineColors: { ...DEFAULT_TIMELINE_COLORS, ...(r?.timelineColors ?? {}) } as typeof DEFAULT_TIMELINE_COLORS,
   weights: { ...DEFAULT_WEIGHTS, ...(r?.weights ?? {}) } as typeof DEFAULT_WEIGHTS,
@@ -276,12 +276,13 @@ policy.put('/scheduling-policy', requires('config:write'), async (req, res) => {
   const out = await withTenant(p.tenantId, async (tx) => {
     const before = await loadPolicy(tx);
     const r = await tx.one<any>(
-      `INSERT INTO scheduling_policy (tenant_id, workspace_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors, defaults)
-       VALUES (:t, :w, $1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb))
+      `INSERT INTO scheduling_policy (tenant_id, workspace_id, min_rest_hours, max_weekly_hours, max_consecutive_days, max_days_per_week, weights, updated_by, adherence_grace_seconds, timeline_colors, defaults, min_days_off_together, min_weekends_off_month)
+       VALUES (:t, :w, $1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), $10::int, $12::int)
        ON CONFLICT (tenant_id, workspace_id) DO UPDATE SET min_rest_hours = $1, max_weekly_hours = $2, max_consecutive_days = $3, max_days_per_week = $4, weights = $5, updated_by = $6, adherence_grace_seconds = $7, timeline_colors = $8,
-         defaults = coalesce($9::jsonb, scheduling_policy.defaults), updated_at = now()
+         defaults = coalesce($9::jsonb, scheduling_policy.defaults), min_days_off_together = CASE WHEN $11::boolean THEN $10::int ELSE scheduling_policy.min_days_off_together END,
+         min_weekends_off_month = CASE WHEN $13::boolean THEN $12::int ELSE scheduling_policy.min_weekends_off_month END, updated_at = now()
        RETURNING *`,
-      [b.minRestHours, b.maxWeeklyHours, b.maxConsecutiveDays, b.maxDaysPerWeek, JSON.stringify(b.weights), p.name, b.adherenceGraceSeconds, JSON.stringify(b.timelineColors), b.scheduling ? JSON.stringify({ ...before.scheduling, ...b.scheduling }) : null]);
+      [b.minRestHours, b.maxWeeklyHours, b.maxConsecutiveDays, b.maxDaysPerWeek, JSON.stringify(b.weights), p.name, b.adherenceGraceSeconds, JSON.stringify(b.timelineColors), b.scheduling ? JSON.stringify({ ...before.scheduling, ...b.scheduling }) : null, b.minDaysOffTogether === 0 ? null : (b.minDaysOffTogether ?? null), b.minDaysOffTogether !== undefined, b.minWeekendsOffMonth === 0 ? null : (b.minWeekendsOffMonth ?? null), b.minWeekendsOffMonth !== undefined]);
     const after = polDto(r);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'SCHEDULING_POLICY', entityId: p.tenantId, entityName: 'Scheduling policy', before, after });
     return after;

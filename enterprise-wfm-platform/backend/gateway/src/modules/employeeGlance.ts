@@ -73,7 +73,7 @@ glance.get('/employees/:id/glance', requires('workforce:read'), async (req, res)
       [id, from, addDays(today, 30)]);
     const hist = await tx.one<{ sched: number | null; adh: number | null; days: number }>(
       `SELECT sum(scheduled_min)::int AS sched, sum(adherent_min)::int AS adh, count(*)::int AS days FROM adherence_daily WHERE tenant_id = :t AND employee_id = $1 AND day >= $2::date AND day < $3::date`, [id, addDays(today, -7), today]);
-    const bal = await balances(tx, id, await loadSelfPolicy(tx), today.slice(0, 4), Number(today.slice(5, 7)));
+    const bal = await balances(tx, id, await loadSelfPolicy(tx), today.slice(0, 4), Number(today.slice(5, 7)), today);
     return { e, group, today, from, to, shifts, leave, hist, bal };
   });
   const { e, group, today, from, to } = base;

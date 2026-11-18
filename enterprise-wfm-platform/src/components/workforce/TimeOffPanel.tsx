@@ -14,6 +14,8 @@ import { Grid } from '../forecasting/Grid';
 import { Banner, Btn, Card, Empty, Field, Input, Pill, Select, Seg } from '../forecasting/ui';
 import { LoadFailed, Waiting } from '../common/loading';
 import { Confirm } from '../configuration/groups/shared';
+import { LeaveBalances } from './LeaveBalances';
+import { OffRequestsPanel } from './OffRequestsPanel';
 
 const STATUS_TONE = { REQUESTED: 'warn', APPROVED: 'good', REJECTED: 'bad', CANCELLED: 'neutral' } as const;
 const STATUS_LABEL = { REQUESTED: 'Waiting', APPROVED: 'Approved', REJECTED: 'Declined', CANCELLED: 'Cancelled' } as const;
@@ -275,6 +277,7 @@ export const TimeOffPanel: React.FC = () => {
 
   const rows = list.data ?? [];
   return (
+    <div className="space-y-4">
     <Card title="Time off" sub="Approved time off blocks scheduling for those days. Open a request to see the balance and what it does to cover before you decide."
       actions={<>
         <Seg options={[{ id: 'list', label: 'List' }, { id: 'calendar', label: 'Calendar' }]} value={view} onChange={(v) => setView(v as 'list' | 'calendar')} />
@@ -327,5 +330,8 @@ export const TimeOffPanel: React.FC = () => {
           <p>Each person is told it was declined, with your reason.</p>
         </Confirm>)}
     </Card>
+    <OffRequestsPanel />
+    <LeaveBalances />
+    </div>
   );
 };

@@ -14,16 +14,18 @@ import { audit } from '../audit.ts';
 import { HttpError, bad, conflict, isoDay, notFound, parse, safeCsvCell } from '../http.ts';
 import { dropCache, engine, publish } from '../infra.ts';
 import { addDays, dayRange, loadGroup, versionRecords, riskRequired, todayIn, synthesizeLongRangeRequirement } from './forecast/service.ts';
+import { pickForDays } from './forecast/liveSelection.ts';
 import { hhmm } from './workforceRoutes.ts';
 import { loadPolicy } from './policyRoutes.ts';
 import { cleanWeekend, payWeekFor, weekendDaysFor, weekendMask } from './payWeek.ts';
+import { engineMonths, weekendDatesIn, weekendMonths, weekendNeed, weekendNeeds, weekendsOffBefore, type MonthWeekends } from './weekendRule.ts';
 import { clockChanges, convertShift, restAdjust, shiftDelta } from './clockChange.ts';
 import { approvalOf, computeImpact, notifyImpact, requireApproved } from './scheduleApproval.ts';
 import { independentCheck, requireValid } from './scheduleValidation.ts';
 import { loadRuleSets, type RuleSets } from './compliance/routes.ts';
-import { checkPerson, limitsFrom, premiumHours, shiftBlocked } from './compliance/rules.ts';
+import { checkPerson, limitsFrom, longestOffRun, premiumHours, shiftBlocked, wholeWeeksIn } from './compliance/rules.ts';
 import { notify, usersOf } from '../notify.ts';
-import { analyseShortage, buildReport, crewSizeNote, evaluateSchedule, explainInterval, optimizeBreaks, staleReasons, underContractNote, type QShift } from './scheduleQuality.ts';
+import { analyseShortage, buildReport, crewSizeNote, evaluateSchedule, explainInterval, optimizeBreaks, staleReasons, templateUsage, underContractNote, type QShift } from './scheduleQuality.ts';
 import { loadSkillWork, splitBySkill } from './skillRequirements.ts';
 import { draftText, guestText, sharedPeople, sharedText } from './sharedPeople.ts';
 import { boundaryFrom, historyNote, mergeCarry, netRequired, spillOver, type Boundary, type PriorShift, type PriorState } from './boundaryHistory.ts';
@@ -176,7 +178,7 @@ scheduling.delete('/templates/:id', requires('workforce:write'), async (req, res
 
 // ---------------------------------------------------------------- what the scheduler knows
 
-export interface Ctx { group: any; employees: any[]; templates: any[]; timeOff: any[]; avail: any[]; tz: string; rules: RuleSets; skillBased: boolean; weekStart: number; weekendDays?: number[]; holidays?: Set<string>; holidayMode?: 'ALLOW' | 'AVOID' | 'CLOSED'; held?: Map<string, Set<string>>; others: { employeeId: string; day: string; startSlot: number; lengthSlots: number; groupName: string; paidSlots?: number }[] }
+export interface Ctx { group: any; employees: any[]; templates: any[]; timeOff: any[]; avail: any[]; tz: string; rules: RuleSets; skillBased: boolean; weekStart: number; period?: { from: string; to: string }; weekendDays?: number[]; weekendPlan?: { months: MonthWeekends[]; offBefore: Map<string, number[]> }; holidays?: Set<string>; holidayMode?: 'ALLOW' | 'AVOID' | 'CLOSED'; held?: Map<string, Set<string>>; others: { employeeId: string; day: string; startSlot: number; lengthSlots: number; groupName: string; paidSlots?: number }[] }
 
 /** Who can work for a group ($1 is the group): a group with required skills draws on everyone who has them all at the level asked, in any group; otherwise on its own and eligible people. */
 export const POOL_WHERE = `(
@@ -184,7 +186,8 @@ export const POOL_WHERE = `(
        OR (EXISTS (SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1) AND NOT EXISTS (
              SELECT 1 FROM group_skills gs WHERE gs.wfm_group_id = $1 AND NOT EXISTS (SELECT 1 FROM employee_skills es WHERE es.employee_id = e.id AND es.skill_id = gs.skill_id AND es.proficiency >= gs.min_proficiency))))`;
 
-export async function loadCtx(tx: Tx, groupId: string, from: string, to: string): Promise<Ctx> {
+/** `alsoVersion`: a schedule that is not published yet whose earlier days still count (a long plan's windows before this one), for the weekends already off earlier in the month. */
+export async function loadCtx(tx: Tx, groupId: string, from: string, to: string, alsoVersion?: string): Promise<Ctx> {
   const t0 = Date.now(), marks: string[] = [];
   const mark = (what: string) => marks.push(`${what} ${((Date.now() - t0) / 1000).toFixed(2)}`);
   const group = await loadGroup(tx, groupId);
@@ -206,6 +209,8 @@ export async function loadCtx(tx: Tx, groupId: string, from: string, to: string)
         minRestHours: Math.max(Number(e.minRestHours), pol.minRestHours ?? 0, law.minRestHours ?? 0),
         maxWeeklyHours: Math.min(Number(e.maxWeeklyHours), pol.maxWeeklyHours ?? Infinity, law.maxWeeklyHours ?? Infinity),
         maxConsecutiveDays: Math.min(e.maxConsecutiveDays, pol.maxConsecutiveDays ?? Infinity, law.maxConsecutiveDays ?? Infinity),
+        minDaysOffTogether: Math.max(e.minDaysOffTogether ?? 0, pol.minDaysOffTogether ?? 0, law.minDaysOffTogether ?? 0),
+        minWeekendsOffMonth: Math.max(e.minWeekendsOffMonth ?? 0, pol.minWeekendsOffMonth ?? 0, law.minWeekendsOffMonth ?? 0),
         workDaysPerWeek: Math.min(e.workDaysPerWeek, pol.maxDaysPerWeek ?? Infinity),
       };
     });
@@ -226,6 +231,8 @@ export async function loadCtx(tx: Tx, groupId: string, from: string, to: string)
         minRestHours: Math.max(Number(e.minRestHours), pol.minRestHours ?? 0, law.minRestHours ?? 0),
         maxWeeklyHours: Math.min(Number(e.maxWeeklyHours), pol.maxWeeklyHours ?? Infinity, law.maxWeeklyHours ?? Infinity),
         maxConsecutiveDays: Math.min(e.maxConsecutiveDays, pol.maxConsecutiveDays ?? Infinity, law.maxConsecutiveDays ?? Infinity),
+        minDaysOffTogether: Math.max(e.minDaysOffTogether ?? 0, pol.minDaysOffTogether ?? 0, law.minDaysOffTogether ?? 0),
+        minWeekendsOffMonth: Math.max(e.minWeekendsOffMonth ?? 0, pol.minWeekendsOffMonth ?? 0, law.minWeekendsOffMonth ?? 0),
         workDaysPerWeek: Math.min(e.workDaysPerWeek, pol.maxDaysPerWeek ?? Infinity),
       });
       // someone who is only here on loan is blocked on every day of the build that is outside their loan dates
@@ -255,7 +262,23 @@ export async function loadCtx(tx: Tx, groupId: string, from: string, to: string)
     .map((o: any) => ({ ...o, ...convertShift(o.day, o.startSlot, o.lengthSlots, o.tz ?? group.timezone ?? 'UTC', group.timezone ?? 'UTC'), paidSlots: paidSlots(tplById.get(o.templateId), o.lengthSlots) }));      // on this group's clock, not the other group's
   mark('time off+availability+others');
   const holidays = await holidayDays(tx, groupId, from, to);
-  const out = { group, employees, templates, timeOff, avail, tz: group.timezone, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, weekendDays: await weekendDaysFor(tx, groupId), holidays, holidayMode: pol.scheduling.holidays, others };
+  const weekendDays = await weekendDaysFor(tx, groupId);
+  // 'weekends off' requests a person made and a manager approved: those weekends are days off for them, like approved leave
+  for (const r of await tx.q<any>(`SELECT employee_id, start_day::text AS start_day, end_day::text AS end_day FROM off_requests WHERE tenant_id = :t AND kind = 'WEEKEND_OFF' AND status = 'APPROVED' AND end_day >= $1::date - 3 AND start_day <= $2::date + 3 AND employee_id = ANY($3::uuid[])`, [from, to, ids]))
+    for (const d of weekendDatesIn(r.startDay, r.endDay, weekendDays)) if (d >= from && d <= to) timeOff.push({ employeeId: r.employeeId, startDay: d, endDay: d, weekendRequest: true });
+  // full weekends off in a calendar month: the months the schedule touches, and for each person how many weekends were already off before it starts
+  const weekendPlan = { months: weekendMonths(from, to, weekendDays), offBefore: new Map<string, number[]>() };
+  const wantWeekends = employees.filter((e) => (e.minWeekendsOffMonth ?? 0) > 0).map((e) => e.id as string);
+  if (wantWeekends.length && weekendPlan.months.some((m) => m.before.length)) {
+    const earliest = weekendPlan.months.filter((m) => m.before.length).map((m) => m.before[0][0]).sort()[0];
+    const worked = new Map<string, Set<string>>();
+    for (const r of await tx.q<any>(
+      `SELECT DISTINCT s.employee_id, s.day::text AS day FROM schedule_shifts s JOIN schedule_versions v ON v.id = s.version_id
+        WHERE s.tenant_id = :t AND ((v.status = 'PUBLISHED' AND (v.publish_through IS NULL OR s.day <= v.publish_through)) OR v.id = $4::uuid) AND s.day >= $1::date AND s.day < $2::date AND s.employee_id = ANY($3::uuid[])`, [earliest, from, wantWeekends, alsoVersion ?? null]))
+      (worked.get(r.employeeId) ?? worked.set(r.employeeId, new Set()).get(r.employeeId)!).add(r.day);
+    for (const id of wantWeekends) weekendPlan.offBefore.set(id, weekendsOffBefore(weekendPlan.months, worked.get(id) ?? new Set()));
+  }
+  const out = { group, employees, templates, timeOff, avail, tz: group.timezone, period: { from, to }, rules, skillBased, weekStart: (await payWeekFor(tx, groupId)).start, weekendDays, weekendPlan, holidays, holidayMode: pol.scheduling.holidays, others };
   if (Date.now() - t0 > 1000) console.log(`[loadCtx] ${employees.length} people: ${marks.join(', ')}, done ${((Date.now() - t0) / 1000).toFixed(2)} (seconds, running)`);
   return out;
 }
@@ -337,8 +360,10 @@ function preferenceFor(ctx: Ctx, e: any, day: string, start: number, len: number
  * past the short-term forecast's horizon. Callers must surface `projected` as lower-confidence.
  */
 export async function requirementFor(tenantId: string, groupId: string, days: string[], forecastId?: string, confidence = 50) {
-  const v = await withTenant(tenantId, (tx) => tx.one<any>(
-    `SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND ($2::uuid IS NULL OR id = $2) AND ($2::uuid IS NOT NULL OR status = 'PUBLISHED') ORDER BY seq DESC LIMIT 1`, [groupId, forecastId ?? null]));
+  // a chosen forecast is used as it is; otherwise the live one that covers these days (several can be live, each for its own stretch)
+  const v = forecastId
+    ? await withTenant(tenantId, (tx) => tx.one<any>(`SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND id = $2`, [groupId, forecastId]))
+    : pickForDays(await withTenant(tenantId, (tx) => tx.q<any>(`SELECT * FROM forecast_versions WHERE tenant_id = :t AND wfm_group_id = $1 AND kind = 'SHORT' AND status = 'PUBLISHED'`, [groupId])), days);
   if (!v && forecastId) throw bad('That forecast was not found for this group');
 
   const idx = new Map(days.map((d, i) => [d, i]));
@@ -483,6 +508,25 @@ export function validateShifts(ctx: Ctx, shifts: ShiftRow[]) {
       if (w.h > e.maxWeeklyHours + 1e-9) add('WEEKLY_MAX', wk, `${name} works ${r1(w.h)}h in the week of ${wk} (max ${e.maxWeeklyHours}h)`);
       if (w.n > e.workDaysPerWeek) add('DAYS_PER_WEEK', wk, `${name} works ${w.n} days in the week of ${wk} (max ${e.workDaysPerWeek})`);
     }
+    // days off side by side in a whole pay week (days worked for other groups count as worked)
+    if ((e.minDaysOffTogether ?? 0) > 0 && ctx.period) {
+      const worked = new Set([...seen, ...[...(indexOf(ctx).others.get(id)?.keys() ?? [])]]);
+      for (const wk of wholeWeeksIn(list.map((s) => s.day), ctx.period, ctx.weekStart)) {
+        const best = longestOffRun(worked, wk);
+        if (best < e.minDaysOffTogether) add('DAYS_OFF_TOGETHER', wk, `${name} has ${best === 0 ? 'no day' : `at most ${best} ${best === 1 ? 'day' : 'days'}`} off together in the week of ${wk} (needs ${e.minDaysOffTogether})`);
+      }
+    }
+    // full weekends off in each calendar month the person works in (days worked for other groups count as worked)
+    if ((e.minWeekendsOffMonth ?? 0) > 0 && ctx.period && ctx.weekendPlan) {
+      const worked = new Set([...seen, ...[...(indexOf(ctx).others.get(id)?.keys() ?? [])]]);
+      const before = ctx.weekendPlan.offBefore.get(id) ?? [];
+      ctx.weekendPlan.months.forEach((mo, i) => {
+        if (!list.some((s) => s.day >= mo.first && s.day <= mo.last)) return;
+        const need = weekendNeed(e.minWeekendsOffMonth, mo, before[i] ?? 0);
+        const off = mo.inPeriod.filter((w) => !w.some((d) => worked.has(d))).length;
+        if (off < need) add('WEEKENDS_OFF', mo.first, `${name} has ${off === 0 ? 'no full weekend' : `only ${off} full ${off === 1 ? 'weekend' : 'weekends'}`} off in ${mo.key} (needs ${need}${before[i] ? `, ${before[i]} already off earlier in the month` : ''})`);
+      });
+    }
     // what this person also works for OTHER published schedules counts toward the same limits; only what the other group's shifts change is reported here (own-only problems are above)
     const away = indexOf(ctx).others.get(id);
     if (away) {
@@ -512,8 +556,8 @@ export function validateShifts(ctx: Ctx, shifts: ShiftRow[]) {
     }
     // the labour-law pack that applies to this person. Rest, weekly hours and days in a row that a BLOCK rule sets are already part of the limits above.
     const lite = list.map((s) => ({ day: s.day, startSlot: s.startSlot, lengthSlots: s.lengthSlots, mealSlots: rulesFor(tpl.get(s.templateId!) ?? ({ workDays: [], earliestStart: 0, latestStart: 0, startStep: 1, lengthSlots: s.lengthSlots, mealSlots: 0, breakCount: 0, breakSlots: 1 } as any), s.lengthSlots).mealSlots }));
-    for (const f of checkPerson(ctx.rules.forTeam(e.teamId, id), { id, name, nightConsent: !!e.nightShiftConsent }, lite, ctx.weekStart)) {
-      if (f.severity === 'BLOCK' && ['MIN_DAILY_REST_HOURS', 'MAX_WEEKLY_HOURS', 'MAX_CONSECUTIVE_DAYS'].includes(f.rule)) continue;
+    for (const f of checkPerson(ctx.rules.forTeam(e.teamId, id), { id, name, nightConsent: !!e.nightShiftConsent }, lite, ctx.weekStart, ctx.period)) {
+      if (f.severity === 'BLOCK' && ['MIN_DAILY_REST_HOURS', 'MAX_WEEKLY_HOURS', 'MAX_CONSECUTIVE_DAYS', 'MIN_DAYS_OFF_TOGETHER'].includes(f.rule)) continue;
       v.push({ type: `LAW_${f.rule}`, severity: f.severity, employeeId: id, employeeName: name, day: f.day, message: f.message });
     }
   }
@@ -615,7 +659,7 @@ const staleOf = (v: any): string[] => v.status === 'ARCHIVED' || v.kind === 'ROT
 export const verDto = (v: any) => ({ id: v.id, seq: v.seq, wfmGroupId: v.wfmGroupId, groupName: v.groupName ?? null, name: v.name, status: v.status, kind: v.kind ?? 'DEMAND', coverageSource: v.coverageSource ?? 'FORECAST', periodStart: v.periodStart, periodEnd: v.periodEnd, forecastVersionId: v.forecastVersionId, forecastName: v.forecastName ?? null, rev: v.rev, hasChanges: v.status === 'PUBLISHED' && v.rev !== v.publishedRev, settings: v.settings, stats: v.stats, createdBy: v.createdBy, createdAt: v.createdAt, publishedBy: v.publishedBy, publishedAt: v.publishedAt, publishThrough: v.publishThrough ?? null, stale: staleOf(v), acknowledged: v.ack ?? null, approval: approvalOf(v) });
 export const VER_SQL = `SELECT v.*, v.period_start::text AS period_start, v.period_end::text AS period_end, f.name AS forecast_name, g.name AS group_name,
     f.rev AS forecast_rev_now, f.status AS forecast_status_now,
-    (SELECT json_build_object('id', n.id, 'name', n.name) FROM forecast_versions n WHERE n.tenant_id = v.tenant_id AND n.wfm_group_id = v.wfm_group_id AND n.kind = 'SHORT' AND n.status = 'PUBLISHED' AND f.id IS NOT NULL AND n.id <> f.id AND n.seq > f.seq ORDER BY n.seq DESC LIMIT 1) AS newer_forecast
+    (SELECT json_build_object('id', n.id, 'name', n.name) FROM forecast_versions n WHERE n.tenant_id = v.tenant_id AND n.wfm_group_id = v.wfm_group_id AND n.kind = 'SHORT' AND n.status = 'PUBLISHED' AND f.id IS NOT NULL AND n.id <> f.id AND n.seq > f.seq AND n.from_day <= v.period_end AND n.to_day >= v.period_start ORDER BY n.seq DESC LIMIT 1) AS newer_forecast
   FROM schedule_versions v LEFT JOIN forecast_versions f ON f.id = v.forecast_version_id LEFT JOIN wfm_groups g ON g.id = v.wfm_group_id WHERE v.tenant_id = :t`;
 
 // The weekday a group's pay week starts on (Monday 0 ... Sunday 6), so every screen can show weeks the way the group is paid.
@@ -647,7 +691,7 @@ scheduling.get('/readiness', requires('schedule:read'), async (req, res) => {
   const today = todayIn(group.timezone ?? 'UTC');
   const estimate = { people, windows: Math.ceil(Math.min(weeks, solveWeeks ?? Math.min(weeks, 13)) / windowWeeks), seconds: estimateSolveSeconds(people, { weeks, windowWeeks, timeLimitSec: timeLimit, solveWeeks }) };
   try {
-    const r = manual ? await requirementForManual(p.tenantId, groupId, days) : await requirementFor(p.tenantId, groupId, days, undefined, parse(z.coerce.number().int().min(50).max(95), req.query.confidence ?? 50));
+    const r = manual ? await requirementForManual(p.tenantId, groupId, days) : await requirementFor(p.tenantId, groupId, days, req.query.forecastVersionId ? parse(uuid, req.query.forecastVersionId) : undefined, parse(z.coerce.number().int().min(50).max(95), req.query.confidence ?? 50));
     let peak = 0;
     for (const v of r.required) peak = Math.max(peak, v);
     const unc = new Set(r.uncovered), proj = new Set(r.projected), horizon: any[] = [];
@@ -712,7 +756,7 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   const to = addDays(b.from, b.weeks * 7 - 1), days = dayRange(b.from, to);
   if (b.assumeRepeat && b.weeks !== 1) throw bad('"Assume the week repeats" works for one-week schedules');
   const { ctx: baseCtx, pol, skillRows } = await withTenant(p.tenantId, async (tx) => ({
-    ctx: await loadCtx(tx, b.groupId, b.from, to), pol: await loadPolicy(tx),
+    ctx: await loadCtx(tx, b.groupId, b.from, to, x.historyVersionId), pol: await loadPolicy(tx),
     skillRows: await tx.q<{ employeeId: string; skillId: string }>('SELECT employee_id, skill_id FROM employee_skills WHERE tenant_id = :t'),
   }));
   const weekStart = b.weekStart ?? baseCtx.weekStart;   // asked for, else the group's pay week, else the company's
@@ -835,6 +879,9 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
 
   // A group too large to weigh person by person: solve a sample of each kind of person with the demand scaled to the sample's share, then give everyone else the roster of a
   // sample member of their own kind (see representatives.ts). Everyone is still checked against their own time off, availability and rules afterwards.
+  // how many of each calendar month's weekends the person must have fully off (the months the schedule touches), worked out from the rule and the weekends already off earlier in the month
+  const wPlan = ctx.weekendPlan;
+  const weekendNeedOf = (e: any): number[] => { const n = wPlan && (e.minWeekendsOffMonth ?? 0) > 0 ? weekendNeeds(e.minWeekendsOffMonth, wPlan.months, wPlan.offBefore.get(e.id) ?? []) : []; return n.some((v) => v > 0) ? n : []; };
   const allPeople = people;
   const repsAbove = b.representativesAbove ?? REPRESENTATIVES_ABOVE;
   let rep: Representatives | null = null;
@@ -842,7 +889,7 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   if (people.length > repsAbove) {
     const tol0 = pol.scheduling.partTimeToleranceHours ?? null;
     const sigOf = (i: number) => { const e = allPeople[i]; return [e.employmentType, e.weeklyContractHours, weeklyCapHours({ employmentType: e.employmentType, contractHours: Number(e.weeklyContractHours), maxHours: Number(e.maxWeeklyHours) }, tol0), e.workDaysPerWeek,
-      e.maxConsecutiveDays, e.minRestHours, e.shiftConsistency ?? '', e.fixedStartSlot ?? '', e.allowWeekend ? 1 : 0, e.allowOvernight ? 1 : 0, e.nightShiftConsent ? 1 : 0, e.preferredTemplateId ?? '', (skillsOf.get(e.id) ?? []).join(',')].join('|'); };
+      e.maxConsecutiveDays, e.minDaysOffTogether ?? 0, weekendNeedOf(e).join(','), e.minRestHours, e.shiftConsistency ?? '', e.fixedStartSlot ?? '', e.allowWeekend ? 1 : 0, e.allowOvernight ? 1 : 0, e.nightShiftConsent ? 1 : 0, e.preferredTemplateId ?? '', (skillsOf.get(e.id) ?? []).join(',')].join('|'); };
     rep = pickRepresentatives(allPeople.length, sigOf, b.representativeCount ?? REPRESENTATIVE_COUNT);
     const sizes = [rep.reps.length, allPeople.length - rep.reps.length];
     solveRequired = splitRequirement(required, sizes)[0];
@@ -852,10 +899,10 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
 
   // candidate shifts: employee x day x template x start, minus everything the rules already forbid. What rules a person out is counted for the report.
   let options: any[] = [];
-  const optionsByPerson = new Map<string, number>(), blockedByPerson = new Map<string, Map<string, number>>();
+  const optionsByPerson = new Map<string, number>(), blockedByPerson = new Map<string, Map<string, number>>(), blockedByTemplate = new Map<string, Map<string, number>>();
   const noun = (why: string) => why.includes('time off') ? 'approved time off' : why.includes('public holiday') ? 'a public holiday this group does not staff' : why.includes('weekend') ? 'no weekend work' : why.includes('overnight') ? 'no overnight shifts'
     : why.includes('outside their available') ? 'availability' : why.includes('unavailable') ? 'times they are unavailable' : why.includes('already scheduled') ? 'a shift in another group' : 'their availability';
-  const tally = (id: string, why: string) => { const m = blockedByPerson.get(id) ?? new Map<string, number>(); m.set(why, (m.get(why) ?? 0) + 1); blockedByPerson.set(id, m); };
+  const tallyPerson = (id: string, why: string) => { const m = blockedByPerson.get(id) ?? new Map<string, number>(); m.set(why, (m.get(why) ?? 0) + 1); blockedByPerson.set(id, m); };
   const skillsByPerson = new Map<string, string[]>();
   for (const r of skillRows) skillsByPerson.set(r.employeeId, [...(skillsByPerson.get(r.employeeId) ?? []), r.skillId]);
   // every length and start time is one more candidate shift per person and day; past about 120,000 the solver needs more memory than it should have, so the choices are thinned
@@ -863,7 +910,7 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   const OVER = Symbol('too many candidate shifts');
   /** Build the candidate shifts for one thinning setting. Stops (returns false) the moment there are more than `cap`, so an absurd request never builds millions of them. */
   const buildOptions = async (maxLengths: number, startStride: number, cap = Infinity, subset?: number[]): Promise<boolean> => {
-  options = []; optionsByPerson.clear(); blockedByPerson.clear();
+  options = []; optionsByPerson.clear(); blockedByPerson.clear(); blockedByTemplate.clear();
   let sliceStart = Date.now();
   try {
   const lengthsByTemplate = new Map(templates.map((t) => [t.id, offeredLengths(t, maxLengths)]));
@@ -878,6 +925,7 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
       if (pinnedKey.has(`${e.id}|${day}`)) continue;
       const dow = dowOf(day);
       templates.forEach((t, ti) => {
+        const tally = (id: string, why: string) => { tallyPerson(id, why); const m = blockedByTemplate.get(t.id) ?? new Map<string, number>(); m.set(why, (m.get(why) ?? 0) + 1); blockedByTemplate.set(t.id, m); };       // what stops this template being offered is kept per template too, for the report
         if (!t.workDays.includes(dow)) { tally(e.id, 'shift templates that do not run on their days'); return; }
         const notOffered = whyNotOffered(t, who, day);
         if (notOffered) { tally(e.id, notOffered); return; }
@@ -989,9 +1037,9 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   const solvePart = (who: number[], k: number) => {
     const local = new Map(who.map((gi, j) => [gi + 1, j + 1]));
     return engine.scheduleStream({
-      days: days.length, first_dow: dowOf(b.from), week_start: weekStart, weekend_mask: weekendBits, required: reqs[k],
+      days: days.length, first_dow: dowOf(b.from), week_start: weekStart, weekend_mask: weekendBits, weekend_months: wPlan && wPlan.months.length ? engineMonths(wPlan.months, b.from) : [], required: reqs[k],
       employees: who.map((gi, j) => { const e = people[gi]; return {
-        id: j + 1, max_week_slots: Math.round(capHoursOf(e) * 4), min_week_slots: Math.round(e.weeklyContractHours * 4), max_consecutive: e.maxConsecutiveDays, rest_slots: Math.round(e.minRestHours * 4), max_days_week: e.workDaysPerWeek,
+        id: j + 1, max_week_slots: Math.round(capHoursOf(e) * 4), min_week_slots: Math.round(e.weeklyContractHours * 4), max_consecutive: e.maxConsecutiveDays, min_days_off_together: e.minDaysOffTogether ?? 0, weekend_need: weekendNeedOf(e), rest_slots: Math.round(e.minRestHours * 4), max_days_week: e.workDaysPerWeek,
         consist_mode: { DEFAULT: 0, OFF: 1, PREFER: 2, REQUIRE: 3 }[(e.shiftConsistency ?? 'DEFAULT') as 'DEFAULT'], skill_ids: skillsOf.get(e.id) ?? [],
         ...priorFields(boundary?.byEmployee.get(e.id)), prior_weekend: x.priorWeekend?.get(e.id) ?? 0, ext_paid: extPaidOf(e.id),
       }; }),
@@ -1085,7 +1133,19 @@ export async function runGenerate(p: Principal, b: GenInput, x: GenExtras = {}) 
   const modeText = { OFF: 'Off', PREFER: 'Preferred', REQUIRE: 'Required' };
   const personal = people.filter((e) => e.shiftConsistency && e.shiftConsistency !== 'DEFAULT').length, fixedN = people.filter((e) => e.fixedStartSlot != null).length;
   const shared = await withTenant(p.tenantId, (tx) => sharedPeople(tx, b.groupId, b.from, to, allPeople.map((e) => e.id)));
+  // which templates were used, and why not: the shortage that is left, by time of day, against the hours each template can cover
+  const placedCover = new Array(days.length * SPD).fill(0);
+  rows.forEach((r, i) => { const di = days.indexOf(r.day); if (di >= 0) addShiftCoverage(placedCover, di, { startSlot: r.startSlot, lengthSlots: r.lengthSlots, activities: acts.get(chosen[i]) ?? [] } as any); });
+  const shortByTimeOfDay = new Array(SPD).fill(0);
+  for (let g = 0; g < requiredFinal.length; g++) shortByTimeOfDay[g % SPD] += Math.max(0, requiredFinal[g] - placedCover[g]);
+  const offeredByTemplate = new Map<string, number>();
+  for (const o of options) { const id = templates[o.template]?.id; if (id) offeredByTemplate.set(id, (offeredByTemplate.get(id) ?? 0) + 1); }
+  const templateUse = templateUsage({
+    templates: templates.map((t) => ({ id: t.id, name: t.name, lengthSlots: t.lengthSlots, starts: [...new Set([0, 1, 2, 3, 4, 5, 6].flatMap((dow) => startsFor(t, dow)))] })),
+    shifts: rows, offered: offeredByTemplate, blocked: blockedByTemplate, shortByTimeOfDay, rosterOnly: !!rosterOnly,
+  });
   const report = buildReport({
+    templateUse,
     pool: people, requested: { employeeIds: b.employeeIds, teamIds: b.teamIds }, poolSize: people.length, shifts: rows.map((r, i) => ({ ...r, activities: acts.get(chosen[i]) ?? [] })), optionsByPerson, blockedByPerson,
     uncoveredDays: uncovered, projectedDays: projected, coveragePercent: stats.coverage.percent, targetCoverage: pol.scheduling.targetCoverage, violations: stats.violations, solverStatus: res1.status === 'OPTIMAL' && res1.gap > 0.0005 ? 'FEASIBLE' : res1.status,     // stopped once proven close enough is still "not proven best"
     allEmployees: ctx.employees, groupId: b.groupId, templatesUsed: templates.length,

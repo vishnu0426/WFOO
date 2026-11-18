@@ -23,7 +23,8 @@ export function targetOf(n: Notification): InboxTarget | null {
     case 'schedule': return { tab: 'schedule' };
     case 'swap': return /needs approval$|waited for its supervisor$/i.test(n.title) ? { tab: 'approvals' } : { tab: 'requests', prefill: { tab: 'swaps' } };
     case 'bid': case 'offer': return { tab: 'requests', prefill: { tab: 'opportunities' } };
-    case 'time-off': return /request$|waited for its supervisor$/i.test(n.title) ? { tab: 'approvals' } : { tab: 'requests', prefill: { tab: 'timeoff' } };
+    case 'time-off': if (/^Your request was (approved|declined)$/i.test(n.title)) return { tab: 'requests', prefill: { tab: 'daysoff' } };
+      return /request$|waited for its supervisor$/i.test(n.title) ? { tab: 'approvals' } : { tab: 'requests', prefill: { tab: 'timeoff' } };
     default: return null;
   }
 }

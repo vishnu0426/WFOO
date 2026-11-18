@@ -84,7 +84,7 @@ describe('compliance rules', () => {
   });
 
   it('ships India, EU and US packs that hold together', () => {
-    assert.deepEqual(BUILT_INS.map((b) => b.code), ['IN_OSH_2020', 'EU_WTD', 'US_PREDICTIVE']);
+    assert.deepEqual(BUILT_INS.slice(0, 3).map((b) => b.code), ['IN_OSH_2020', 'EU_WTD', 'US_PREDICTIVE'], 'the three core packs come first; the country packs follow (see countryPacks.test.ts)');
     const india = BUILT_INS[0].rules;
     assert.equal(india.find((r) => r.type === 'MAX_SPREAD_HOURS')!.params.hours, 12);
     assert.equal(india.find((r) => r.type === 'OVERTIME_PREMIUM')!.params.multiplier, 2);

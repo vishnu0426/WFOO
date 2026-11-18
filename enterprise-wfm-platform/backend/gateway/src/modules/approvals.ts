@@ -168,13 +168,16 @@ export async function escalateOverdue(tenantId: string): Promise<number> {
          WHERE o.tenant_id = :t AND o.status = 'REQUESTED' AND o.escalated_at IS NULL AND o.created_at < now() - make_interval(hours => $1)
        UNION ALL
        SELECT 'SWAP', w.id, w.requester_id, e.team_id, e.first_name || ' ' || e.last_name, w.created_at::date::text FROM shift_swaps w JOIN employees e ON e.id = w.requester_id
-         WHERE w.tenant_id = :t AND w.status = 'PENDING_APPROVAL' AND w.escalated_at IS NULL AND w.updated_at < now() - make_interval(hours => $1)`, [s.escalateHours]);
+         WHERE w.tenant_id = :t AND w.status = 'PENDING_APPROVAL' AND w.escalated_at IS NULL AND w.updated_at < now() - make_interval(hours => $1)
+       UNION ALL
+       SELECT 'OFF', f.id, f.employee_id, e.team_id, e.first_name || ' ' || e.last_name, coalesce(f.start_day::text, 'a standing rule') FROM off_requests f JOIN employees e ON e.id = f.employee_id
+         WHERE f.tenant_id = :t AND f.status = 'REQUESTED' AND f.escalated_at IS NULL AND f.created_at < now() - make_interval(hours => $1)`, [s.escalateHours]);
     let n = 0;
     const managers = (await tx.q<{ id: string }>(MANAGERS)).map((r) => r.id);
     for (const w of waiting) {
       if (!(await firstLineUsers(tx, w.teamId, w.employeeId)).length) continue;          // the managers were told at the start
-      await tx.exec(`UPDATE ${w.kind === 'TIME_OFF' ? 'time_off' : 'shift_swaps'} SET escalated_at = now() WHERE tenant_id = :t AND id = $1`, [w.id]);
-      await notify(tx, managers, { kind: w.kind === 'TIME_OFF' ? 'TIME_OFF' : 'SWAP', title: 'A request has waited for its supervisor', body: `${w.name}'s ${w.kind === 'TIME_OFF' ? `time off from ${w.what}` : 'shift change'} has waited more than ${s.escalateHours} hours. You can decide it.`, data: { screen: w.kind === 'TIME_OFF' ? 'time-off' : 'swap', id: w.id } });
+      await tx.exec(`UPDATE ${w.kind === 'TIME_OFF' ? 'time_off' : w.kind === 'OFF' ? 'off_requests' : 'shift_swaps'} SET escalated_at = now() WHERE tenant_id = :t AND id = $1`, [w.id]);
+      await notify(tx, managers, { kind: w.kind === 'SWAP' ? 'SWAP' : 'TIME_OFF', title: 'A request has waited for its supervisor', body: `${w.name}'s ${w.kind === 'TIME_OFF' ? `time off from ${w.what}` : w.kind === 'OFF' ? `request about days off (${w.what})` : 'shift change'} has waited more than ${s.escalateHours} hours. You can decide it.`, data: { screen: w.kind === 'SWAP' ? 'swap' : 'time-off', id: w.id } });
       n++;
     }
     return n;

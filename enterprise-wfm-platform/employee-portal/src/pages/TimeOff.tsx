@@ -30,6 +30,11 @@ const BalanceCard: React.FC<{ b: TimeOffBalance; pending: number }> = ({ b, pend
         <div className="bg-[#E3B341]" style={{ width: `${pendPct}%` }} />
       </div>
       <div className="mt-1.5 text-[11px] text-[#6B6B6B]">{b.usedDays} used{pending > 0 ? ` · ${pending} pending` : ''} · {total} in total</div>
+      {(b.carriedOverDays ?? 0) > 0 && (b.expiredDays ?? 0) < (b.carriedOverDays ?? 0) && (
+        <div className="text-[11px] text-[#6B6B6B]">Includes {(b.carriedOverDays ?? 0) - (b.expiredDays ?? 0)} {((b.carriedOverDays ?? 0) - (b.expiredDays ?? 0)) === 1 ? 'day' : 'days'} carried over from last year{b.carryExpiresOn && b.carryExpiresOn >= todayIso() ? <span className="text-[#8F6200]"> · use by {fmt(b.carryExpiresOn)}</span> : ''}</div>
+      )}
+      {(b.expiredDays ?? 0) > 0 && <div className="text-[11px] text-[#8F6200]">{b.expiredDays} carried {b.expiredDays === 1 ? 'day' : 'days'} lapsed{b.carryExpiresOn ? ` on ${fmt(b.carryExpiresOn)}` : ''}</div>}
+      {(b.adjustedDays ?? 0) !== 0 && <div className="text-[11px] text-[#6B6B6B]">{(b.adjustedDays ?? 0) > 0 ? '+' : ''}{b.adjustedDays} {Math.abs(b.adjustedDays ?? 0) === 1 ? 'day' : 'days'} adjusted by your manager</div>}
     </div>
   );
 };

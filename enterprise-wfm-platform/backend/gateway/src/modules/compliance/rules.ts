@@ -3,7 +3,9 @@
  * BLOCK rules stop a schedule being published (and the generator will not create such shifts); WARN rules are reported only.
  * This file is pure (no database) so every rule can be tested on its own.
  */
-export type RuleType = 'MAX_DAILY_HOURS' | 'MAX_WEEKLY_HOURS' | 'MAX_SPREAD_HOURS' | 'MIN_DAILY_REST_HOURS' | 'MAX_CONSECUTIVE_DAYS' | 'MEAL_BREAK' | 'NIGHT_WORK' | 'OVERTIME_PREMIUM' | 'MIN_NOTICE_DAYS';
+import { COUNTRY_PACKS } from './countryPacks.ts';
+
+export type RuleType = 'MAX_DAILY_HOURS' | 'MAX_WEEKLY_HOURS' | 'MAX_SPREAD_HOURS' | 'MIN_DAILY_REST_HOURS' | 'MAX_CONSECUTIVE_DAYS' | 'MIN_DAYS_OFF_TOGETHER' | 'MIN_WEEKENDS_OFF_MONTH' | 'MEAL_BREAK' | 'NIGHT_WORK' | 'OVERTIME_PREMIUM' | 'MIN_NOTICE_DAYS';
 export type Severity = 'BLOCK' | 'WARN';
 export interface Rule { id: string; type: RuleType; severity: Severity; params: Record<string, any> }
 export interface Finding { rule: RuleType; severity: Severity; employeeId: string; day: string; message: string }
@@ -18,6 +20,8 @@ export const CATALOG: RuleSpec[] = [
   { type: 'MAX_SPREAD_HOURS', label: 'Maximum spread-over of a shift', help: 'From the start to the end of a shift, meals and breaks included.', defaultSeverity: 'BLOCK', params: [{ key: 'hours', label: 'Hours', kind: 'number', unit: 'h', min: 1, max: 24, default: 12 }] },
   { type: 'MIN_DAILY_REST_HOURS', label: 'Minimum rest between shifts', help: 'The gap between the end of one shift and the start of the next.', defaultSeverity: 'BLOCK', params: [{ key: 'hours', label: 'Hours', kind: 'number', unit: 'h', min: 0, max: 24, default: 11 }] },
   { type: 'MAX_CONSECUTIVE_DAYS', label: 'Maximum days worked in a row', help: 'Guarantees a weekly rest day.', defaultSeverity: 'BLOCK', params: [{ key: 'days', label: 'Days', kind: 'number', unit: 'days', min: 1, max: 14, default: 6 }] },
+  { type: 'MIN_DAYS_OFF_TOGETHER', label: 'Days off together each week', help: 'Every pay week has at least this many days off side by side, for example 2 for a weekend or any two neighbouring days. Weeks the schedule only partly covers are not judged.', defaultSeverity: 'BLOCK', params: [{ key: 'days', label: 'Days off together', kind: 'number', unit: 'days', min: 1, max: 3, default: 2 }] },
+  { type: 'MIN_WEEKENDS_OFF_MONTH', label: 'Full weekends off each month', help: "Every calendar month has at least this many full weekends off (all of the group's weekend days). A month the schedule only partly covers is held to its share, counting the weekends already off earlier in the month. Applies when its severity is Block.", defaultSeverity: 'BLOCK', params: [{ key: 'weekends', label: 'Weekends off', kind: 'number', unit: 'weekends', min: 1, max: 4, default: 2 }] },
   { type: 'MEAL_BREAK', label: 'Meal or rest interval', help: 'A shift longer than this needs a meal or rest interval of at least the given length.', defaultSeverity: 'BLOCK', params: [{ key: 'afterHours', label: 'For shifts longer than', kind: 'number', unit: 'h', min: 1, max: 12, default: 5 }, { key: 'minutes', label: 'Interval', kind: 'number', unit: 'min', min: 5, max: 120, default: 30 }] },
   { type: 'NIGHT_WORK', label: 'Night work', help: "Work between these times needs the person's recorded consent.", defaultSeverity: 'BLOCK', params: [{ key: 'from', label: 'Night starts', kind: 'time', default: '19:00' }, { key: 'to', label: 'Night ends', kind: 'time', default: '06:00' }, { key: 'requiresConsent', label: 'Needs consent', kind: 'boolean', default: true }] },
   { type: 'OVERTIME_PREMIUM', label: 'Overtime premium', help: 'Hours beyond these limits are paid at a multiple of the normal rate. Reported, never blocked.', defaultSeverity: 'WARN', informational: true, params: [{ key: 'afterDailyHours', label: 'After hours per day', kind: 'number', unit: 'h', min: 1, max: 24, default: 8 }, { key: 'afterWeeklyHours', label: 'After hours per week', kind: 'number', unit: 'h', min: 1, max: 168, default: 48 }, { key: 'multiplier', label: 'Pay multiple', kind: 'number', unit: '×', min: 1, max: 5, default: 2 }] },
@@ -41,9 +45,9 @@ export function normaliseRule(r: Partial<Rule> & { type: RuleType }, index = 0):
 }
 
 /** A pack shipped with the product. Administrators copy one to change it. */
-export interface BuiltIn { code: string; name: string; region: string; description: string; rules: Rule[] }
+export interface BuiltIn { code: string; name: string; region: string; description: string; rules: Rule[]; /** the law the pack is drawn from */ law?: string; /** what the pack does not cover */ notes?: string; /** written from the law's general rules, not yet reviewed by a local lawyer: an organisation checks it and adjusts a copy */ starter?: boolean }
 const R = (type: RuleType, params: Record<string, any>, severity?: Severity, i = 0) => normaliseRule({ type, params, severity }, i);
-export const BUILT_INS: BuiltIn[] = [
+const CORE_BUILT_INS: BuiltIn[] = [
   {
     code: 'IN_OSH_2020', name: 'India: Occupational Safety, Health and Working Conditions Code 2020', region: 'India',
     description: 'Normal hours 8 a day and 48 a week with overtime at twice the wage; spread-over within 12 hours; 30 minutes rest after 5 hours; a weekly rest day; night work (7pm to 6am) only with consent. State Shops and Establishments rules can differ: copy this pack and adjust.',
@@ -60,6 +64,12 @@ export const BUILT_INS: BuiltIn[] = [
     description: 'Schedules posted 14 days ahead, with extra pay and consent when a published shift changes inside that window, and 10 hours between shifts. Applies in Oregon and some cities only.',
     rules: [R('MIN_NOTICE_DAYS', { days: 14 }, 'WARN', 0), R('MIN_DAILY_REST_HOURS', { hours: 10 }, 'WARN', 1)],
   },
+];
+
+/** The core packs, then a starter pack for each country in countryPacks.ts (their rules are normalised the same way). */
+export const BUILT_INS: BuiltIn[] = [
+  ...CORE_BUILT_INS,
+  ...COUNTRY_PACKS.map((c): BuiltIn => ({ code: c.code, name: c.name, region: c.region, description: c.description, law: c.law, notes: c.notes, starter: true, rules: c.rules.map((r, i) => normaliseRule({ type: r.type, params: r.params, severity: r.severity }, i)) })),
 ];
 
 // ---------------------------------------------------------------- checking
@@ -99,19 +109,33 @@ export function shiftBlocked(rules: Rule[], person: Pick<PersonLite, 'nightConse
 }
 
 /** Limits a BLOCK rule sets that the generator can take as a plain number. */
-export function limitsFrom(rules: Rule[]): { minRestHours?: number; maxWeeklyHours?: number; maxConsecutiveDays?: number } {
-  const o: { minRestHours?: number; maxWeeklyHours?: number; maxConsecutiveDays?: number } = {};
+export function limitsFrom(rules: Rule[]): { minRestHours?: number; maxWeeklyHours?: number; maxConsecutiveDays?: number; minDaysOffTogether?: number; minWeekendsOffMonth?: number } {
+  const o: { minRestHours?: number; maxWeeklyHours?: number; maxConsecutiveDays?: number; minDaysOffTogether?: number; minWeekendsOffMonth?: number } = {};
   for (const r of rules) {
     if (r.severity !== 'BLOCK') continue;
     if (r.type === 'MIN_DAILY_REST_HOURS') o.minRestHours = Math.max(o.minRestHours ?? 0, r.params.hours);
     if (r.type === 'MAX_WEEKLY_HOURS') o.maxWeeklyHours = Math.min(o.maxWeeklyHours ?? Infinity, r.params.hours);
     if (r.type === 'MAX_CONSECUTIVE_DAYS') o.maxConsecutiveDays = Math.min(o.maxConsecutiveDays ?? Infinity, r.params.days);
+    if (r.type === 'MIN_DAYS_OFF_TOGETHER') o.minDaysOffTogether = Math.max(o.minDaysOffTogether ?? 0, r.params.days);
+    if (r.type === 'MIN_WEEKENDS_OFF_MONTH') o.minWeekendsOffMonth = Math.max(o.minWeekendsOffMonth ?? 0, r.params.weekends);
   }
   return o;
 }
 
-/** Everything the rules say about one person's shifts. */
-export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[], weekStart = 0): Finding[] {
+/** The longest run of days with no work in the seven days from `weekFirst`. `worked` is every day the person works (for any group). */
+export function longestOffRun(worked: Set<string>, weekFirst: string): number {
+  let best = 0, run = 0;
+  for (let i = 0; i < 7; i++) { run = worked.has(addDaysStr(weekFirst, i)) ? 0 : run + 1; best = Math.max(best, run); }
+  return best;
+}
+
+/** Pay weeks (their first day) that lie wholly inside the period. Only these are held to 'days off together': a week the period cuts is not judged. */
+export function wholeWeeksIn(days: string[], period: { from: string; to: string }, weekStart = 0): string[] {
+  return [...new Set(days.map((d) => mondayOf(d, weekStart)))].filter((wk) => wk >= period.from && addDaysStr(wk, 6) <= period.to).sort();
+}
+
+/** Everything the rules say about one person's shifts. `period` (the days the schedule covers) is needed for the rule on days off together: without it that rule is not judged. */
+export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[], weekStart = 0, period?: { from: string; to: string }): Finding[] {
   const out: Finding[] = [];
   const shifts = [...list].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.startSlot - b.startSlot));
   const add = (r: Rule, day: string, message: string) => out.push({ rule: r.type, severity: r.severity, employeeId: person.id, day, message });
@@ -131,6 +155,13 @@ export function checkPerson(rules: Rule[], person: PersonLite, list: ShiftLite[]
       for (let i = 1; i < shifts.length; i++) {
         run = shifts[i].day === addDaysStr(shifts[i - 1].day, 1) ? run + 1 : shifts[i].day === shifts[i - 1].day ? run : 1;
         if (run === p.days + 1) add(r, shifts[i].day, `${person.name} works more than ${p.days} days in a row`);
+      }
+    }
+    if (r.type === 'MIN_DAYS_OFF_TOGETHER' && period) {
+      const worked = new Set(shifts.map((s) => s.day));
+      for (const wk of wholeWeeksIn(shifts.map((s) => s.day), period, weekStart)) {
+        const best = longestOffRun(worked, wk);
+        if (best < p.days) add(r, wk, `${person.name} has ${best === 0 ? 'no day' : `at most ${best} ${best === 1 ? 'day' : 'days'}`} off together in the week of ${wk} (needs ${p.days})`);
       }
     }
     if (r.type === 'MAX_WEEKLY_HOURS') {

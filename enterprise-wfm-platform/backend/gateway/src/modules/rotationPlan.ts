@@ -37,10 +37,11 @@ export function crewCoverage(sequence: (string | null)[], crews: { offsetDays: n
 }
 
 export interface TemplateLite { id: string; name: string; startSlot: number; lengthSlots: number; paidSlots: number; active: boolean }
-export interface Limits { minRestHours?: number | null; maxWeeklyHours?: number | null; maxConsecutiveDays?: number | null; maxDaysPerWeek?: number | null }
+export interface Limits { minRestHours?: number | null; maxWeeklyHours?: number | null; maxConsecutiveDays?: number | null; maxDaysPerWeek?: number | null; minDaysOffTogether?: number | null }
 export interface AnalysisInput {
   cycleDays: number; sequence: (string | null)[]; crews: { name: string; offsetDays: number }[];
   anchorDow: number;                     // weekday of day 0, Monday = 0
+  weekStart?: number;                    // weekday the pay week starts on, Monday = 0 (Monday when omitted)
   weekend?: number[];                    // weekdays that count as the weekend, Monday = 0 (Saturday and Sunday when omitted)
   templates: Map<string, TemplateLite>; limits: Limits; contractHours?: number | null;
 }
@@ -48,6 +49,7 @@ export interface Finding { level: 'WARN' | 'INFO' | 'OK'; text: string }
 export interface CrewSummary {
   name: string; offsetDays: number; shiftsPerCycle: number; paidHoursPerCycle: number; averageWeeklyHours: number; maxHoursInAnyWeek: number; maxDaysInAnyWeek: number;
   longestRun: number; neverOff: boolean; shortestRestHours: number | null; weekendDaysPerWeek: number; weekendsFullyOff: number;
+  weeksWithoutOffBlock: number; weeksChecked: number;    // pay weeks (over the cycle) that have no run of the required days off side by side, and how many were looked at
 }
 
 export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findings: Finding[]; cycleDays: number; coverage?: { templateId: string; name: string; min: number; max: number; gapDays: number }[] } {
@@ -91,7 +93,18 @@ export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findin
       if (wk.includes(dow) && worked(d)) wkendDays++;
       if (dow === wkLast) { weeks++; if (wk.every((w) => !worked(d - (wkLast - w)))) offWeekends++; }   // the whole weekend off
     }
+    // pay weeks over the cycle that have no run of days off side by side as long as the limit asks
+    let noBlock = 0, weeksSeen = 0;
+    const need = a.limits.minDaysOffTogether ?? 0;
+    if (need > 0) for (let d0 = 0; d0 < lcm; d0++) {
+      if (mod(a.anchorDow + d0 - (a.weekStart ?? 0), 7) !== 0) continue;
+      weeksSeen++;
+      let best = 0, r = 0;
+      for (let k = 0; k < 7; k++) { r = worked(d0 + k) ? 0 : r + 1; best = Math.max(best, r); }
+      if (best < need) noBlock++;
+    }
     return {
+      weeksWithoutOffBlock: noBlock, weeksChecked: weeksSeen,
       name: c.name, offsetDays: c.offsetDays, shiftsPerCycle: shifts, paidHoursPerCycle: r1(paid / 4), averageWeeklyHours: r1((paid / 4) * 7 / n),
       maxHoursInAnyWeek: r1(maxH / 4), maxDaysInAnyWeek: maxD, longestRun: longest, neverOff, shortestRestHours: rest === null ? null : r1(rest),
       weekendDaysPerWeek: r2(wkendDays / (lcm / 7)), weekendsFullyOff: weeks ? r2(offWeekends / weeks) : 0,
@@ -107,6 +120,7 @@ export function analysePattern(a: AnalysisInput): { crews: CrewSummary[]; findin
   if (L.maxWeeklyHours && c0.maxHoursInAnyWeek > L.maxWeeklyHours + 1e-9) findings.push({ level: 'WARN', text: `In the busiest seven days people work ${c0.maxHoursInAnyWeek} h, over the ${L.maxWeeklyHours} h weekly limit.` });
   if (L.maxDaysPerWeek && c0.maxDaysInAnyWeek > L.maxDaysPerWeek) findings.push({ level: 'WARN', text: `In the busiest seven days people work ${c0.maxDaysInAnyWeek} days, over the limit of ${L.maxDaysPerWeek}.` });
   if (L.maxConsecutiveDays && !c0.neverOff && c0.longestRun > L.maxConsecutiveDays) findings.push({ level: 'WARN', text: `The longest run is ${c0.longestRun} working days in a row, over the limit of ${L.maxConsecutiveDays}.` });
+  if (L.minDaysOffTogether && c0.weeksChecked > 0 && c0.weeksWithoutOffBlock > 0) findings.push({ level: 'WARN', text: `In ${c0.weeksWithoutOffBlock} of every ${c0.weeksChecked} pay weeks there are never ${L.minDaysOffTogether} days off side by side (the limit asks for that every week).` });
   if (L.minRestHours && c0.shortestRestHours !== null && c0.shortestRestHours < L.minRestHours - 1e-9) findings.push({ level: 'WARN', text: `Some shifts are only ${c0.shortestRestHours} h apart (for example when the cycle moves from a late shift to an early one), under the ${L.minRestHours} h rest limit.` });
   const wk = crews.map((c) => c.weekendDaysPerWeek);
   if (crews.length > 1 && Math.max(...wk) - Math.min(...wk) > 0.25) {

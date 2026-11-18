@@ -89,6 +89,42 @@ def ext_on(emp, d):
     return 0 <= d < len(emp.ext_paid) and emp.ext_paid[d] > 0
 
 
+def off_blocks(emp, days, offset):
+    """{calendar week index: [block, ...]} for the rule 'at least N days off side by side in a pay week'. A block is a tuple of N neighbouring day
+    indexes inside one pay week. Only weeks that lie wholly inside the period are held to it (a week cut by the period's edge is not judged here),
+    and a block that touches a day already worked for another group is not offered. A week with no block left is left out: nothing here could meet it."""
+    n = emp.min_days_off_together
+    if n <= 0 or n > 7:
+        return {}
+    out, w = {}, 0
+    while True:
+        first = 7 * w - offset
+        if first + 6 > days - 1:
+            break
+        if first >= 0:
+            blocks = [tuple(range(s, s + n)) for s in range(first, first + 7 - n + 1) if not any(ext_on(emp, d) for d in range(s, s + n))]
+            if blocks:
+                out[w] = blocks
+        w += 1
+    return out
+
+
+def off_weekends(emp, req):
+    """[(weekends, need)] for the rule 'at least N full weekends off in a calendar month'. `weekends` are the day tuples of that month's weekends inside the period that
+    this person could still keep free (a weekend that touches a day already worked for another group is not offered); `need` is how many of them must be fully off.
+    The gateway sets the per-month need (emp.weekend_need) from the rule, the weekends already off earlier in the month and the ones still to come."""
+    out = []
+    for m, month in enumerate(req.weekend_months):
+        need = emp.weekend_need[m] if m < len(emp.weekend_need) else 0
+        if need <= 0:
+            continue
+        free = [tuple(w.days) for w in month.weekends if w.days and not any(ext_on(emp, d) for d in w.days)]
+        need = min(need, len(free))
+        if need > 0:
+            out.append((free, need))
+    return out
+
+
 def ext_week(emp, offset):
     """{calendar week index: (paid slots, days)} this person already works for other groups, by the same week numbering the weekly limits use."""
     out = {}
@@ -146,6 +182,31 @@ def build_lp(req, emps, opts, required, carry, weekend_prior, week_offset, paid,
             n_ext = sum(extd[d0:d0 + k + 1])
             if window and len(window) + n_ext > k:
                 lp.row([(v, 1) for v in window], hi=max(0, k - n_ext))
+
+    for e, emp in emps.items():                                  # days off side by side: some block of them is free in every pay week
+        for blocks in off_blocks(emp, days, week_offset(req)).values():
+            days_of = [[x[i] for d in blk for i in by_ed.get((e, d), [])] for blk in blocks]
+            if any(not v for v in days_of):
+                continue                                         # a block with nothing to work in it is off already
+            flags = [lp.var(0, 1, 0.0, True) for _ in blocks]
+            for f, vs in zip(flags, days_of):
+                for v in vs:
+                    lp.row([(f, 1), (v, 1)], hi=1)
+            lp.row([(f, 1) for f in flags], lo=1)
+
+    for e, emp in emps.items():                                  # full weekends off in a calendar month: enough of the month's weekends are free of work
+        for weekends, need in off_weekends(emp, req):
+            days_of = [[x[i] for d in wk for i in by_ed.get((e, d), [])] for wk in weekends]
+            already = sum(1 for vs in days_of if not vs)         # a weekend with nothing to work in it is off already
+            need -= already
+            if need <= 0:
+                continue
+            pairs = [vs for vs in days_of if vs]
+            flags = [lp.var(0, 1, 0.0, True) for _ in pairs]
+            for f, vs in zip(flags, pairs):
+                for v in vs:
+                    lp.row([(f, 1), (v, 1)], hi=1)
+            lp.row([(f, 1) for f in flags], lo=min(need, len(flags)))
 
     under_cols, over_cols = [], []
     for e, emp in emps.items():                                  # weekly hours and days; contract minimum is soft

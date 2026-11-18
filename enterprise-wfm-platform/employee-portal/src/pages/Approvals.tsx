@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react';
 import { api, ApiError } from '../api';
-import { ApprovalSwap, ApprovalTimeOff, Approvals as ApprovalsDto } from '../types';
+import { ApprovalOff, ApprovalSwap, ApprovalTimeOff, Approvals as ApprovalsDto } from '../types';
 import { useLoad, Banner, Btn, Busy, Card, Empty, Pill, Textarea, hm } from '../ui';
 
 const nice = (t: string) => { const s = t.replace(/_/g, ' ').toLowerCase(); return s[0].toUpperCase() + s.slice(1); };
@@ -16,11 +16,16 @@ const waited = (iso: string) => {
 };
 const dayFull = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
-type Target = { kind: 'timeoff' | 'swap'; id: string; who: string; what: string };
+type Target = { kind: 'timeoff' | 'swap' | 'off'; id: string; who: string; what: string };
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** What the person asked for, in a line. */
+const offAsked = (r: ApprovalOff) => r.kind === 'WEEKEND_OFF'
+  ? `Weekends off together: ${range(r.startDate!, r.endDate!)}`
+  : `Standing rule: ${[r.minDaysTogether ? `${r.minDaysTogether} days off together each week` : '', r.minWeekendsMonth ? `${plural(r.minWeekendsMonth, 'full weekend', 'full weekends')} off each month` : ''].filter(Boolean).join(' and ')}`;
 
 export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
   const { data, error, loading, reload } = useLoad<ApprovalsDto>('/me/approvals');
-  const [sub, setSub] = useState<'timeoff' | 'swaps'>('timeoff');
+  const [sub, setSub] = useState<'timeoff' | 'daysoff' | 'swaps'>('timeoff');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [note, setNote] = useState('');
@@ -32,6 +37,7 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
     setBusy(t.id); setErr(''); setNote('');
     try {
       if (t.kind === 'timeoff') await api(`/workforce/time-off/${t.id}/decide`, { method: 'POST', body: { status: 'APPROVED' } });
+      else if (t.kind === 'off') { const out = await api<{ warnings?: string[] }>(`/workforce/off-requests/${t.id}/decide`, { method: 'POST', body: { status: 'APPROVED' } }); if (out.warnings?.length) { done(`Approved: ${t.who}, ${t.what}. ${out.warnings.join(' ')}`); return; } }
       else await api(`/scheduling/swaps/${t.id}/decide`, { method: 'POST', body: { approve: true } });
       done(`Approved: ${t.who}, ${t.what}.`);
     } catch (e: any) { setErr(e instanceof ApiError ? e.message : 'Could not approve'); reload(); } finally { setBusy(null); }
@@ -41,6 +47,7 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
     const t = declining; setBusy(t.id); setErr(''); setNote('');
     try {
       if (t.kind === 'timeoff') await api(`/workforce/time-off/${t.id}/decide`, { method: 'POST', body: { status: 'REJECTED', reason: reason.trim() } });
+      else if (t.kind === 'off') await api(`/workforce/off-requests/${t.id}/decide`, { method: 'POST', body: { status: 'REJECTED', reason: reason.trim() } });
       else await api(`/scheduling/swaps/${t.id}/decide`, { method: 'POST', body: { approve: false, reason: reason.trim() } });
       setDeclining(null); setReason(''); done(`Declined: ${t.who}, ${t.what}.`);
     } catch (e: any) { setErr(e instanceof ApiError ? e.message : 'Could not decline'); } finally { setBusy(null); }
@@ -51,7 +58,8 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
   if (!data) return null;
   if (!data.access) return <Empty title="Nothing for you to approve">Requests from the people you lead show up here when you are a team supervisor, deputy or cover, or a manager.</Empty>;
 
-  const tabs = [['timeoff', 'Time off', data.timeOff.length], ['swaps', 'Shift swaps', data.swaps.length]] as const;
+  const offs = data.offRequests ?? [];
+  const tabs = [['timeoff', 'Time off', data.timeOff.length], ...(offs.length ? [['daysoff', 'Days off', offs.length] as const] : []), ['swaps', 'Shift swaps', data.swaps.length]] as const;
   const actions = (t: Target) => (
     <div className="flex gap-2 pt-2">
       <Btn variant="primary" disabled={busy === t.id} onClick={() => approve(t)}>{busy === t.id ? 'Working…' : 'Approve'}</Btn>
@@ -79,6 +87,29 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
     );
   };
 
+  const OffCard = (r: ApprovalOff) => {
+    const c = r.context;
+    const weigh = !c ? '' : 'weekends' in c
+      ? [c.teamSize > 0 ? (c.teamOff > 0 ? `${c.teamOff} of ${c.teamSize} teammates are already off on those days` : 'No teammates are off on those days') : '', c.scheduledShifts ? `${plural(c.scheduledShifts, 'shift', 'shifts')} already scheduled on them` : ''].filter(Boolean).join(' · ')
+      : `Their own limits go from ${[r.minDaysTogether ? `${c.now.daysTogether || 'none'} to ${c.after.daysTogether} days together` : '', r.minWeekendsMonth ? `${c.now.weekendsMonth || 'none'} to ${c.after.weekendsMonth} weekends a month` : ''].filter(Boolean).join(' and ')}`;
+    const crowded = !!c && 'weekends' in c && c.teamOff > 0;
+    return (
+      <div key={r.id} className="border border-[#E5E5E0] rounded-md p-3 space-y-1.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold text-[#171717]">{r.employeeName}</div>
+            <div className="text-[12px] text-[#6B6B6B]">{r.team ?? 'No team'}</div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">{r.escalated && <Pill tone="bad">Overdue</Pill>}<Pill tone="warn">{waited(r.createdAt)}</Pill></div>
+        </div>
+        <div className="text-[13px] font-semibold text-[#171717]">{offAsked(r)}</div>
+        {r.reason && <div className="text-[12px] text-[#6B6B6B]">Their note: {r.reason}</div>}
+        {weigh && <div className={`text-[12px] ${crowded ? 'text-[#8F6200] font-medium' : 'text-[#525252]'}`}>{weigh}</div>}
+        {actions({ kind: 'off', id: r.id, who: r.employeeName, what: offAsked(r).toLowerCase() })}
+      </div>
+    );
+  };
+
   const SwapCard = (s: ApprovalSwap) => (
     <div key={s.id} className="border border-[#E5E5E0] rounded-md p-3 space-y-1.5">
       <div className="flex items-start justify-between gap-3">
@@ -98,7 +129,7 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
     <div className="max-w-3xl space-y-4">
       <div>
         <div className="text-[20px] font-semibold text-[#171717]">Approvals</div>
-        <div className="text-[12px] text-[#6B6B6B]">{data.timeOff.length + data.swaps.length === 0 ? 'Nothing is waiting for you' : `${data.timeOff.length + data.swaps.length} waiting for you, oldest first`}</div>
+        <div className="text-[12px] text-[#6B6B6B]">{data.timeOff.length + data.swaps.length + offs.length === 0 ? 'Nothing is waiting for you' : `${data.timeOff.length + data.swaps.length + offs.length} waiting for you, oldest first`}</div>
       </div>
       {note && <Banner kind="ok" onClose={() => setNote('')}>{note}</Banner>}
       {err && <Banner kind="err" onClose={() => setErr('')}>{err}</Banner>}
@@ -113,6 +144,7 @@ export const Approvals: React.FC<{ onChanged?: () => void }> = ({ onChanged }) =
       <Card>
         {sub === 'timeoff'
           ? (data.timeOff.length === 0 ? <Empty title="No time-off requests waiting">New requests from your team will show here and in your Inbox.</Empty> : <div className="space-y-2.5">{data.timeOff.map(TimeOffCard)}</div>)
+          : sub === 'daysoff' ? (offs.length === 0 ? <Empty title="No days-off requests waiting">Weekends-off requests and standing rules from your team will show here.</Empty> : <div className="space-y-2.5">{offs.map(OffCard)}</div>)
           : (data.swaps.length === 0 ? <Empty title="No swap requests waiting">Swaps that need a decision will show here.</Empty> : <div className="space-y-2.5">{data.swaps.map(SwapCard)}</div>)}
       </Card>
 

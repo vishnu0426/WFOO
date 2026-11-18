@@ -155,6 +155,7 @@ export function DashboardSection() {
       <div>
         {header}
         <Toolbar>
+          <Select label="Group" value={group.id} options={groups.map((g) => ({ id: g.id, label: g.name }))} onChange={(id) => setGroupId(id)} />
           <Select label="Type" value={kind} options={[{ id: "SHORT", label: "Short-term" }, { id: "LONG", label: "Long-term" }]} onChange={(k) => setKind(k as "SHORT" | "LONG")} />
         </Toolbar>
         <div className="p-6">

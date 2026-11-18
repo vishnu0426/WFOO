@@ -10,6 +10,8 @@ import { PeopleTab } from './PeopleTab';
 import { QueuesTab } from './QueuesTab';
 import { CoverageTab, HistoryTab, ShrinkageTab } from './SmallTabs';
 import { Confirm, DAYS_LONG, dayRange, GroupSummary, Site } from './shared';
+import { useForecast } from '../../../services/forecastStore';
+import { localTime, zoneNote } from '../../../services/timeZones';
 
 const TABS = [['overview', 'Overview'], ['queues', 'Queues'], ['people', 'People'], ['skills', 'Skills'], ['shrinkage', 'Shrinkage'], ['coverage', 'Manual coverage'], ['history', 'History']] as const;
 type TabId = (typeof TABS)[number][0];
@@ -36,6 +38,8 @@ export const GroupDetail: React.FC<{
   const [copy, setCopy] = useState({ queues: true, shrinkage: true, coverage: true });
   const [historyTick, setHistoryTick] = useState(0);
   const site = sites.find((s) => s.id === group.siteId);
+  const { session } = useForecast();
+  const zone = zoneNote({ zone: group.timezone, siteZone: site?.timezone ?? null, siteName: site?.name ?? null, orgZone: session?.tenant?.timezone ?? null });
   const off = group.status === 'INACTIVE';
   const changed = async () => { setHistoryTick((t) => t + 1); await onChanged(); };
   const close = () => { setDialog(null); setWarn(''); setDlgError(''); };
@@ -74,6 +78,11 @@ export const GroupDetail: React.FC<{
             {off ? <Pill>Switched off</Pill> : <Pill tone="good">Active</Pill>}
           </div>
           <div className="text-[12px] text-[#6B6B6B]"><span className="font-mono">{group.code}</span> · {group.timezone}{site ? ` · ${site.name}` : ''}</div>
+          {zone.kind === 'check' && (
+            <div className="text-[12px] text-[#8F6200] max-w-3xl" role="status">
+              {zone.text}{canWrite && <> <button type="button" className="underline font-medium" onClick={() => { setTab('overview'); setEditing(true); }}>Change the time zone</button></>}
+            </div>
+          )}
           {group.description && <p className="text-[13px] text-[#525252] max-w-3xl">{group.description}</p>}
         </div>
         {canWrite && (
@@ -117,7 +126,7 @@ export const GroupDetail: React.FC<{
               <Row k="Pay week starts on" v={group.payWeekStart == null ? 'Company setting' : DAYS_LONG[group.payWeekStart]} />
               <Row k="Weekend days" v={group.weekendDays?.length ? group.weekendDays.map((d) => DAYS_LONG[d].slice(0, 3)).join(', ') : 'Company setting'} />
               <Row k="Full-time hours" v={`${group.fteHoursWeek} h a week`} />
-              <Row k="Time zone" v={group.timezone} />
+              <Row k="Time zone" v={`${group.timezone}${localTime(group.timezone, new Date()) ? ` · now ${localTime(group.timezone, new Date())}` : ''}`} />
               <Row k="Group manager" v={group.managerName ?? <span className="text-[#A3A3A3]">None</span>} />
             </div></Card>
             <Card title="Where it stands" className="xl:col-span-3">

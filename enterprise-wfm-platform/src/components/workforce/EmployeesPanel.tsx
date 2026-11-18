@@ -20,14 +20,14 @@ import { AvailabilityTab, OverviewTab, SkillsTab } from './EmployeeTabs';
 
 type Form = {
   employeeNumber: string; firstName: string; lastName: string; email: string; extension: string; teamId: string; primaryGroupId: string; eligibleGroupIds: string[]; status: EmployeeStatus; employmentType: EmploymentType;
-  weeklyContractHours: number; maxWeeklyHours: number; workDaysPerWeek: number; minRestHours: number; maxConsecutiveDays: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; skills: Record<string, number>;
+  weeklyContractHours: number; maxWeeklyHours: number; workDaysPerWeek: number; minRestHours: number; maxConsecutiveDays: number; minDaysOffTogether: number; minWeekendsOffMonth: number; allowWeekend: boolean; allowOvernight: boolean; nightShiftConsent: boolean; skills: Record<string, number>;
   preferredTemplateId: string; shiftConsistency: ShiftConsistency; fixedStart: string;
   isSupervisor: boolean; isManager: boolean;
   reportsTo: string; reason: string; lastDay: string; leaveReason: string;
 };
-const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '', shiftConsistency: 'DEFAULT', fixedStart: '', isSupervisor: false, isManager: false, reportsTo: '', reason: '', lastDay: '', leaveReason: '' });
+const blank = (groupId: string): Form => ({ employeeNumber: '', firstName: '', lastName: '', email: '', extension: '', teamId: '', primaryGroupId: groupId, eligibleGroupIds: [], status: 'ACTIVE', employmentType: 'FULL_TIME', weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, minDaysOffTogether: 0, minWeekendsOffMonth: 0, allowWeekend: true, allowOvernight: false, nightShiftConsent: false, skills: {}, preferredTemplateId: '', shiftConsistency: 'DEFAULT', fixedStart: '', isSupervisor: false, isManager: false, reportsTo: '', reason: '', lastDay: '', leaveReason: '' });
 const fromEmployee = (e: Employee): Form => ({ employeeNumber: e.employeeNumber, firstName: e.firstName, lastName: e.lastName, email: e.email ?? '', extension: e.extension ?? '', teamId: e.teamId ?? '', primaryGroupId: e.primaryGroupId ?? '', eligibleGroupIds: e.eligibleGroupIds, status: e.status, employmentType: e.employmentType,
-  weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours, maxConsecutiveDays: e.maxConsecutiveDays, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
+  weeklyContractHours: e.weeklyContractHours, maxWeeklyHours: e.maxWeeklyHours, workDaysPerWeek: e.workDaysPerWeek, minRestHours: e.minRestHours, maxConsecutiveDays: e.maxConsecutiveDays, minDaysOffTogether: e.minDaysOffTogether ?? 0, minWeekendsOffMonth: e.minWeekendsOffMonth ?? 0, allowWeekend: e.allowWeekend, allowOvernight: e.allowOvernight, nightShiftConsent: e.nightShiftConsent,
   skills: Object.fromEntries(e.skills.map((s) => [s.skillId, s.proficiency])), preferredTemplateId: e.preferredTemplateId ?? '', shiftConsistency: e.shiftConsistency ?? 'DEFAULT', fixedStart: e.fixedStartSlot == null ? '' : slotHHMM(e.fixedStartSlot), isSupervisor: !!e.isSupervisor, isManager: !!e.isManager, reportsTo: e.reportsTo ?? '', reason: '', lastDay: e.terminationDate ?? '', leaveReason: e.terminationReason ?? '' });
 
 /** What was changed that needs a reason: everything but contact details, the notes for a leaver and the reason itself. */
@@ -261,7 +261,7 @@ export const EmployeesPanel: React.FC = () => {
       const body = {
         employeeNumber: f.employeeNumber.trim(), firstName: f.firstName.trim(), lastName: f.lastName.trim(), email: f.email.trim() || null, extension: f.extension.trim() || null, teamId: f.teamId || null, primaryGroupId: f.primaryGroupId || null,
         eligibleGroupIds: [...new Set([...f.eligibleGroupIds, ...(f.primaryGroupId ? [f.primaryGroupId] : [])])], status: f.status, employmentType: f.employmentType, weeklyContractHours: f.weeklyContractHours,
-        maxWeeklyHours: f.maxWeeklyHours, workDaysPerWeek: f.workDaysPerWeek, minRestHours: f.minRestHours, maxConsecutiveDays: f.maxConsecutiveDays, allowWeekend: f.allowWeekend, allowOvernight: f.allowOvernight, nightShiftConsent: f.nightShiftConsent,
+        maxWeeklyHours: f.maxWeeklyHours, workDaysPerWeek: f.workDaysPerWeek, minRestHours: f.minRestHours, maxConsecutiveDays: f.maxConsecutiveDays, minDaysOffTogether: f.minDaysOffTogether, minWeekendsOffMonth: f.minWeekendsOffMonth, allowWeekend: f.allowWeekend, allowOvernight: f.allowOvernight, nightShiftConsent: f.nightShiftConsent,
         preferredTemplateId: f.preferredTemplateId || null, shiftConsistency: f.shiftConsistency, fixedStartSlot: slotOfTime(f.fixedStart), isSupervisor: f.isSupervisor, isManager: f.isManager, reportsTo: f.reportsTo || null,
         ...(edit.id ? { reason: f.reason.trim() || undefined } : {}),
         ...(f.status === 'TERMINATED' && edit.orig?.status !== 'TERMINATED' ? { terminationDate: f.lastDay || null, terminationReason: f.leaveReason.trim() || null } : {}),
@@ -519,6 +519,8 @@ export const EmployeesPanel: React.FC = () => {
               <Field label="Days per week (max)"><Input type="number" min={1} max={7} value={edit.form.workDaysPerWeek} onChange={num('workDaysPerWeek')} /></Field>
               <Field label="Rest between shifts (h)"><Input type="number" min={0} max={24} step={0.5} value={edit.form.minRestHours} onChange={num('minRestHours')} /></Field>
               <Field label="Days in a row (max)"><Input type="number" min={1} max={14} value={edit.form.maxConsecutiveDays} onChange={num('maxConsecutiveDays')} /></Field>
+              <Field label="Days off together (min)" hint="Side by side, every week. 0 = no rule"><Input type="number" min={0} max={3} value={edit.form.minDaysOffTogether} onChange={num('minDaysOffTogether')} /></Field>
+              <Field label="Weekends off in a month (min)" hint="Full weekends, every month. 0 = no rule"><Input type="number" min={0} max={4} value={edit.form.minWeekendsOffMonth} onChange={num('minWeekendsOffMonth')} /></Field>
             </div></div>
             <div className="space-y-2 border-t border-[#E5E5E0] pt-3"><h5 className="text-[12px] font-semibold text-[#171717]">Shifts</h5><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <Field label="Weekends"><Select value={edit.form.allowWeekend ? 'y' : 'n'} onChange={(e) => set('allowWeekend', e.target.value === 'y')}><option value="y">Can work weekends</option><option value="n">Weekdays only</option></Select></Field>

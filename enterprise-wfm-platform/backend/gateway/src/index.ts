@@ -32,6 +32,7 @@ import { poolingRoutes, rollupRoutes, sitesRoutes } from './modules/sites.ts';
 import { bidsAdmin, bidsMe, startBidTicker } from './modules/bids/routes.ts';
 import { teamToday } from './modules/teamToday.ts';
 import { approvalsMe } from './modules/approvalsMe.ts';
+import { leaveAdmin } from './modules/leaveLedger.ts';
 import { offersAdmin, offersMe, offerPolicyRoutes, startOfferTicker } from './modules/offers/routes.ts';
 import { intraday } from './modules/intradayRoutes.ts';
 import { overview } from './modules/overviewToday.ts';
@@ -49,6 +50,7 @@ import { startAdherenceWatch, stopAdherenceWatch } from './modules/adherenceWatc
 import { savedViews } from './modules/savedViews.ts';
 import { workforce } from './modules/workforceRoutes.ts';
 import { timeOffImpact } from './modules/timeOffImpact.ts';
+import { offRequestsAdmin, offRequestsMe } from './modules/offRequests.ts';
 import { approvalRoutes, startApprovalTicker } from './modules/approvals.ts';
 import { orgChart } from './modules/orgChart.ts';
 import { scheduling, invalidateLive } from './modules/scheduleRoutes.ts';
@@ -166,6 +168,7 @@ api.use('/config', sitesRoutes);            // sites, required skills per group,
 api.use('/config', policyRoutes);          // activity definitions, scheduling policy
 api.use('/holidays', holidayCalendar);      // public holidays by country, added to the holiday calendar
 api.use('/compliance', complianceRoutes);   // labour-law packs and where they apply
+api.use('/me/off-requests', offRequestsMe);     // asking for weekends off together, or a standing rule on days off, the person's side
 api.use('/me/approvals', approvalsMe);        // what a team lead can approve from the portal and the mobile app
 api.use('/me/team', teamToday);               // who is working today: team leads see their people, colleagues what the organisation allows
 api.use('/me/bids', bidsMe);                 // shift bidding, the person's side
@@ -173,6 +176,7 @@ api.use('/me/offers', offersMe);             // voluntary time off and overtime 
 api.use('/me/swaps', swapsMe);               // shift swaps and the giveaway board, the person's side
 api.use('/me', selfServiceRoutes);           // the signed-in person's own schedule, requests and inbox
 api.use('/self-service/offer-policy', offerPolicyRoutes);   // how offers are ordered
+api.use('/self-service', leaveAdmin);          // closing a leave year, and adjusting a person's days by hand
 api.use('/self-service', selfAdminRoutes);  // rules for what can be approved automatically, and logins for employees
 api.use('/data', ingestion);               // staged imports, coverage, quality, live feed
 api.use('/forecast/pooling', poolingRoutes); // shared pool against separate pools
@@ -181,6 +185,7 @@ api.use('/forecast', forecast);            // versions, leaderboard, adjustments
 api.use('/workforce/loans', loans);       // lending a person to a group at another site, for dates
 api.use('/workforce', approvalRoutes);       // cover while a supervisor is away
 api.use('/workforce', orgChart);             // reporting lines as a chart
+api.use('/workforce/off-requests', offRequestsAdmin);   // the approver's side of those requests (before /workforce so the path is not read as an id)
 api.use('/workforce', timeOffImpact);      // time-off approval with cover impact, bulk decide (before /workforce so /time-off/bulk-decide is not read as an id)
 api.use('/workforce', workforce);          // employees, teams, skills, availability, time off
 api.use('/workforce', glance);            // an employee's week, today's status, adherence and leave balances (GET /workforce/employees/:id/glance)

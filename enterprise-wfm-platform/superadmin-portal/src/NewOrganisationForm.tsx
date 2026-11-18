@@ -2,12 +2,12 @@
  * New organisation: one page, no wizard. Sections on the left, a live summary on the right,
  * and a sticky action bar. Required fields are marked and checked together on submit.
  */
+import { ZoneSelect } from './ZoneSelect';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MODULE_LABELS, type CountryTemplate, type Plan } from './PlansSettings';
 
 interface Props {
   existingCodes: string[];
-  timezones: string[];
   currencies: string[];
   plans: Plan[];
   templates: CountryTemplate[];
@@ -62,7 +62,7 @@ const Field: React.FC<{ label: string; required?: boolean; error?: string; hint?
   </div>
 );
 
-export const NewOrganisationForm: React.FC<Props> = ({ existingCodes, timezones, currencies, plans, templates, packs, onSubmit, onCancel, onDone }) => {
+export const NewOrganisationForm: React.FC<Props> = ({ existingCodes, currencies, plans, templates, packs, onSubmit, onCancel, onDone }) => {
   const [f, setF] = useState<Form>(blank);
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -320,7 +320,7 @@ export const NewOrganisationForm: React.FC<Props> = ({ existingCodes, timezones,
             <input id="f-mainSiteName" className={inputCls} placeholder="Head office" maxLength={80} {...text('mainSiteName')} />
           </Field>
           <Field label="Timezone" required htmlFor="f-timezone">
-            <select id="f-timezone" className={inputCls} value={f.timezone} onChange={(e) => setRegional('timezone', e.target.value)}>{timezones.map((z) => <option key={z} value={z}>{z}</option>)}</select>
+            <ZoneSelect id="f-timezone" value={f.timezone} onChange={(z) => setRegional('timezone', z)} />
           </Field>
           <Field label="Currency" required htmlFor="f-currency">
             <select id="f-currency" className={inputCls} value={f.currency} onChange={(e) => setRegional('currency', e.target.value)}>{currencies.map((z) => <option key={z} value={z}>{z}</option>)}</select>

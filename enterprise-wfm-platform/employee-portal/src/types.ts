@@ -25,7 +25,7 @@ export type TimeOff = {
   decidedBy: string | null; decidedAt: string | null; autoDecided: boolean; decisionNote: string | null; createdAt: string;
   decidedLevel?: 'SUPERVISOR' | 'MANAGER' | null; escalatedAt?: string | null; waitingFor?: { level: 'SUPERVISOR' | 'MANAGER'; names: string[] } | null;
 };
-export type TimeOffBalance = { type: TimeOffType; entitledDays: number; usedDays: number; remainingDays: number };
+export type TimeOffBalance = { type: TimeOffType; entitledDays: number; usedDays: number; remainingDays: number; carriedOverDays?: number; expiredDays?: number; adjustedDays?: number; carryExpiresOn?: string | null; estimated?: boolean };
 export type TimeOffRules = { autoApprove: boolean; minNoticeDays: number; maxOffPercent: number };
 export type TimeOffCheck = { days: number; blockers: string[]; willBeApprovedAutomatically: boolean; reasonsForReview: string[] };
 
@@ -53,7 +53,7 @@ export type Offer = {
 
 /** What the Schedule day-detail panel hands off when the person wants to act on a specific day -- carried through
     App -> Requests -> the relevant sub-tab, which pre-fills its form from it instead of starting blank. */
-export type RequestPrefill = { tab: 'timeoff'; date?: string } | { tab: 'swaps'; shiftId?: string } | { tab: 'opportunities' };
+export type RequestPrefill = { tab: 'timeoff'; date?: string } | { tab: 'swaps'; shiftId?: string } | { tab: 'opportunities' } | { tab: 'daysoff' };
 
 export type BidPattern = { id: string; name: string; days: string[]; startTime: string; endTime: string; overnight: boolean; paidHours: number; capacity: number; templateName: string | null; fits: boolean; why: string };
 export type Bid = {
@@ -64,4 +64,15 @@ export type Bid = {
 /** What a team lead may decide from the portal: time-off and swap requests waiting for them. */
 export type ApprovalTimeOff = TimeOff & { employeeName: string; team: string | null; teamSize: number; teamOff: number; escalated: boolean };
 export type ApprovalSwap = Swap & { warnings: string[]; escalated: boolean };
-export type Approvals = { access: boolean; timeOff: ApprovalTimeOff[]; swaps: ApprovalSwap[]; truncated: boolean };
+/** A request about days off: weekends off together for some dates, or a standing rule (days off together each week, weekends off each month). */
+export type OffRequestDto = {
+  id: string; kind: 'WEEKEND_OFF' | 'STANDING'; startDate: string | null; endDate: string | null; minDaysTogether: number | null; minWeekendsMonth: number | null;
+  status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; reason: string; decidedBy: string | null; decisionNote: string; createdAt: string; escalatedAt?: string | null;
+  waitingFor?: { level: 'SUPERVISOR' | 'MANAGER'; names: string[] } | null;
+};
+export type OffLimits = { own: { daysTogether: number; weekendsMonth: number }; company: { daysTogether: number; weekendsMonth: number }; pack: { daysTogether: number; weekendsMonth: number }; effective: { daysTogether: number; weekendsMonth: number } };
+export type ApprovalOff = OffRequestDto & {
+  employeeName: string; team: string | null; escalated: boolean;
+  context: { weekends: { from: string; to: string }[]; scheduledShifts: number; teamSize: number; teamOff: number } | { now: { daysTogether: number; weekendsMonth: number }; effective: { daysTogether: number; weekendsMonth: number }; after: { daysTogether: number; weekendsMonth: number } } | null;
+};
+export type Approvals = { access: boolean; timeOff: ApprovalTimeOff[]; swaps: ApprovalSwap[]; offRequests?: ApprovalOff[]; truncated: boolean };

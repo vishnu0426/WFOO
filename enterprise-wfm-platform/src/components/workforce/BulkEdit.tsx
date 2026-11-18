@@ -76,11 +76,11 @@ export const BulkEdit: React.FC<{
   const [on, setOn] = useState<Record<string, boolean>>(preset ? { [preset]: true } : {});
   const flip = (k: string) => setOn((s) => ({ ...s, [k]: !s[k] }));
   const [v, setV] = useState({
-    teamId: '', primaryGroupId: '', status: 'ACTIVE' as EmployeeStatus, employmentType: 'FULL_TIME' as EmploymentType, weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6,
+    teamId: '', primaryGroupId: '', status: 'ACTIVE' as EmployeeStatus, employmentType: 'FULL_TIME' as EmploymentType, weeklyContractHours: 40, maxWeeklyHours: 40, workDaysPerWeek: 5, minRestHours: 11, maxConsecutiveDays: 6, minDaysOffTogether: 2, minWeekendsOffMonth: 2,
     allowWeekend: true, allowOvernight: false, nightShiftConsent: false, preferredTemplateId: '', shiftConsistency: 'DEFAULT' as ShiftConsistency, fixedStart: '',
   });
   const set = <K extends keyof typeof v>(k: K, x: (typeof v)[K]) => setV((s) => ({ ...s, [k]: x }));
-  const num = (k: 'weeklyContractHours' | 'maxWeeklyHours' | 'workDaysPerWeek' | 'minRestHours' | 'maxConsecutiveDays') => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value));
+  const num = (k: 'weeklyContractHours' | 'maxWeeklyHours' | 'workDaysPerWeek' | 'minRestHours' | 'maxConsecutiveDays' | 'minDaysOffTogether' | 'minWeekendsOffMonth') => (e: React.ChangeEvent<HTMLInputElement>) => set(k, Number(e.target.value));
   const [addGroups, setAddGroups] = useState<string[]>([]);
   const [removeGroups, setRemoveGroups] = useState<string[]>([]);
   const [addSkills, setAddSkills] = useState<Record<string, number>>({});
@@ -103,6 +103,8 @@ export const BulkEdit: React.FC<{
   if (on.days) changes.workDaysPerWeek = v.workDaysPerWeek;
   if (on.rest) changes.minRestHours = v.minRestHours;
   if (on.run) changes.maxConsecutiveDays = v.maxConsecutiveDays;
+  if (on.offTogether) changes.minDaysOffTogether = v.minDaysOffTogether;
+  if (on.weekendsOff) changes.minWeekendsOffMonth = v.minWeekendsOffMonth;
   if (on.weekend) changes.allowWeekend = v.allowWeekend;
   if (on.overnight) changes.allowOvernight = v.allowOvernight;
   if (on.consent) changes.nightShiftConsent = v.nightShiftConsent;
@@ -148,6 +150,8 @@ export const BulkEdit: React.FC<{
         <Row on={!!on.days} toggle={() => flip('days')} label="Days per week (max)"><Input type="number" min={1} max={7} value={v.workDaysPerWeek} onChange={num('workDaysPerWeek')} /></Row>
         <Row on={!!on.rest} toggle={() => flip('rest')} label="Rest between shifts (h)"><Input type="number" min={0} max={24} step={0.5} value={v.minRestHours} onChange={num('minRestHours')} /></Row>
         <Row on={!!on.run} toggle={() => flip('run')} label="Days in a row (max)"><Input type="number" min={1} max={14} value={v.maxConsecutiveDays} onChange={num('maxConsecutiveDays')} /></Row>
+        <Row on={!!on.offTogether} toggle={() => flip('offTogether')} label="Days off together (min)"><Input type="number" min={0} max={3} value={v.minDaysOffTogether} onChange={num('minDaysOffTogether')} /></Row>
+        <Row on={!!on.weekendsOff} toggle={() => flip('weekendsOff')} label="Weekends off in a month (min)"><Input type="number" min={0} max={4} value={v.minWeekendsOffMonth} onChange={num('minWeekendsOffMonth')} /></Row>
         <Row on={!!on.weekend} toggle={() => flip('weekend')} label="Weekends"><Select value={v.allowWeekend ? 'y' : 'n'} onChange={(e) => set('allowWeekend', e.target.value === 'y')}><option value="y">Can work weekends</option><option value="n">Weekdays only</option></Select></Row>
         <Row on={!!on.overnight} toggle={() => flip('overnight')} label="Overnight shifts"><Select value={v.allowOvernight ? 'y' : 'n'} onChange={(e) => set('allowOvernight', e.target.value === 'y')}><option value="n">No</option><option value="y">Allowed</option></Select></Row>
         <Row on={!!on.consent} toggle={() => flip('consent')} label="Night work consent"><Select value={v.nightShiftConsent ? 'y' : 'n'} onChange={(e) => set('nightShiftConsent', e.target.value === 'y')}><option value="n">Not given</option><option value="y">Consented</option></Select></Row>

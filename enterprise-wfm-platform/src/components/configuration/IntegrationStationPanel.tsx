@@ -33,6 +33,7 @@ const agoText = (iso: string | null) => {
 const CONFIG_LABEL: Record<string, string> = { subject: "Subject listened to", natsUser: "User name", natsPass: "Password", tlsRejectUnauthorized: "Server certificate" };
 const configRow = (k: string, v: string): { label: string; value: string; warn?: string } =>
   k === "tlsRejectUnauthorized" ? (String(v) === "false" ? { label: CONFIG_LABEL[k], value: "Not checked", warn: "The connection does not verify the server's certificate, so it could be talking to an impostor. Fine on a private network, not over the internet." } : { label: CONFIG_LABEL[k], value: "Checked" })
+    : k === "tlsCaCert" ? { label: "CA certificate", value: v ? "Uploaded" : "None" }
     : { label: CONFIG_LABEL[k] ?? k, value: String(v) };
 
 type DetailTab = "overview" | "live" | "runs" | "mapping" | "rules";
@@ -41,14 +42,15 @@ type TestStep = { name: string; status: "ok" | "warn" | "fail"; detail: string }
 const STEP_MARK: Record<TestStep["status"], { icon: string; cls: string }> = { ok: { icon: "✓", cls: "text-[#2A7553]" }, warn: { icon: "!", cls: "text-[#8F6200]" }, fail: { icon: "✕", cls: "text-[#BC3F3F]" } };
 
 /** Checks a live connector step by step on a connection of its own (the running feed is not touched, nothing is saved). */
-const ConnectionTest: React.FC<{ connector: Connector; canWrite: boolean }> = ({ connector, canWrite }) => {
+const ConnectionTest: React.FC<{ connector?: Connector; draft?: { preset: string; config: Record<string, string> }; canWrite: boolean }> = ({ connector, draft, canWrite }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ ok: boolean; steps: TestStep[] } | null>(null);
-  useEffect(() => { setResult(null); setError(""); }, [connector.id]);
+  const settingsKey = connector?.id ?? JSON.stringify(draft);       // new settings, new answer: an old result must not look like it is about what is on screen now
+  useEffect(() => { setResult(null); setError(""); }, [settingsKey]);
   const run = async () => {
     setBusy(true); setError(""); setResult(null);
-    try { setResult(await api(`/integrations/${connector.id}/test-connection`, { method: "POST", timeoutMs: 45_000 })); }
+    try { setResult(connector ? await api(`/integrations/${connector.id}/test-connection`, { method: "POST", timeoutMs: 45_000 }) : await api("/integrations/test-connection", { method: "POST", body: draft, timeoutMs: 45_000 })); }
     catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
   return (
@@ -58,7 +60,7 @@ const ConnectionTest: React.FC<{ connector: Connector; canWrite: boolean }> = ({
         <Btn disabled={!canWrite || busy} onClick={run} title={canWrite ? undefined : "You need permission to change configuration"}>{busy ? "Testing…" : "Test connection"}</Btn>
         {busy && <span className="text-[12px] text-[#6B6B6B]">Listening for about 8 seconds to see whether messages arrive.</span>}
       </div>
-      <p className="text-[12px] text-[#6B6B6B]">Opens a separate connection with these settings. It does not disturb the live feed and nothing is saved.</p>
+      <p className="text-[12px] text-[#6B6B6B]">Opens a separate connection with these settings. {connector ? "It does not disturb the live feed and nothing is saved." : "Nothing is saved until you press Create connector."}</p>
       {error && <Banner kind="err" onClose={() => setError("")}>{error}</Banner>}
       {result && (
         <ul className={`rounded-lg border divide-y text-[13px] ${result.ok ? "border-[#2F7D5A]/30" : "border-[#E9D9B4]"}`} aria-live="polite">
@@ -279,10 +281,38 @@ export const IntegrationStationPanel: React.FC<{ focusId?: string; onChange?: ()
 
 // ---------------------------------------------------------------- create
 
+/** A certificate or key file: chosen from disk (read as text, never uploaded anywhere until Create), with a summary for a CA certificate and a way to remove it. */
+const FileField: React.FC<{ f: IntegrationField; value: string; onChange: (v: string) => void }> = ({ f, value, onChange }) => {
+  const [info, setInfo] = useState<{ subject: string; validTo: string; count: number; selfSigned: boolean } | null>(null);
+  const [problem, setProblem] = useState("");
+  const isCa = f.key === "tlsCaCert";
+  useEffect(() => {
+    setInfo(null); setProblem("");
+    if (!isCa || !value.trim()) return;
+    let live = true;
+    api<{ subject: string; validTo: string; count: number; selfSigned: boolean }>("/integrations/inspect-certificate", { method: "POST", body: { pem: value } })
+      .then((r) => live && setInfo(r)).catch((e: any) => live && setProblem(e.message));
+    return () => { live = false; };
+  }, [value, isCa]);
+  const pick = async (file?: File) => { if (!file) return; if (file.size > 40_000) { setProblem("That file is too large to be a certificate."); return; } onChange(await file.text()); };
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex"><input type="file" accept=".pem,.crt,.cer,.key,text/plain" className="hidden" aria-label={f.label} onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ""; }} /><span className="cursor-pointer px-3 py-1.5 rounded-md border border-[#E5E5E0] text-[13px] hover:bg-[#FAFAF8]">{value ? "Replace file" : "Choose file"}</span></label>
+        {value && <button type="button" className="text-[12px] underline text-[#6B6B6B]" onClick={() => onChange("")}>Remove</button>}
+        {!value && <span className="text-[12px] text-[#6B6B6B]">or paste it below</span>}
+      </div>
+      {info && <p className="text-[12px] text-[#2A7553]">✓ {info.subject}{info.count > 1 ? ` and ${info.count - 1} more` : ""}, valid until {info.validTo}.</p>}
+      {problem && <p className="text-[12px] text-[#BC3F3F]" role="alert">{problem}</p>}
+      {!value && <textarea className="w-full p-2 border border-[#E5E5E0] rounded text-[12px] font-mono h-16" spellCheck={false} placeholder="-----BEGIN CERTIFICATE-----" value={value} onChange={(e) => onChange(e.target.value)} />}
+    </div>
+  );
+};
+
 export const FieldInput: React.FC<{ f: IntegrationField; value: string; onChange: (v: string) => void }> = ({ f, value, onChange }) => {
-  if (f.kind === "select") return <Select value={value} onChange={(e) => onChange(e.target.value)}><option value="">Choose…</option>{f.options?.map((o) => <option key={o} value={o}>{o}</option>)}</Select>;
+  if (f.kind === "select") return <Select value={value || f.defaultValue || ""} onChange={(e) => onChange(e.target.value)}>{!f.defaultValue && <option value="">Choose…</option>}{f.options?.map((o) => <option key={o} value={o}>{f.optionLabels?.[o] ?? o}</option>)}</Select>;
   if (f.kind === "textarea") return <textarea className="w-full p-2 border border-[#E5E5E0] rounded text-[12px] font-mono h-32" spellCheck={false} placeholder="SELECT queue, day, time, volume, ahtSec FROM ... WHERE day BETWEEN {from} AND {to}" value={value} onChange={(e) => onChange(e.target.value)} />;
-  if (f.kind === "file") return <textarea className="w-full p-2 border border-[#E5E5E0] rounded text-[12px] font-mono h-20" placeholder="Paste the file's contents" value={value} onChange={(e) => onChange(e.target.value)} />;
+  if (f.kind === "file") return <FileField f={f} value={value} onChange={onChange} />;
   return <Input type={f.kind === "password" ? "password" : "text"} value={value} onChange={(e) => onChange(e.target.value)} />;
 };
 
@@ -296,6 +326,7 @@ const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog;
   const [groupId, setGroupId] = useState("");
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => setConfig({}), [presetId]);
+  const shown = (f: IntegrationField) => !f.showWhen || (config[f.showWhen.key] || preset?.fields.find((x) => x.key === f.showWhen!.key)?.defaultValue || "") === f.showWhen.value;
   const [busy, setBusy] = useState(false);
   const { session } = useForecast();
   const [schedule, setSchedule] = useState<ScheduleDraft>(NO_SCHEDULE);
@@ -304,7 +335,7 @@ const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog;
   const create = async () => {
     setBusy(true);
     try {
-      const c = await api<ConnectorCreated>("/integrations", { method: "POST", body: { category, preset: presetId, name: name || `${preset?.label} connector`, wfmGroupId: groupId || null, config, ...(feeds && preset?.canPull && (schedule.scheduleAt || schedule.scheduleMin) ? schedule : {}) } });
+      const c = await api<ConnectorCreated>("/integrations", { method: "POST", body: { category, preset: presetId, name: name || `${preset?.label} connector`, wfmGroupId: groupId || null, config: Object.fromEntries(Object.entries(config).filter(([k]) => { const f = preset?.fields.find((x) => x.key === k); return !f || shown(f); })), ...(feeds && preset?.canPull && (schedule.scheduleAt || schedule.scheduleMin) ? schedule : {}) } });
       onCreated(c);
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
   };
@@ -320,7 +351,7 @@ const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog;
       {preset && <ProviderIntro preset={preset} />}
       {preset && preset.fields.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {preset.fields.map((f) => (
+          {preset.fields.filter(shown).map((f) => (
             <Field key={f.key} label={f.label + (f.required ? " *" : "")} hint={f.help}>
               <FieldInput f={f} value={config[f.key] ?? ""} onChange={(v) => setConfig((c) => ({ ...c, [f.key]: v }))} />
             </Field>
@@ -335,6 +366,7 @@ const NewConnectorForm: React.FC<{ feeds?: boolean; catalog: IntegrationCatalog;
         </div>
       )}
       {preset && preset.fields.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No credentials to enter -- we issue an API key on creation and your own connector script uses it.</p>}
+      {preset?.method === "STREAM_SUBSCRIBE" && <ConnectionTest draft={{ preset: presetId, config: Object.fromEntries(preset.fields.filter(shown).map((f) => [f.key, config[f.key] ?? f.defaultValue ?? ""]).filter(([, v]) => v !== "")) }} canWrite />}
       <Btn variant="primary" disabled={busy} onClick={create}>Create connector</Btn>
     </div>
   );

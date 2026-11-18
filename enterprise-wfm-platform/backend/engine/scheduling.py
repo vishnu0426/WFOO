@@ -298,6 +298,25 @@ def greedy(req, emps, opts, by_ed, required, carry, anchors_out=None):
             b += 1
         return a + 1 + b
 
+    blocks_of = {e: backends.off_blocks(emp, req.days, week_offset(req)) for e, emp in emps.items() if emp.min_days_off_together > 0}
+
+    def keeps_off_block(e, d):
+        """Working day d must leave the person some block of side-by-side days off in its pay week (when they have that rule)."""
+        bl = blocks_of.get(e, {}).get((week_offset(req) + d) // 7)
+        return not bl or any(all(x != d and (e, x) not in chosen for x in blk) for blk in bl)
+
+    weekend_plan = {e: backends.off_weekends(emp, req) for e, emp in emps.items() if emp.weekend_need}
+
+    def keeps_off_weekends(e, d):
+        """Working day d must leave the person enough of its month's weekends fully off (when they have that rule). A weekend already spoiled stays spoiled."""
+        for weekends, need in weekend_plan.get(e, ()):
+            hit = next((wk for wk in weekends if d in wk), None)
+            if hit is None or any((e, x) in chosen for x in hit):
+                continue
+            if sum(1 for wk in weekends if wk != hit and not any((e, x) in chosen for x in wk)) < need:
+                return False
+        return True
+
     def allowed(e, emp, d, o):
         wk = (week_offset(req) + d) // 7
         a = anch.get(e)
@@ -313,6 +332,10 @@ def greedy(req, emps, opts, by_ed, required, carry, anchors_out=None):
         if nxt is not None and (o.start_slot + o.length_slots) - SPD > opts[nxt].start_slot - rest_needed(req, emp, d + 1):
             return False
         if emp.max_consecutive > 0 and run_through(e, d) > emp.max_consecutive:
+            return False
+        if not keeps_off_block(e, d):
+            return False
+        if not keeps_off_weekends(e, d):
             return False
         return True
 
@@ -818,6 +841,32 @@ def solve_cpsat(req, carry=None, weekend_prior=None, cancel=None, start=None):
             n_ext = sum(extd[d0:d0 + k + 1])
             if window and len(window) + n_ext > k:
                 m.Add(LSUM(window) <= max(0, k - n_ext))
+
+    # days off side by side: in every pay week inside the period one block of the required length is free of work
+    for e, emp in emps.items():
+        for blocks in backends.off_blocks(emp, days, week_offset(req)).values():
+            days_of = [[x[i] for d in blk for i in by_ed.get((e, d), [])] for blk in blocks]
+            if any(not v for v in days_of):
+                continue                                   # a block with nothing to work in it is off already
+            flags = [m.NewBoolVar(f"off{e}_{blk[0]}") for blk in blocks]
+            for f, vs in zip(flags, days_of):
+                for v in vs:
+                    m.AddImplication(f, v.Not())
+            m.AddBoolOr(flags)
+
+    # full weekends off in a calendar month: enough of the month's weekends are free of work
+    for e, emp in emps.items():
+        for mi, (weekends, need) in enumerate(backends.off_weekends(emp, req)):
+            days_of = [[x[i] for d in wk for i in by_ed.get((e, d), [])] for wk in weekends]
+            need -= sum(1 for vs in days_of if not vs)         # a weekend with nothing to work in it is off already
+            if need <= 0:
+                continue
+            pairs = [(wk, vs) for wk, vs in zip(weekends, days_of) if vs]
+            flags = [m.NewBoolVar(f"wkend{e}_{mi}_{wk[0]}") for wk, _ in pairs]
+            for f, (_, vs) in zip(flags, pairs):
+                for v in vs:
+                    m.AddImplication(f, v.Not())
+            m.Add(LSUM(flags) >= min(need, len(flags)))
 
     # weekly hours (hard max, soft contract minimum for weeks fully inside the period) and days per week
     fair_hint = None

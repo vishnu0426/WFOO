@@ -31,6 +31,7 @@ import { readinessOf } from './readiness.ts';
 import { readFeed } from './feedLog.ts';
 import { checkSchedule, firstRunAt, type Schedule } from './schedule.ts';
 import { openFields } from '../../secrets.ts';
+import { CA_KEY, inspectCa } from './natsTls.ts';
 
 export const integrationsAdmin = Router();
 export const integrationsPublic = Router();
@@ -70,6 +71,20 @@ integrationsAdmin.get('/', requires('config:read'), async (req, res) => {
             (SELECT coalesce(sum(r.rows_ok), 0)::int FROM integration_runs r WHERE r.tenant_id = c.tenant_id AND r.connector_id = c.id AND r.started_at > now() - interval '24 hours') AS rows_24h
        FROM integration_connectors c WHERE c.tenant_id = :t AND ($1::uuid IS NULL OR c.wfm_group_id = $1 OR c.wfm_group_id IS NULL) ORDER BY c.name`, [groupId]));
   res.json(rows.map((r) => ({ ...connectorDto(r), rows24h: r.method === 'STREAM_SUBSCRIBE' ? null : r.rows24h })));      // a stream keeps no per-delivery history, so it has no count to show
+});
+
+/** Tries a live (NATS) connector's settings before anything is saved, step by step. Nothing is stored. */
+integrationsAdmin.post('/test-connection', requires('config:write'), async (req, res) => {
+  const b = parse(z.object({ preset: z.string().min(1), config: z.record(z.string(), z.string()).default({}) }), req.body);
+  const preset = presetById(b.preset);
+  if (!preset || preset.method !== 'STREAM_SUBSCRIBE') throw bad('This provider is not a live subscription, so there is no connection to try from here.');
+  res.json(await testNatsConnection(b.config));
+});
+
+/** Reads an uploaded CA certificate and says what it is, or why it was refused. Nothing is stored. */
+integrationsAdmin.post('/inspect-certificate', requires('config:read'), async (req, res) => {
+  const b = parse(z.object({ pem: z.string().min(1).max(40_000) }), req.body);
+  try { res.json(inspectCa(b.pem)); } catch (e: any) { throw bad(e.message); }
 });
 
 integrationsAdmin.get('/:id', requires('config:read'), async (req, res) => {
@@ -359,6 +374,7 @@ integrationsAdmin.put('/:id/entity-matches', requires('config:write'), async (re
 
 /** The address a connector will call may not be this server's own network, a metadata service, or (unless an administrator listed it) a private network: see netGuard.ts. Said when it is saved, so it is not first found out at 3 a.m. */
 async function checkConnectorTargets(config: Record<string, string>) {
+  if (config[CA_KEY]?.trim()) { try { inspectCa(config[CA_KEY]); } catch (e: any) { throw bad(e.message); } }
   try {
     if (config.baseUrl) await checkTarget(new URL(/^[a-z]+:\/\//i.test(config.baseUrl) ? config.baseUrl : `https://${config.baseUrl}`).hostname);
     if (config.host) await checkTarget(config.host.trim());

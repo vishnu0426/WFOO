@@ -53,6 +53,12 @@ services:
     image: wfm-engine:latest
     environment:
       ENGINE_ADDR: 127.0.0.1:50051        # loopback: the engine has no authentication
+      # Forecast fits run in several worker processes; without these each process also starts one maths thread per core, so 4 workers on 8 cores
+      # became ~90 threads fighting for the CPU (load 22, minutes instead of seconds). One thread per worker; the solver has its own threads.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
       TIMEFOLD_URL: ${TIMEFOLD_URL:-}     # empty = Timefold is not used
       TIMEFOLD_TOKEN: ${TIMEFOLD_TOKEN:-}
 

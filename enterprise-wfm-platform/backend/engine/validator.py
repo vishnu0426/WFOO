@@ -165,6 +165,30 @@ def validate(req):
         # hours and days in each pay week; the day's hours
         weeks = defaultdict(lambda: [0, 0, set()])         # week -> [paid slots, (unused), days seen]
         own_weeks = {(woff + s.day) // 7 for s in mine}     # weeks this roster puts the person to work in: the others are not judged here
+        # days off side by side: a pay week that lies wholly inside the period needs a block of them (days worked for other groups and approved leave count as worked / off as above)
+        need_off = lim.min_days_off_together
+        if 0 < need_off <= 7:
+            for wk in sorted(own_weeks):
+                first_day = wk * 7 - woff
+                if first_day < 0 or first_day + 6 > req.days - 1:
+                    continue
+                best = run_off = 0
+                for d in range(first_day, first_day + 7):
+                    run_off = 0 if d in worked else run_off + 1
+                    best = max(best, run_off)
+                if best < need_off:
+                    add("HARD", "DAYS_OFF_TOGETHER", e, first_day, f"{name(e)} has at most {best} {'day' if best == 1 else 'days'} off together in the week from day {first_day + 1} (needs {need_off})")
+        # full weekends off in a calendar month: judged for a month the roster puts the person to work in (days worked for other groups count as worked)
+        mine_days = {s.day for s in mine}
+        for mi, month in enumerate(req.weekend_months):
+            need = lim.weekend_need[mi] if mi < len(lim.weekend_need) else 0
+            if need <= 0 or not any(month.first_day <= d <= month.last_day for d in mine_days):
+                continue
+            sets = [list(w.days) for w in month.weekends if w.days]
+            need = min(need, len(sets))
+            off = sum(1 for days in sets if not any(d in worked for d in days))
+            if off < need:
+                add("HARD", "WEEKENDS_OFF", e, month.first_day, f"{name(e)} has {off} full {'weekend' if off == 1 else 'weekends'} off in the stretch from day {month.first_day + 1} (needs {need})")
         for s in mine:
             w = weeks[(woff + s.day) // 7]
             w[0] += s.paid
