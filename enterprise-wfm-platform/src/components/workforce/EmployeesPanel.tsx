@@ -81,7 +81,8 @@ const EMPLOYEE_NOTES = [
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
 type Preview = {
-  dryRun: boolean; rows: number; diff: { new: number; updated: number; unchanged: number }; errors: { line: number; message: string }[]; errorCount: number;
+  dryRun: boolean; rows: number; diff: { new: number; updated: number; unchanged: number }; errors: { line: number; key?: string; message: string }[]; errorCount: number;
+  problemGroups?: { key: string; count: number; firstLine: number; example: string }[]; dateOrder?: { detected: string; used: 'DMY' | 'MDY' | null; needsChoice: boolean };
   sample: { line: number; name: string; employeeNumber: string; action: string }[]; committed: boolean;
   headers: string[]; headerSample: string[]; columnMap: Record<string, number>; mapped: boolean;
   capacity?: { max: number; current: number; remaining: number; required: number; exceeded: boolean; warning: string | null };
@@ -188,6 +189,7 @@ export const EmployeesPanel: React.FC = () => {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [stopOnError, setStopOnError] = useState(false);
+  const [dateOrder, setDateOrder] = useState<'DMY' | 'MDY' | null>(null);      // asked for only when the file's dates could be read either way
   const canWrite = can('workforce:write');
   const licenseReq = useApi<LicenseUsageReport>('/license', [tick]);
   const empCapacity = licenseReq.data?.capacity?.employees;
@@ -277,21 +279,21 @@ export const EmployeesPanel: React.FC = () => {
   };
 
   const check = async (f: File) => {
-    setBusy(true); setError(''); setPreview(null); setShowMapper(false);
+    setBusy(true); setError(''); setPreview(null); setShowMapper(false); setDateOrder(null);
     try { const text = /\.xlsx$/i.test(f.name) ? await xlsxToCsv(f) : await f.text(); setCsv(text); setPreview(await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv: text, dryRun: true } })); }
     catch (e: any) { setError(e.message); } finally { setBusy(false); if (file.current) file.current.value = ''; }
   };
   /** Re-runs the dry run against a column mapping -- a header dragged onto a target, or one cleared back to "not mapped". */
-  const recheck = async (map: Record<string, number>) => {
+  const recheck = async (map: Record<string, number>, order: 'DMY' | 'MDY' | null = dateOrder) => {
     setBusy(true); setError('');
-    try { setPreview(await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: true, columnMap: Object.fromEntries(Object.entries(map).filter(([, v]) => v >= 0)) } })); }
+    try { setPreview(await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: true, columnMap: Object.fromEntries(Object.entries(map).filter(([, v]) => v >= 0)), ...(order ? { dateOrder: order } : {}) } })); }
     catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
   const mapTo = (key: string, colIndex: number) => { const next = { ...colMap, [key]: colIndex }; setColMap(next); recheck(next); };
   const commit = async () => {
     setBusy(true); setError('');
     try {
-      const r = await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: false, stopOnError, columnMap: Object.fromEntries(Object.entries(colMap).filter(([, v]) => v >= 0)) } });
+      const r = await api<Preview>('/workforce/employees/import', { method: 'POST', body: { csv, dryRun: false, stopOnError, columnMap: Object.fromEntries(Object.entries(colMap).filter(([, v]) => v >= 0)), ...(dateOrder ? { dateOrder } : {}) } });
       setNotice({ kind: 'ok', text: `Imported: ${r.diff.new} added, ${r.diff.updated} changed${r.errorCount ? `, ${r.errorCount} skipped because of problems` : ''}.` }); setPreview(null); setCsv(''); setTick((t) => t + 1);
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
@@ -401,7 +403,22 @@ export const EmployeesPanel: React.FC = () => {
             {preview.mapped && preview.errors.length > 0 && (
               <>
                 <Banner kind="warn">{stopOnError ? `${preview.errorCount} rows have a problem, so nothing will be imported until they are fixed.` : `These ${preview.errorCount} rows won't be imported. Everything else will be. Fix these in the file and import again afterwards to add them too.`}</Banner>
-                <Table head={['Line', 'Problem']}>{preview.errors.slice(0, 15).map((e, i) => <tr key={i}><td className="p-2.5 font-mono text-[#6B6B6B]">{e.line}</td><td className="p-2.5">{e.message}</td></tr>)}</Table>
+                {preview.dateOrder?.needsChoice && (
+                  <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                    <span>The dates in this file can be read two ways. Which comes first?</span>
+                    <Btn disabled={busy} onClick={() => { setDateOrder('DMY'); recheck(colMap, 'DMY'); }}>Day first (29/10/2026)</Btn>
+                    <Btn disabled={busy} onClick={() => { setDateOrder('MDY'); recheck(colMap, 'MDY'); }}>Month first (10/29/2026)</Btn>
+                  </div>
+                )}
+                {preview.problemGroups && preview.problemGroups.length > 0 && (
+                  <>
+                    <div className="text-[12px] font-semibold">What is wrong, most common first</div>
+                    <Table head={['Rows', 'Problem', 'Example']}>{preview.problemGroups.map((g) => <tr key={g.key}><td className="p-2.5 font-mono">{g.count}</td><td className="p-2.5 font-semibold">{g.key}</td><td className="p-2.5 text-[#6B6B6B]">line {g.firstLine}: {g.example}</td></tr>)}</Table>
+                  </>
+                )}
+                <details><summary className="text-[12px] underline cursor-pointer text-[#6B6B6B]">Every problem, line by line</summary>
+                  <Table head={['Line', 'Problem']}>{preview.errors.slice(0, 15).map((e, i) => <tr key={i}><td className="p-2.5 font-mono text-[#6B6B6B]">{e.line}</td><td className="p-2.5">{e.message}</td></tr>)}</Table>
+                </details>
               </>
             )}
             <p className="text-[11px] text-[#6B6B6B]">Columns: employee_number, first_name, last_name (required); team, wfm_group, employment_type, weekly_hours, max_weekly_hours, days_per_week, status, hire_date, skills (e.g. Billing:4; Chat:3). Teams, groups and skills must already exist.</p>

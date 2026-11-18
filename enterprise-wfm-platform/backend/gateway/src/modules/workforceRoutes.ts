@@ -11,6 +11,7 @@ import { afterDeparture, applyDeparture, departureImpact, refuseIfLeading, type 
 import { audit } from '../audit.ts';
 import { ruleVerdict } from './timeOffRules.ts';
 import { extensionProblem } from './integrations/agentMatch.ts';
+import { detectDateOrder, parseDate, parseHours, type DateOrder } from './importFormats.ts';
 import { bad, conflict, isoDay, notFound, parse } from '../http.ts';
 import { assertCapacity } from './licensing/service.ts';
 import { dropCache, publish } from '../infra.ts';
@@ -440,7 +441,7 @@ const HEAD: Record<string, string[]> = {
 
 workforce.post('/employees/import', requires('workforce:write'), async (req, res) => {
   const p = me(req);
-  const b = parse(z.object({ csv: z.string().min(1).max(5_000_000), dryRun: z.boolean().default(true), stopOnError: z.boolean().default(false), columnMap: z.record(z.string(), z.number().int()).optional() }), req.body);
+  const b = parse(z.object({ csv: z.string().min(1).max(5_000_000), dryRun: z.boolean().default(true), stopOnError: z.boolean().default(false), columnMap: z.record(z.string(), z.number().int()).optional(), dateOrder: z.enum(['DMY', 'MDY']).optional() }), req.body);
   const matrix = parseCsv(b.csv);
   if (matrix.length < 2) throw bad('The file has a header but no data rows');
   const header = matrix[0].map((h) => h.trim().toLowerCase().replace(/[\s-]+/g, '_'));
@@ -462,7 +463,7 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
     const skills = await tx.q<any>('SELECT id, name, code FROM skills WHERE tenant_id = :t');
     const existing = new Map((await loadEmployees(tx)).map((e) => [e.employeeNumber.toLowerCase(), e]));
     const find = (list: any[], v: string) => list.find((x) => x.name.toLowerCase() === v.toLowerCase() || x.code.toLowerCase() === v.toLowerCase());
-    const errors: { line: number; message: string }[] = [];
+    const errors: { line: number; key: string; message: string }[] = [];
     const plan: { input: EmpInput; skillList: { skillId: string; proficiency: number }[]; action: 'NEW' | 'UPDATE' | 'UNCHANGED'; line: number; name: string }[] = [];
     const seen = new Set<string>();
     // extensions held by people who have not left, and who is in this file (someone in the file may be getting a different extension, so they do not count as holding theirs)
@@ -470,42 +471,59 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
     const holders = new Map<string, { employeeNumber: string; name: string }>();
     for (const e of existing.values()) if (e.extension && e.status !== 'TERMINATED' && !fileNumbers.has(e.employeeNumber.toLowerCase())) holders.set(e.extension.trim().toLowerCase(), { employeeNumber: e.employeeNumber, name: e.name });
     const extOwner = new Map<string, string>();      // extension -> employee number, for the rows read so far
+    // Dates written 29/10/2026 or 10/29/2026: which way round is decided from the whole column; when it cannot be, the person is asked (dateOrder), never guessed
+    const detected = col('hireDate') >= 0 ? detectDateOrder(matrix.slice(1).map((r) => (r[col('hireDate')] ?? '').trim())) : 'NONE';
+    const dateOrder: DateOrder | null = b.dateOrder ?? (detected === 'DMY' || detected === 'MDY' ? detected : null);
+    const dateOrderProblem = !b.dateOrder && (detected === 'UNCLEAR' || detected === 'CONFLICT') ? detected : null;
     matrix.slice(1).forEach((r, i) => {
       const line = i + 2, get = (k: string) => (col(k) >= 0 ? (r[col(k)] ?? '').trim() : '');
-      const fail = (m: string) => errors.push({ line, message: m });
+      // every problem in the row is collected (not only the first), each with a short key that groups the same kind of problem across rows
+      const problems: { key: string; message: string }[] = [];
+      const fail = (key: string, message: string) => { problems.push({ key, message }); };
+      const done = () => { for (const p of problems) errors.push({ line, ...p }); };
       const number = get('employeeNumber');
-      if (!number) return fail('Employee number is empty');
-      if (seen.has(number.toLowerCase())) return fail(`Employee number ${number} appears twice in the file`);
+      if (!number) { fail('Employee number is empty', 'Employee number is empty'); return done(); }
+      if (seen.has(number.toLowerCase())) { fail('Employee number appears twice in the file', `Employee number ${number} appears twice in the file`); return done(); }
       seen.add(number.toLowerCase());
       const input: any = { employeeNumber: number, firstName: get('firstName'), lastName: get('lastName') };
-      if (!input.firstName || !input.lastName) return fail('First and last name are required');
+      if (!input.firstName || !input.lastName) fail('First and last name are required', 'First and last name are required');
       if (get('email')) input.email = get('email');
       if (get('phone')) input.phone = get('phone');
       if (get('extension')) input.extension = get('extension');
-      if (get('team')) { const t = find(teams, get('team')); if (!t) return fail(`Unknown team '${get('team')}'. Create it first.`); input.teamId = t.id; }
-      if (get('group')) { const g = find(groups, get('group')); if (!g) return fail(`Unknown WFM group '${get('group')}'. Create it first.`); input.primaryGroupId = g.id; input.eligibleGroupIds = [g.id]; }
-      if (get('employmentType')) { const v = get('employmentType').toUpperCase().replace(/[\s-]+/g, '_'); if (!['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY'].includes(v)) return fail(`Unknown employment type '${get('employmentType')}'`); input.employmentType = v; }
-      if (get('status')) { const v = get('status').toUpperCase(); if (!['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED'].includes(v)) return fail(`Unknown status '${get('status')}'`); input.status = v; }
+      if (get('team')) { const t = find(teams, get('team')); if (!t) fail('Unknown team', `Unknown team '${get('team')}'. Create it first.`); else input.teamId = t.id; }
+      if (get('group')) { const g = find(groups, get('group')); if (!g) fail('Unknown WFM group', `Unknown WFM group '${get('group')}'. Create it first.`); else { input.primaryGroupId = g.id; input.eligibleGroupIds = [g.id]; } }
+      if (get('employmentType')) { const v = get('employmentType').toUpperCase().replace(/[\s-]+/g, '_'); if (!['FULL_TIME', 'PART_TIME', 'CONTRACTOR', 'TEMPORARY'].includes(v)) fail('Unknown employment type', `Unknown employment type '${get('employmentType')}'`); else input.employmentType = v; }
+      if (get('status')) { const v = get('status').toUpperCase(); if (!['ONBOARDING', 'ACTIVE', 'LEAVE', 'SUSPENDED', 'TERMINATED'].includes(v)) fail('Unknown status', `Unknown status '${get('status')}'`); else input.status = v; }
       for (const [k, f] of [['weeklyHours', 'weeklyContractHours'], ['maxWeeklyHours', 'maxWeeklyHours'], ['daysPerWeek', 'workDaysPerWeek']] as const) {
-        if (get(k)) { const n = Number(get(k)); if (!Number.isFinite(n) || n <= 0) return fail(`${HEAD[k][0]} must be a number above zero`); input[f] = n; }
+        if (get(k)) {
+          const n = k === 'daysPerWeek' ? Number(get(k)) : parseHours(get(k));      // hours may be written 40, 37.5 or 46:15:00
+          if (n === 0 && k !== 'daysPerWeek') continue;      // 00:00:00 in an hours column is how other tools write "not set": leave it to the default, not an error
+          if (n === null || !Number.isFinite(n) || n <= 0) fail(`${HEAD[k][0]} is not a number`, `${HEAD[k][0]} must be a number above zero (for example 40, 37.5 or 46:15:00), not '${get(k)}'`); else input[f] = n;
+        }
       }
       if (input.weeklyContractHours !== undefined && input.maxWeeklyHours === undefined) input.maxWeeklyHours = Math.max(input.weeklyContractHours, 40);
-      if (get('hireDate')) { if (!isoDay.test(get('hireDate'))) return fail('hire_date must look like 2026-03-31'); input.hireDate = get('hireDate'); }
+      if (get('hireDate')) {
+        const d = parseDate(get('hireDate'), dateOrder);
+        if (d) input.hireDate = d;
+        else if (dateOrderProblem && /^\d{1,2}[/.-]\d{1,2}[/.-]\d{4}/.test(get('hireDate'))) fail('Date order not chosen', dateOrderProblem === 'CONFLICT' ? `The hire dates mix day-first and month-first (such as '${get('hireDate')}'). Fix the file, or choose one order below.` : `'${get('hireDate')}' can be read as day first or month first. Choose which below.`);
+        else fail('Hire date not readable', `Hire date '${get('hireDate')}' is not a date I can read. Use 2026-03-31, 31/03/2026 or 03/31/2026.`);
+      }
       const skillList: { skillId: string; proficiency: number }[] = [];
       for (const part of get('skills').split(/[;|]/).map((s) => s.trim()).filter(Boolean)) {
         const [n, lvl] = part.split(':').map((s) => s.trim()); const s = find(skills, n);
-        if (!s) { fail(`Unknown skill '${n}'. Create it first.`); return; }
+        if (!s) { fail('Unknown skill', `Unknown skill '${n}'. Create it first.`); continue; }
         skillList.push({ skillId: s.id, proficiency: Math.min(5, Math.max(1, Number(lvl) || 3)) });
       }
+      if (problems.length) return done();      // the rules below only make sense on a row whose values were all read
       const parsed = EmpFields.safeParse(input);
-      if (!parsed.success) return fail(parsed.error.issues.map((x) => `${x.path.join('.')} ${x.message}`).join('; '));
+      if (!parsed.success) { for (const x of parsed.error.issues) fail(`${x.path.join('.')} ${x.message}`, `${x.path.join('.')} ${x.message}`); return done(); }
       if (input.extension && input.status !== 'TERMINATED') {
         const key = String(input.extension).trim().toLowerCase(), other = extOwner.get(key), held = holders.get(key);
-        if (other) return fail(`Agent extension ${input.extension} is also given to ${other} in this file. Each person needs their own.`);
-        if (held) return fail(`Agent extension ${input.extension} is already used by ${held.name} (${held.employeeNumber}). Each person needs their own.`);
+        if (other) { fail('Agent extension given twice in the file', `Agent extension ${input.extension} is also given to ${other} in this file. Each person needs their own.`); return done(); }
+        if (held) { fail('Agent extension already used', `Agent extension ${input.extension} is already used by ${held.name} (${held.employeeNumber}). Each person needs their own.`); return done(); }
         extOwner.set(key, number);
       }
-      try { checkEmployee({ weeklyContractHours: input.weeklyContractHours ?? 40, maxWeeklyHours: input.maxWeeklyHours ?? 40, primaryGroupId: null, eligibleGroupIds: [] }); } catch (e: any) { return fail(e.message); }
+      try { checkEmployee({ weeklyContractHours: input.weeklyContractHours ?? 40, maxWeeklyHours: input.maxWeeklyHours ?? 40, primaryGroupId: null, eligibleGroupIds: [] }); } catch (e: any) { fail(e.message, e.message); return done(); }
       const cur = existing.get(number.toLowerCase());
       const changed = !cur || (Object.keys(input) as string[]).some((k) => {
         const a = (cur as any)[k], v = input[k];
@@ -527,7 +545,10 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
       rows: matrix.length - 1,
       diff,
       errors: errors.slice(0, 100),
-      errorCount: errors.length,
+      // the same kind of problem across rows, most common first: "307 rows: Hire date not readable" reads better than 307 lines
+      problemGroups: [...errors.reduce((m, e) => { const g = m.get(e.key) ?? { key: e.key, count: 0, firstLine: e.line, example: e.message }; g.count++; return m.set(e.key, g); }, new Map<string, { key: string; count: number; firstLine: number; example: string }>()).values()].sort((a, b) => b.count - a.count).slice(0, 20),
+      errorCount: new Set(errors.map((e) => e.line)).size,      // rows with a problem, however many problems each has
+      dateOrder: { detected, used: dateOrder, needsChoice: dateOrderProblem !== null },
       sample: plan.slice(0, 30).map((x) => ({ line: x.line, name: x.name, employeeNumber: x.input.employeeNumber, action: x.action })),
       committed: false,
       headers,
@@ -544,7 +565,7 @@ workforce.post('/employees/import', requires('workforce:write'), async (req, res
       },
     };
     if (b.dryRun) return { ...result, stopOnError: b.stopOnError };
-    if (b.stopOnError && errors.length) throw bad(`Nothing was imported: ${errors.length} row${errors.length === 1 ? ' has' : 's have'} a problem and you chose to stop on any error. First: line ${errors[0].line}, ${errors[0].message}`, errors.slice(0, 20));
+    if (b.stopOnError && errors.length) throw bad(`Nothing was imported: ${new Set(errors.map((e) => e.line)).size} row${new Set(errors.map((e) => e.line)).size === 1 ? ' has' : 's have'} a problem and you chose to stop on any error. First: line ${errors[0].line}, ${errors[0].message}`, errors.slice(0, 20));
     if (diff.new > 0) {
       await assertCapacity(tx, p.tenantId, 'EMPLOYEES', diff.new);
     }
