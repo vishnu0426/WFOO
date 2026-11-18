@@ -15,7 +15,7 @@ type Defaults = { code: string; name: string; timezone: string | null; currency:
 type UserRow = { id: string; userName: string; username: string; role: string; status: string };
 export type Created = Workspace & { setup?: { copied: string[]; holidaysAdded: number; packName: string | null; failed: string | null } };
 
-const COPY_ITEMS: [string, string][] = [['shiftTemplates', 'Shift templates'], ['schedulingRules', 'Scheduling rules'], ['holidays', 'Holidays'], ['labourLawPacks', 'Labour-law packs'], ['skills', 'Skills']];
+const COPY_ITEMS: [string, string][] = [['shiftTemplates', 'Shift templates'], ['schedulingRules', 'Scheduling rules'], ['holidays', 'Holidays'], ['labourLawPacks', 'Labour-law packs'], ['skills', 'Skills'], ['activities', 'Activity definitions']];
 const ROLE: Record<string, string> = { WFM_ADMIN: 'Administrator', WFM_MANAGER: 'Manager', FORECAST_PLANNER: 'Forecast planner', SCHEDULER: 'Scheduler', SUPERVISOR_RTA: 'Supervisor', ANALYST: 'Analyst', AGENT: 'Agent' };
 
 const Shell: React.FC<{ title: string; sub?: string; onClose: () => void; children: React.ReactNode; footer: React.ReactNode }> = ({ title, sub, onClose, children, footer }) => (

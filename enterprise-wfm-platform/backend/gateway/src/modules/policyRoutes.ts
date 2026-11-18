@@ -5,7 +5,9 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { withTenant, type Tx } from '../db.ts';
+import { withTenant, withWorkspace, type Tx } from '../db.ts';
+import { planCopy, summarise } from './activityCopy.ts';
+import { buildPack, readPack } from './configPack.ts';
 import { me, requires } from '../auth.ts';
 import { audit } from '../audit.ts';
 import { bad, notFound, parse } from '../http.ts';
@@ -59,6 +61,117 @@ policy.delete('/activities/:id', requires('config:write'), async (req, res) => {
     await audit(tx, p, req, { action: 'DELETE', entityType: 'ACTIVITY', entityId: a.id, entityName: a.name, before: actDto(a) });
   });
   res.status(204).end();
+});
+
+/**
+ * Writes (or, on a dry run, only plans) a set of activities into the workspace `tx` is scoped to: created, overwritten or left alone by code. Used by both the copy between
+ * workspaces and the file import, so the two behave the same. `rta` rows are re-pointed at the target's activity with the same code; rows already there are kept.
+ */
+async function applyActivities(tx: Tx, p: ReturnType<typeof me>, req: any, o: { source: any[]; rta: { state: string; reason: string; code: string }[]; onExisting: 'SKIP' | 'OVERWRITE'; dryRun: boolean; wantRta: boolean; note: string }) {
+  const target = await tx.q<any>('SELECT * FROM activities WHERE tenant_id = :t');
+  const items = planCopy(o.source, target, o.onExisting);
+  let rtaRows = 0;
+  if (!o.dryRun) {
+    for (const it of items) {
+      const s = o.source.find((a: any) => a.code.toLowerCase() === it.code.toLowerCase())!;
+      if (it.action === 'CREATE') {
+        const a = await tx.one<any>(
+          `INSERT INTO activities (tenant_id, name, code, short_code, category, counts_as_work, paid, shrinkage, color, text_color, status, ignore_adherence)
+           VALUES (:t, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+          [s.name, s.code, s.shortCode, s.category, s.countsAsWork, s.paid, s.shrinkage, s.color, s.textColor ?? null, s.status, s.ignoreAdherence]);
+        await audit(tx, p, req, { action: 'CREATE', entityType: 'ACTIVITY', entityId: a!.id, entityName: s.name, after: actDto(a), diffSummary: `Copied from ${o.note}` });
+      } else if (it.action === 'UPDATE' && it.targetId) {
+        const before = target.find((t: any) => t.id === it.targetId);
+        const a = await tx.one<any>(
+          `UPDATE activities SET name = $2, short_code = $3, category = $4, counts_as_work = $5, paid = $6, shrinkage = $7, color = $8, text_color = $9, status = $10, ignore_adherence = $11,
+             version = version + 1, updated_at = now() WHERE tenant_id = :t AND id = $1 RETURNING *`,
+          [it.targetId, s.name, s.shortCode, s.category, s.countsAsWork, s.paid, s.shrinkage, s.color, s.textColor ?? null, s.status, s.ignoreAdherence]);
+        await audit(tx, p, req, { action: 'UPDATE', entityType: 'ACTIVITY', entityId: a!.id, entityName: s.name, before: actDto(before), after: actDto(a), diffSummary: `Overwritten from ${o.note}` });
+      }
+    }
+  }
+  if (o.wantRta && o.rta.length) {
+    if (o.dryRun) rtaRows = o.rta.length;
+    else {
+      const idByCode = new Map((await tx.q<any>('SELECT id, code FROM activities WHERE tenant_id = :t')).map((a: any) => [a.code.toLowerCase(), a.id as string]));
+      for (const r of o.rta) {
+        const id = idByCode.get(r.code.toLowerCase());
+        if (!id) continue;
+        const added = await tx.q<any>('INSERT INTO rta_state_map (tenant_id, state, reason, activity_id) VALUES (:t, $1, $2, $3) ON CONFLICT DO NOTHING RETURNING id', [r.state, r.reason, id]);
+        rtaRows += added.length;
+      }
+    }
+  }
+  return { items, rtaRows };
+}
+
+/**
+ * Copy chosen activities into another workspace the person belongs to. Matched by code, so doing it twice never duplicates. `dryRun` (the default) only says what would happen.
+ * With `includeRtaMapping`, the phone-state mapping rows that point at the chosen activities come along too, re-pointed at the target's copies (rows already there are kept).
+ */
+policy.post('/activities/copy-to', requires('config:write'), async (req, res) => {
+  const p = me(req);
+  const b = parse(z.object({
+    targetWorkspaceId: z.string().uuid(), activityIds: z.array(z.string().uuid()).min(1).max(200),
+    onExisting: z.enum(['SKIP', 'OVERWRITE']).default('SKIP'), dryRun: z.boolean().default(true), includeRtaMapping: z.boolean().default(false),
+  }), req.body);
+  if (b.targetWorkspaceId === p.workspaceId) throw bad('Choose a different workspace: this is the one you are copying from.');
+
+  const src = await withTenant(p.tenantId, async (tx) => {
+    const rows = await tx.q<any>('SELECT * FROM activities WHERE tenant_id = :t AND id = ANY($1::uuid[]) ORDER BY name', [b.activityIds]);
+    if (rows.length !== new Set(b.activityIds).size) throw notFound('Activity');
+    const from = await tx.one<any>('SELECT name FROM workspaces WHERE tenant_id = :t AND id = $1', [p.workspaceId]);
+    const rta = b.includeRtaMapping ? await tx.q<any>('SELECT state, reason, activity_id FROM rta_state_map WHERE tenant_id = :t AND activity_id = ANY($1::uuid[])', [b.activityIds]) : [];
+    // the person must belong to the workspace they copy into
+    const to = await tx.one<any>(
+      `SELECT w.id, w.name FROM workspaces w JOIN workspace_members m ON m.tenant_id = w.tenant_id AND m.workspace_id = w.id AND m.user_id = $2 AND m.status = 'ACTIVE'
+       WHERE w.tenant_id = :t AND w.id = $1 AND w.status = 'ACTIVE'`, [b.targetWorkspaceId, p.userId]);
+    if (!to) throw notFound('Workspace to copy into');
+    return { rows, fromName: from?.name ?? 'another workspace', to, rta };
+  });
+  const codeOfId = new Map<string, string>(src.rows.map((a: any) => [a.id, a.code]));
+  const out = await withWorkspace(p.tenantId, b.targetWorkspaceId, (tx) => applyActivities(tx, p, req, {
+    source: src.rows, rta: src.rta.map((r: any) => ({ state: r.state, reason: r.reason, code: codeOfId.get(r.activityId) ?? '' })), onExisting: b.onExisting, dryRun: b.dryRun,
+    wantRta: b.includeRtaMapping, note: `workspace ${src.fromName}`,
+  }));
+
+  res.json({ dryRun: b.dryRun, target: { id: src.to.id, name: src.to.name }, items: out.items, summary: summarise(out.items), rtaRows: out.rtaRows });
+});
+
+/** The content of a configuration file for this workspace's activities (all of them, or the chosen ones), optionally with the phone-state rows that point at them. */
+policy.post('/activities/export', requires('config:read'), async (req, res) => {
+  const p = me(req);
+  const b = parse(z.object({ activityIds: z.array(z.string().uuid()).max(300).optional(), includeRtaMapping: z.boolean().default(false) }), req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const rows = b.activityIds?.length
+      ? await tx.q<any>('SELECT * FROM activities WHERE tenant_id = :t AND id = ANY($1::uuid[]) ORDER BY code', [b.activityIds])
+      : await tx.q<any>('SELECT * FROM activities WHERE tenant_id = :t ORDER BY code');
+    if (b.activityIds?.length && rows.length !== new Set(b.activityIds).size) throw notFound('Activity');
+    const codeOfId = new Map<string, string>(rows.map((a: any) => [a.id, a.code]));
+    const rta = b.includeRtaMapping && rows.length
+      ? (await tx.q<any>('SELECT state, reason, activity_id FROM rta_state_map WHERE tenant_id = :t AND activity_id = ANY($1::uuid[]) ORDER BY state, reason', [rows.map((a: any) => a.id)])).map((r: any) => ({ state: r.state, reason: r.reason, activityCode: codeOfId.get(r.activityId)! }))
+      : [];
+    const ws = await tx.one<any>('SELECT name FROM workspaces WHERE tenant_id = :t AND id = $1', [p.workspaceId]);
+    return buildPack(rows, rta, ws?.name ?? '');
+  });
+  res.json(out);
+});
+
+/** Bring a configuration file's activities into this workspace. Same rules as copying between workspaces: matched by code, preview first (`dryRun` is the default). */
+policy.post('/activities/import', requires('config:write'), async (req, res) => {
+  const p = me(req);
+  const b = parse(z.object({ pack: z.unknown(), onExisting: z.enum(['SKIP', 'OVERWRITE']).default('SKIP'), dryRun: z.boolean().default(true), includeRtaMapping: z.boolean().default(false) }), req.body);
+  let pack;
+  try { pack = readPack(b.pack); } catch (e: any) { throw bad(e.message); }
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const ws = await tx.one<any>('SELECT name FROM workspaces WHERE tenant_id = :t AND id = $1', [p.workspaceId]);
+    const r = await applyActivities(tx, p, req, {
+      source: pack.activities, rta: pack.rtaMapping.map((m) => ({ state: m.state, reason: m.reason, code: m.activityCode })), onExisting: b.onExisting, dryRun: b.dryRun,
+      wantRta: b.includeRtaMapping, note: `a configuration file${pack.source?.workspace ? ` (from ${pack.source.workspace})` : ''}`,
+    });
+    return { ...r, targetName: ws?.name ?? '' };
+  });
+  res.json({ dryRun: b.dryRun, target: { id: p.workspaceId, name: out.targetName }, items: out.items, summary: summarise(out.items), rtaRows: out.rtaRows, file: { exportedAt: pack.exportedAt ?? null, workspace: pack.source?.workspace ?? null, activities: pack.activities.length, rtaRows: pack.rtaMapping.length } });
 });
 
 // ---------------------------------------------------------------- per-group settings for the shared activity list

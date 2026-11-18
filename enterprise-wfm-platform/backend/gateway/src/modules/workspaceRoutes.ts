@@ -27,10 +27,10 @@ const WorkspacePatch = WorkspaceBody.partial();
 
 /**
  * Creating a workspace asks for little: a name, and optionally a country (its time zone, currency, holidays, week and labour-law pack are filled in), or a workspace to start from
- * (its shift templates, scheduling rules, holidays, labour-law packs and skills are copied: never people, schedules, forecasts or history), and who manages it.
+ * (its shift templates, scheduling rules, holidays, labour-law packs, skills and activity definitions are copied: never people, schedules, forecasts or history), and who manages it.
  * The code and the web address are made from the name unless given.
  */
-const CopyWhat = z.object({ shiftTemplates: z.boolean().default(true), schedulingRules: z.boolean().default(true), holidays: z.boolean().default(true), labourLawPacks: z.boolean().default(true), skills: z.boolean().default(true) });
+const CopyWhat = z.object({ shiftTemplates: z.boolean().default(true), schedulingRules: z.boolean().default(true), holidays: z.boolean().default(true), labourLawPacks: z.boolean().default(true), skills: z.boolean().default(true), activities: z.boolean().default(true) });
 const CreateWorkspaceBody = z.object({
   name: z.string().trim().min(1).max(120),
   code: z.string().max(40).regex(/^[A-Za-z0-9._-]+$/, 'may only contain letters, numbers, dot, dash and underscore').optional(),
@@ -39,7 +39,7 @@ const CreateWorkspaceBody = z.object({
   timezone: z.string().min(1).max(80).optional(), currency: z.string().length(3).optional(),
   country: z.string().length(2).optional(),
   addHolidays: z.boolean().default(true), applyPack: z.boolean().default(true),
-  copyFromWorkspaceId: uuid.nullable().default(null), copy: CopyWhat.default({ shiftTemplates: true, schedulingRules: true, holidays: true, labourLawPacks: true, skills: true }),
+  copyFromWorkspaceId: uuid.nullable().default(null), copy: CopyWhat.default({ shiftTemplates: true, schedulingRules: true, holidays: true, labourLawPacks: true, skills: true, activities: true }),
   adminUserIds: z.array(uuid).max(50).default([]),
 });
 
@@ -189,6 +189,7 @@ workspaces.post('/', requires('workspace:create'), async (req, res) => {
         await client.query('BEGIN');
         const [from, to, t] = [b.copyFromWorkspaceId, made.w.id, p.tenantId];
         const c = b.copy;
+        if (c.activities) { const n = await copyTable(client, 'activities', t, from, to); if (n) setup.copied.push(`${n} activit${n === 1 ? 'y' : 'ies'}`); }
         if (c.skills) { const n = await copyTable(client, 'skills', t, from, to); if (n) setup.copied.push(`${n} skill${n === 1 ? '' : 's'}`); }
         if (c.shiftTemplates) { const n = await copyTable(client, 'shift_templates', t, from, to, { nulls: ['group_ids', 'skill_ids'] }); if (n) setup.copied.push(`${n} shift template${n === 1 ? '' : 's'}`); }
         if (c.schedulingRules) { const n = await copyTable(client, 'scheduling_policy', t, from, to); if (n) setup.copied.push('scheduling rules'); }

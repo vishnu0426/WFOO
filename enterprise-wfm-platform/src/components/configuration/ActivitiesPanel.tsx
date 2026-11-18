@@ -8,10 +8,12 @@ import { LoadFailed, Waiting } from '../common/loading';
 import React, { useMemo, useState } from 'react';
 import { ColDef, ICellRendererParams } from 'ag-grid-community';
 import { Plus } from 'lucide-react';
-import { Activity, ACTIVITY_CATEGORY_LABEL, api, GroupActivity } from '../../services/api';
+import { Activity, ACTIVITY_CATEGORY_LABEL, api, fetchWorkspaces, getStoredSession, GroupActivity, Workspace } from '../../services/api';
 import { useForecast } from '../../services/forecastStore';
 import { useApi } from '../forecasting/hooks';
 import { Grid } from '../forecasting/Grid';
+import { Popover } from '../common/Popover';
+import { downloadCsv, printPage } from './previewExport';
 import { Banner, Btn, Card, Empty, Field, Input, Pill, Select } from '../forecasting/ui';
 
 type Form = Omit<Activity, 'id' | 'version'> & { id: string | null };
@@ -39,6 +41,169 @@ const textFor = (bg: string) => {
 };
 const swatch = (a: Activity) => <span style={{ backgroundColor: a.color, color: a.textColor ?? textFor(a.color) }} className="px-2 py-0.5 rounded text-[11px] font-bold font-mono border border-black/10">{a.shortCode}</span>;
 
+type CopyItem = { code: string; name: string; state: 'NEW' | 'SAME' | 'DIFFERS' | 'NAME_TAKEN'; action: 'CREATE' | 'UPDATE' | 'SKIP'; changes: string[] };
+type CopyResult = { dryRun: boolean; target: { id: string; name: string }; items: CopyItem[]; summary: string; rtaRows: number };
+const STATE_TEXT: Record<CopyItem['state'], string> = { NEW: 'Not there yet', SAME: 'Already the same', DIFFERS: 'Exists, but different', NAME_TAKEN: 'Name already used by another activity' };
+const ACTION_TEXT: Record<CopyItem['action'], string> = { CREATE: 'Will be created', UPDATE: 'Will be overwritten', SKIP: 'Left alone' };
+
+const PLAN_HEAD = ['Activity', 'Code', 'In the target today', 'Settings that differ', 'What will happen'];
+const planRows = (items: CopyItem[]) => items.map((i) => [i.name, i.code, STATE_TEXT[i.state], i.changes.join(', '), ACTION_TEXT[i.action]]);
+
+/** What would happen to each activity, from a preview of a copy or an import. Can be taken out as a CSV or a printable page (save it as PDF) so someone else can review it before it is applied. */
+const PlanTable: React.FC<{ items: CopyItem[]; where: string; title: string; lines: string[]; fileBase: string }> = ({ items, where, title, lines, fileBase }) => {
+  const { setNotice } = useForecast();
+  const day = new Date().toISOString().slice(0, 10);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-end gap-3 text-[12px] print:hidden">
+        <span className="text-[#6B6B6B]">Take this list out:</span>
+        <button type="button" className="underline" onClick={() => downloadCsv(`${fileBase}-${day}.csv`, PLAN_HEAD, planRows(items))}>CSV</button>
+        <button type="button" className="underline" onClick={() => { if (!printPage(title, [...lines, `Prepared ${day}. Nothing has been changed yet.`], PLAN_HEAD, planRows(items))) setNotice({ kind: 'err', text: 'The browser blocked the new tab. Allow pop-ups for this site and try again.' }); }}>PDF (print)</button>
+      </div>
+      <div className="border border-[#E5E5E0] rounded-lg overflow-hidden"><table className="w-full text-[13px]"><thead className="bg-[#FAFAF8] text-[11px] uppercase tracking-wider text-[#6B6B6B]"><tr><th className="text-left p-2">Activity</th><th className="text-left p-2">{where}</th><th className="text-left p-2">What will happen</th></tr></thead>
+        <tbody>{items.map((i) => (
+          <tr key={i.code} className="border-t border-[#F0F0EC]"><td className="p-2 font-semibold">{i.name}</td>
+            <td className="p-2 text-[#525252]">{STATE_TEXT[i.state]}{i.changes.length ? ` (${i.changes.join(', ')})` : ''}</td>
+            <td className="p-2"><Pill tone={i.action === 'SKIP' ? 'neutral' : 'good'}>{ACTION_TEXT[i.action]}</Pill></td></tr>
+        ))}</tbody></table></div>
+    </div>
+  );
+};
+
+type ImportResult = CopyResult & { file: { exportedAt: string | null; workspace: string | null; activities: number; rtaRows: number } };
+
+/** Move activity definitions between environments (test to production, one customer's setup to another) as a file: export here, import there, with the same preview as a copy. */
+const ConfigFile: React.FC<{ activities: Activity[]; onClose: () => void; onDone: () => void }> = ({ activities, onClose, onDone }) => {
+  const { setNotice } = useForecast();
+  const [withRta, setWithRta] = useState(true);
+  const [onExisting, setOnExisting] = useState<'SKIP' | 'OVERWRITE'>('SKIP');
+  const [pack, setPack] = useState<unknown>(null);
+  const [fileName, setFileName] = useState('');
+  const [preview, setPreview] = useState<ImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const run = (dryRun: boolean, p: unknown = pack, existing = onExisting, rta = withRta) => api<ImportResult>('/config/activities/import', { method: 'POST', body: { pack: p, dryRun, onExisting: existing, includeRtaMapping: rta } });
+
+  const download = async () => {
+    setBusy(true); setError('');
+    try {
+      const out = await api<{ exportedAt: string; source?: { workspace?: string } }>('/config/activities/export', { method: 'POST', body: { includeRtaMapping: withRta } });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = url; a.download = `agnowfm-activities-${(out.source?.workspace ?? 'workspace').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${out.exportedAt.slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url);
+      setNotice({ kind: 'ok', text: `Exported ${activities.length} activit${activities.length === 1 ? 'y' : 'ies'}${withRta ? ' with their phone-state mapping' : ''}.` });
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const choose = async (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true); setError(''); setPreview(null);
+    try {
+      let parsed: unknown;
+      try { parsed = JSON.parse(await f.text()); } catch { throw new Error('That file is not a configuration file: it is not valid JSON.'); }
+      setPack(parsed); setFileName(f.name); setPreview(await run(true, parsed));
+    } catch (e: any) { setPack(null); setFileName(''); setError(e.message); } finally { setBusy(false); }
+  };
+  const recheck = async (existing: 'SKIP' | 'OVERWRITE', rta: boolean) => { if (!pack) return; setBusy(true); setError(''); try { setPreview(await run(true, pack, existing, rta)); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
+  const go = async () => {
+    setBusy(true); setError('');
+    try { const r = await run(false); setNotice({ kind: 'ok', text: `Imported into ${r.target.name}: ${r.summary}${withRta ? `. ${r.rtaRows} phone-state mapping row${r.rtaRows === 1 ? '' : 's'} added` : ''}.` }); onDone(); onClose(); }
+    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const willChange = preview ? preview.items.filter((i) => i.action !== 'SKIP').length : 0;
+  return (
+    <div className="border border-[#E5E5E0] rounded-lg p-4 space-y-4">
+      <div className="text-[13px]">Move activity definitions to another environment as a file. Export here, then import the file there. Nothing changes on import until you confirm.</div>
+      <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={withRta} onChange={(e) => { setWithRta(e.target.checked); recheck(onExisting, e.target.checked); }} />Include the phone-state mapping (RTA) rows that point at the activities</label>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="border border-[#E5E5E0] rounded-lg p-3 space-y-2">
+          <div className="text-[12px] font-semibold">Export</div>
+          <p className="text-[12px] text-[#6B6B6B]">All {activities.length} activities in this workspace, as one file.</p>
+          <Btn disabled={busy || activities.length === 0} onClick={download}>Download file</Btn>
+        </div>
+        <div className="border border-[#E5E5E0] rounded-lg p-3 space-y-2">
+          <div className="text-[12px] font-semibold">Import</div>
+          <p className="text-[12px] text-[#6B6B6B]">Into this workspace. Activities are matched by code, so importing twice never makes duplicates.</p>
+          <input type="file" accept=".json,application/json" aria-label="Configuration file" disabled={busy} onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ''; }} className="text-[12px]" />
+          {fileName && <div className="text-[12px] text-[#6B6B6B]">{fileName}</div>}
+        </div>
+      </div>
+      {preview && (
+        <div className="space-y-2">
+          <Field label="If an activity is already here but different"><Select value={onExisting} onChange={(e) => { const v = e.target.value as 'SKIP' | 'OVERWRITE'; setOnExisting(v); recheck(v, withRta); }} aria-label="If it exists">
+            <option value="SKIP">Leave it as it is (safe)</option><option value="OVERWRITE">Overwrite it with the file’s settings</option></Select></Field>
+          <Banner kind={willChange ? 'ok' : 'warn'}>File{preview.file.workspace ? ` from ${preview.file.workspace}` : ''}{preview.file.exportedAt ? ` (${preview.file.exportedAt.slice(0, 10)})` : ''} into <b>{preview.target.name}</b>: {preview.summary}.{withRta ? ` ${preview.rtaRows} phone-state mapping row${preview.rtaRows === 1 ? '' : 's'} in the file (rows already here are kept).` : ''}</Banner>
+          <PlanTable items={preview.items} where="Here today" title={`Import preview: activity definitions into ${preview.target.name}`} lines={[`From file${preview.file.workspace ? ` of workspace ${preview.file.workspace}` : ''}${preview.file.exportedAt ? ` exported ${preview.file.exportedAt.slice(0, 10)}` : ''}`, preview.summary]} fileBase="activity-import-preview" />
+        </div>
+      )}
+      {error && <Banner kind="err">{error}</Banner>}
+      <div className="flex gap-2 sticky bottom-0 bg-white border-t border-[#F0F0EC] pt-3 -mb-1">
+        {preview && <Btn variant="primary" disabled={busy || (willChange === 0 && !(withRta && preview.rtaRows > 0))} onClick={go}>Import now</Btn>}
+        <Btn onClick={onClose}>Close</Btn>
+      </div>
+    </div>
+  );
+};
+
+/** Copy chosen activities into another workspace: choose them, choose where, see exactly what would happen, then confirm. Matched by code, so doing it twice never duplicates. */
+const CopyToWorkspace: React.FC<{ activities: Activity[]; onClose: () => void }> = ({ activities, onClose }) => {
+  const { setNotice } = useForecast();
+  const here = getStoredSession()?.user?.workspaceId;
+  const spaces = useApi<Workspace[]>('/workspaces', []);
+  const targets = (spaces.data ?? []).filter((x) => x.status === 'ACTIVE' && x.id !== here);
+  const [picked, setPicked] = useState<Set<string>>(new Set(activities.filter((a) => a.status === 'ACTIVE').map((a) => a.id)));
+  const [target, setTarget] = useState('');
+  const [onExisting, setOnExisting] = useState<'SKIP' | 'OVERWRITE'>('SKIP');
+  const [withRta, setWithRta] = useState(false);
+  const [preview, setPreview] = useState<CopyResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const body = (dryRun: boolean) => ({ targetWorkspaceId: target, activityIds: [...picked], onExisting, includeRtaMapping: withRta, dryRun });
+  const change = (fn: () => void) => { fn(); setPreview(null); };       // any change to the choices means the preview no longer applies
+  const check = async () => { setBusy(true); setError(''); try { setPreview(await api<CopyResult>('/config/activities/copy-to', { method: 'POST', body: body(true) })); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
+  const go = async () => {
+    setBusy(true); setError('');
+    try { const r = await api<CopyResult>('/config/activities/copy-to', { method: 'POST', body: body(false) }); setNotice({ kind: 'ok', text: `Copied to ${r.target.name}: ${r.summary}${withRta ? `. ${r.rtaRows} phone-state mapping row${r.rtaRows === 1 ? '' : 's'} added` : ''}.` }); onClose(); }
+    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+  const willChange = preview ? preview.items.filter((i) => i.action !== 'SKIP').length : 0;
+  return (
+    <div className="border border-[#E5E5E0] rounded-lg p-4 space-y-4">
+      <div className="text-[13px]">Copy activity definitions into another workspace. Nothing changes until you confirm, and activities are matched by their code, so copying twice never makes duplicates.</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Field label="Copy into"><Select value={target} onChange={(e) => change(() => setTarget(e.target.value))} aria-label="Target workspace">
+          <option value="">Choose a workspace…</option>{targets.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+        </Select></Field>
+        <Field label="If an activity is already there but different">
+          <Select value={onExisting} onChange={(e) => change(() => setOnExisting(e.target.value as 'SKIP' | 'OVERWRITE'))} aria-label="If it exists">
+            <option value="SKIP">Leave it as it is (safe)</option><option value="OVERWRITE">Overwrite it with this workspace’s settings</option>
+          </Select></Field>
+      </div>
+      <div>
+        <div className="flex items-center justify-between"><div className="text-[12px] font-semibold mb-1.5">Which activities ({picked.size} of {activities.length})</div>
+          <span className="text-[12px]"><button type="button" className="underline mr-3" onClick={() => change(() => setPicked(new Set(activities.map((a) => a.id))))}>All</button><button type="button" className="underline" onClick={() => change(() => setPicked(new Set()))}>None</button></span></div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-1.5 max-h-48 overflow-auto text-[13px]">
+          {activities.map((a) => (
+            <label key={a.id} className="flex items-center gap-2"><input type="checkbox" checked={picked.has(a.id)} onChange={(e) => change(() => setPicked((s) => { const n = new Set(s); if (e.target.checked) n.add(a.id); else n.delete(a.id); return n; }))} />
+              {swatch(a)}<span className="truncate">{a.name}</span>{a.status !== 'ACTIVE' && <span className="text-[11px] text-[#6B6B6B]">inactive</span>}</label>
+          ))}
+        </div>
+      </div>
+      <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={withRta} onChange={(e) => change(() => setWithRta(e.target.checked))} />Also copy the phone-state mapping (RTA) rows that point at these activities</label>
+      {preview && (
+        <div className="space-y-2">
+          <Banner kind={willChange ? 'ok' : 'warn'}>Into <b>{preview.target.name}</b>: {preview.summary}.{withRta ? ` ${preview.rtaRows} phone-state mapping row${preview.rtaRows === 1 ? '' : 's'} considered (rows already there are kept).` : ''}</Banner>
+          <PlanTable items={preview.items} where="In the other workspace" title={`Copy preview: activity definitions into ${preview.target.name}`} lines={[preview.summary]} fileBase="activity-copy-preview" />
+        </div>
+      )}
+      {error && <Banner kind="err">{error}</Banner>}
+      <div className="flex gap-2 sticky bottom-0 bg-white border-t border-[#F0F0EC] pt-3 -mb-1">
+        <Btn disabled={busy || !target || picked.size === 0} onClick={check}>{preview ? 'Check again' : 'See what would happen'}</Btn>
+        <Btn variant="primary" disabled={busy || !preview || willChange === 0 && !(withRta && preview.rtaRows > 0)} onClick={go}>Copy now</Btn>
+        <Btn onClick={onClose}>Cancel</Btn>
+      </div>
+    </div>
+  );
+};
+
 export const ActivitiesPanel: React.FC = () => {
   const { can, setNotice, groups } = useForecast();
   const [scope, setScope] = useState('');            // '' = the company list, otherwise a WFM group id
@@ -46,6 +211,8 @@ export const ActivitiesPanel: React.FC = () => {
   const list = useApi<Activity[]>('/config/activities', [tick]);
   const perGroup = useApi<GroupActivity[]>(scope ? `/config/groups/${scope}/activities` : null, [tick, scope]);
   const [f, setF] = useState<Form | null>(null);
+  const [copying, setCopying] = useState(false);
+  const [filing, setFiling] = useState(false);
   const [o, setO] = useState<Override | null>(null);
   const [error, setError] = useState('');
   const w = can('config:write');
@@ -119,13 +286,26 @@ export const ActivitiesPanel: React.FC = () => {
 
   return (
     <Card title="Activity definitions" sub="One company list says what each kind of time means. Pick a WFM group to switch an activity off for it, or change how shrinkage and pay treat it in that group."
-      actions={<>
-        <Select value={scope} onChange={(e) => { setScope(e.target.value); setF(null); setO(null); }} aria-label="Show settings for">
+      actions={<div className="flex flex-wrap items-center justify-end gap-2">
+        <Select value={scope} onChange={(e) => { setScope(e.target.value); setF(null); setO(null); }} aria-label="Show settings for" className="!w-auto min-w-[14rem]">
           <option value="">Company list (all groups)</option>
           {groups.map((g) => <option key={g.id} value={g.id}>Settings for: {g.name}</option>)}
         </Select>
-        {w && !scope && <>{empty && <Btn onClick={addStandard}>Add a standard set</Btn>}<Btn variant="primary" onClick={() => { setError(''); setO(null); setF(blank()); }}><Plus className="w-3.5 h-3.5" />Add activity</Btn></>}
-      </>}>
+        {w && !scope && <>
+          {empty && <Btn onClick={addStandard}>Add a standard set</Btn>}
+          <Popover label="More" align="right" width={250}>
+            {(close) => (
+              <div className="flex flex-col gap-1 text-[13px]">
+                {!empty && <button type="button" className="text-left rounded px-2 py-1.5 hover:bg-[#FAFAF8]" onClick={() => { close(); setF(null); setO(null); setFiling(false); setCopying(true); }}>Copy to another workspace…</button>}
+                <button type="button" className="text-left rounded px-2 py-1.5 hover:bg-[#FAFAF8]" onClick={() => { close(); setF(null); setO(null); setCopying(false); setFiling(true); }}>Export / import file…</button>
+              </div>
+            )}
+          </Popover>
+          <Btn variant="primary" onClick={() => { setError(''); setO(null); setCopying(false); setFiling(false); setF(blank()); }}><Plus className="w-3.5 h-3.5" />Add activity</Btn>
+        </>}
+      </div>}>
+      {copying && !scope && !!list.data?.length && <CopyToWorkspace activities={list.data} onClose={() => setCopying(false)} />}
+      {filing && !scope && <ConfigFile activities={list.data ?? []} onClose={() => setFiling(false)} onDone={reload} />}
       {f && !scope && (
         <div className="border border-[#E5E5E0] rounded-lg p-4 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
