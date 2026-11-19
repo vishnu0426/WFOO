@@ -37,18 +37,23 @@ export const EventsCalendar: React.FC<{ events: (EventSpan & { queueName?: strin
             <tr key={w[0]}>
               {w.map((d) => {
                 const here = eventsOnDay(events, d), inMonth = Number(d.slice(5, 7)) - 1 === ym.m, picked = inRange(d), end = !!range && (d === range.start || d === range.end);
+                const holidays = here.filter((h) => h.event.kind === 'holiday' && h.phase === 'on'), shown = here.filter((h) => h.event.kind !== 'holiday');
                 const names = here.map((h) => `${h.event.name}${h.phase === 'on' ? '' : h.phase === 'ramp-in' ? ' (build-up)' : ' (tail)'}`);
                 const label = `${dayLabel(d)}${names.length ? `: ${names.join(', ')}` : ''}`;
                 return (
-                  <td key={d} className={`h-[74px] border border-[#E5E5E0] p-0 align-top ${picked ? 'bg-[#FFF5DD]' : inMonth ? 'bg-white' : 'bg-[#FAFAF8]'}`}>
+                  <td key={d} className={`h-[64px] border border-[#E5E5E0] p-0 align-top ${picked ? 'bg-[#FFF5DD]' : inMonth ? 'bg-white' : 'bg-[#FAFAF8]'}`}>
                     <button type="button" disabled={!onPick} aria-pressed={onPick ? end : undefined} onClick={() => onPick?.(d)}
                       className={`flex h-full w-full flex-col items-stretch gap-0.5 p-1 text-left ${onPick ? 'hover:bg-[#F5F5F2]' : 'cursor-default'} ${end ? 'ring-2 ring-inset ring-[#171717]' : ''}`}>
                       <span className="sr-only">{label}</span>
-                      <span aria-hidden="true" className={`text-[11px] ${d === today ? 'inline-block self-start rounded bg-[#171717] px-1 font-semibold text-white' : inMonth ? 'text-[#171717]' : 'text-[#6B6B6B]'}`}>{Number(d.slice(8))}</span>
-                      {here.slice(0, 2).map((h) => (
+                      <span aria-hidden="true" className="flex items-center gap-1">
+                        <span className={`text-[11px] ${d === today ? 'inline-block self-start rounded bg-[#171717] px-1 font-semibold text-white' : inMonth ? 'text-[#171717]' : 'text-[#6B6B6B]'}`}>{Number(d.slice(8))}</span>
+                        {/* Holidays are a small dot with the name on hover, not a text label: a country pack can add many, and labels crowd the day out. */}
+                        {holidays.map((h) => <i key={h.event.id} title={h.event.name} className="inline-block h-2 w-2 rounded-full bg-[#2F7D5A]" />)}
+                      </span>
+                      {shown.slice(0, 2).map((h) => (
                         <span key={h.event.id} title={`${h.event.name} (${h.event.kind}${h.event.upliftPct ? `, ${h.event.upliftPct > 0 ? '+' : ''}${h.event.upliftPct}%` : ''})`}
                           className={`block truncate rounded border px-1 text-[11px] ${KIND[h.event.kind] ?? KIND.other} ${h.phase === 'on' ? '' : 'border-dashed opacity-60'}`}>{h.event.name}{h.phase === 'on' && h.event.upliftPct ? ` ${h.event.upliftPct > 0 ? '+' : ''}${h.event.upliftPct}%` : ''}</span>))}
-                      {here.length > 2 && <span className="text-[11px] text-[#6B6B6B]">+{here.length - 2} more</span>}
+                      {shown.length > 2 && <span className="text-[11px] text-[#6B6B6B]">+{shown.length - 2} more</span>}
                     </button>
                   </td>
                 );
@@ -57,7 +62,7 @@ export const EventsCalendar: React.FC<{ events: (EventSpan & { queueName?: strin
         </tbody>
       </table>
       <p className="flex flex-wrap gap-3 text-[11px] text-[#6B6B6B]">
-        {Object.keys(KIND).map((k) => <span key={k} className="flex items-center gap-1"><i className={`inline-block h-2.5 w-2.5 rounded-sm border ${KIND[k]}`} />{k[0].toUpperCase() + k.slice(1)}</span>)}
+        {Object.keys(KIND).map((k) => <span key={k} className="flex items-center gap-1"><i className={`inline-block h-2.5 w-2.5 ${k === 'holiday' ? 'rounded-full bg-[#2F7D5A]' : `rounded-sm border ${KIND[k]}`}`} />{k[0].toUpperCase() + k.slice(1)}</span>)}
         <span className="flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm border border-dashed border-[#B5B5AE] opacity-60" />Build-up or tail days (lighter)</span>
       </p>
     </div>

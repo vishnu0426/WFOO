@@ -139,7 +139,6 @@ export function BuilderSection() {
 
   const histProblem = !histFrom || !histTo ? "" : histFrom > histTo ? "The history ends before it starts." : histTo >= fmtDate(new Date()) ? "The history must end before today." : dayCount(histFrom, histTo) < 7 ? "Choose at least 7 days of history." : "";
   const histQueues = histFrom && histTo && !histProblem ? queueDaysIn(mine, histFrom, histTo) : [];
-  const liveShort = (everyForGroup.data ?? []).filter((v) => v.kind === "SHORT" && v.status === "PUBLISHED");
   const willPublish = kind === "SHORT" && hStart && hEnd && !horizonProblem ? publishLines({ fromDay: hStart, toDay: hEnd }, everyForGroup.data ?? []) : null;
 
   const todayStr = fmtDate(new Date());
@@ -195,14 +194,6 @@ export function BuilderSection() {
                 {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </Field>
-            {kind === "SHORT" && liveShort.length > 0 && (
-              <Field label="Based on" tip="Start from the period of a live forecast, to make a new version of it. You can still change the dates.">
-                <select className={input} aria-label="Based on" value={liveShort.find((v) => v.fromDay === hStart && v.toDay === hEnd)?.id ?? ""} onChange={(e) => { const v = liveShort.find((x) => x.id === e.target.value); if (v) { setHStart(v.fromDay); setHEnd(v.toDay); } }}>
-                  <option value="">Nothing: choose the dates myself</option>
-                  {liveShort.map((v) => <option key={v.id} value={v.id}>{`v${v.seq} · ${fmtLong(v.fromDay)} to ${fmtLong(v.toDay)}`}</option>)}
-                </select>
-              </Field>
-            )}
             <Field label="Channels" tip="From the group's queues.">
               {mine.length === 0 ? <span className="text-[13px] text-subtle-foreground">No queues in this group yet</span> : (
                 <div className="flex flex-wrap gap-1.5">
@@ -415,34 +406,60 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
   const events = useApi<EventRow[]>(`/forecast/events?groupId=${groupId}`, [tick]);
   const [f, setF] = useState({ name: '', kind: 'campaign', startDay: '', endDay: '', upliftPct: 0, leadDays: 0, lagDays: 0 });
   const [error, setError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [showCal, setShowCal] = useState(() => { try { return localStorage.getItem('forecast.events.calendar') === '1'; } catch { return false; } });
   const add = async () => {
     setError('');
     try {
       await api('/forecast/events', { method: 'POST', body: { groupId, name: f.name, kind: f.kind, startDay: f.startDay, endDay: f.endDay || undefined, upliftPct: f.upliftPct, leadDays: f.leadDays, lagDays: f.lagDays } });
-      setF({ name: '', kind: 'campaign', startDay: '', endDay: '', upliftPct: 0, leadDays: 0, lagDays: 0 }); setTick((t) => t + 1);
+      setF({ name: '', kind: 'campaign', startDay: '', endDay: '', upliftPct: 0, leadDays: 0, lagDays: 0 }); setTick((t) => t + 1); setAdding(false);
     } catch (e: any) { setError(e.message); }
   };
+  const closeForm = () => { setAdding(false); setError(''); setF({ name: '', kind: 'campaign', startDay: '', endDay: '', upliftPct: 0, leadDays: 0, lagDays: 0 }); };
+  const toggleCal = () => setShowCal((v) => { try { localStorage.setItem('forecast.events.calendar', v ? '0' : '1'); } catch { /* private mode */ } return !v; });
+  // Holidays (often a whole country pack) are kept apart from the events someone added on purpose, so a long list does not bury them.
+  const all = events.data ?? [];
+  const holidays = all.filter((e) => e.kind === 'holiday'), others = all.filter((e) => e.kind !== 'holiday');
+  const holidayYears = [...new Set(holidays.map((e) => e.startDay.slice(0, 4)))].sort();
+  const eventRow = (e: EventRow) => (
+    <tr key={e.id}>
+      <td className="p-3 font-medium">{e.name}</td><td className="p-3 capitalize">{e.kind}</td>
+      <td className="p-3">{dayYear(e.startDay)}</td><td className="p-3">{dayYear(e.endDay)}</td>
+      <td className="p-3 text-right tabular-nums">{e.upliftPct > 0 ? '+' : ''}{e.upliftPct}%</td>
+      <td className="p-3 text-[12px] text-[#6B6B6B]">{e.leadDays || e.lagDays ? `${e.leadDays}d in, ${e.lagDays}d out` : '—'}</td>
+      <td className="p-3">{e.queueName ?? e.groupName ?? 'All groups'}</td>
+      <td className="p-3 text-right">{canEdit && <button aria-label="Delete event" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={async () => { await api(`/forecast/events/${e.id}`, { method: 'DELETE' }); setTick((t) => t + 1); }}><Trash2 className="w-4 h-4" /></button>}</td>
+    </tr>
+  );
+  const head = ['Event', 'Type', 'From', 'To', 'Expected change', 'Ramp', 'Applies to', ''];
+  // The calendar is for picking days or for an overview; it is closed otherwise, so an empty month grid does not push the real content down.
+  const calendarOpen = showCal || adding;
   return (
     <Card title="Special events" sub="Holidays, campaigns, outages. The models learn the uplift from past events and apply the same effect to future ones; the percentage you enter is used until there is history to learn from. Ramp days let the effect build up before the event and taper off after, instead of switching on and off at its exact dates.">
-      <EventsCalendar events={events.data ?? []} range={f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null}
-        onPick={canEdit ? (d) => { const r = pickRange(f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null, d); setF({ ...f, startDay: r.start, endDay: r.end }); } : undefined} />
-      {events.data && events.data.length > 0 && (
-        <div className="overflow-x-auto"><Table head={['Event', 'Type', 'From', 'To', 'Expected change', 'Ramp', 'Applies to', '']} right={[4]}>
-          {events.data.map((e) => (
-            <tr key={e.id}>
-              <td className="p-3 font-medium">{e.name}</td><td className="p-3 capitalize">{e.kind}</td>
-              <td className="p-3">{dayYear(e.startDay)}</td><td className="p-3">{dayYear(e.endDay)}</td>
-              <td className="p-3 text-right tabular-nums">{e.upliftPct > 0 ? '+' : ''}{e.upliftPct}%</td>
-              <td className="p-3 text-[12px] text-[#6B6B6B]">{e.leadDays || e.lagDays ? `${e.leadDays}d in, ${e.lagDays}d out` : '—'}</td>
-              <td className="p-3">{e.queueName ?? e.groupName ?? 'All groups'}</td>
-              <td className="p-3 text-right">{canEdit && <button aria-label="Delete event" className="text-[#6B6B6B] hover:text-[#BC3F3F]" onClick={async () => { await api(`/forecast/events/${e.id}`, { method: 'DELETE' }); setTick((t) => t + 1); }}><Trash2 className="w-4 h-4" /></button>}</td>
-            </tr>
-          ))}
-        </Table></div>
+      <div className="flex flex-wrap items-center gap-2">
+        {canEdit && !adding && <Btn onClick={() => setAdding(true)}><Plus className="w-3.5 h-3.5" />Add event</Btn>}
+        <OutlineButton onClick={toggleCal} disabled={adding} aria-expanded={calendarOpen} title={adding ? 'The calendar stays open while you add an event' : undefined}>{calendarOpen ? 'Hide calendar' : 'Show calendar'}</OutlineButton>
+        {all.length > 0 && <span className="text-[12px] text-[#6B6B6B]">{others.length} {others.length === 1 ? 'event' : 'events'}{holidays.length > 0 && `, ${holidays.length} ${holidays.length === 1 ? 'holiday' : 'holidays'}`}</span>}
+      </div>
+      {calendarOpen && <EventsCalendar events={all} range={f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null}
+        onPick={canEdit && adding ? (d) => { const r = pickRange(f.startDay ? { start: f.startDay, end: f.endDay || f.startDay } : null, d); setF({ ...f, startDay: r.start, endDay: r.end }); } : undefined} />}
+      {others.length > 0 && <div className="overflow-x-auto"><Table head={head} right={[4]}>{others.map(eventRow)}</Table></div>}
+      {events.data && others.length === 0 && holidays.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No events recorded yet.{canEdit ? ' Use Add event to record a campaign, holiday or outage.' : ''}</p>}
+      {holidays.length > 0 && (
+        <details className="rounded border border-[#E5E5E0]">
+          <summary className="cursor-pointer px-3 py-2 text-[13px] font-medium">Holidays <span className="font-normal text-[#6B6B6B]">· {holidays.length} across {holidayYears.join(', ')}</span></summary>
+          <div className="overflow-x-auto border-t border-[#E5E5E0]">
+            {holidayYears.map((y) => (
+              <div key={y}>
+                <div className="bg-[#FAFAF8] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#6B6B6B]">{y}</div>
+                <Table head={head} right={[4]}>{holidays.filter((e) => e.startDay.startsWith(y)).map(eventRow)}</Table>
+              </div>))}
+          </div>
+        </details>
       )}
-      {events.data?.length === 0 && <p className="text-[12px] text-[#6B6B6B]">No events recorded yet.</p>}
-      {canEdit && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+      {canEdit && adding && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 items-end rounded border border-[#E5E5E0] p-3">
+          <div className="col-span-2 lg:col-span-4 text-[12px] text-[#6B6B6B]">Click a day on the calendar for the first day, then another for the last, or type the dates.</div>
           <div className="col-span-2"><StackField label="Name"><PlainInput value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Spring sale" /></StackField></div>
           <StackField label="Type"><PlainSelect value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>{['campaign', 'holiday', 'outage', 'other'].map((k) => <option key={k} value={k}>{k}</option>)}</PlainSelect></StackField>
           <StackField label="From"><PlainInput type="date" value={f.startDay} onChange={(e) => setF({ ...f, startDay: e.target.value })} /></StackField>
@@ -450,7 +467,7 @@ const EventsCard: React.FC<{ groupId: string; canEdit: boolean }> = ({ groupId, 
           <StackField label="Change %"><PlainInput type="number" value={f.upliftPct} onChange={(e) => setF({ ...f, upliftPct: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp in (days)"><PlainInput type="number" min={0} max={60} value={f.leadDays} onChange={(e) => setF({ ...f, leadDays: Number(e.target.value) })} /></StackField>
           <StackField label="Ramp out (days)"><PlainInput type="number" min={0} max={60} value={f.lagDays} onChange={(e) => setF({ ...f, lagDays: Number(e.target.value) })} /></StackField>
-          <div className="col-span-2 lg:col-span-4 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Add event</Btn>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
+          <div className="col-span-2 lg:col-span-4 flex items-center gap-3"><Btn disabled={!f.name || !f.startDay} onClick={add}><Plus className="w-3.5 h-3.5" />Save event</Btn><OutlineButton onClick={closeForm}>Cancel</OutlineButton>{error && <span className="text-[12px] text-[#BC3F3F]">{error}</span>}</div>
         </div>
       )}
     </Card>
