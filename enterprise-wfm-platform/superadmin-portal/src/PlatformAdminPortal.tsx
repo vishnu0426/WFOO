@@ -7,6 +7,7 @@
  * Features Interactive Hierarchical Tree View (Platform to Organisations to Workspaces & Admins).
  */
 import { ZoneSelect } from './ZoneSelect';
+import { PasswordInput } from './PasswordInput';
 import React, { useEffect, useState } from 'react';
 import { NewOrganisationForm } from './NewOrganisationForm';
 import { AccountPage } from './AccountPage';
@@ -3781,8 +3782,8 @@ export const PlatformAdminPortal: React.FC = () => {
 
               <div>
                 <label className="block text-[12px] font-semibold text-[#171717] mb-1">Password (min 8 characters)</label>
-                <input
-                  type="password"
+                <PasswordInput
+                  
                   required
                   minLength={8}
                   value={newAdminForm.password}

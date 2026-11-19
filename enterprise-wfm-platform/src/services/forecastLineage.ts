@@ -87,7 +87,7 @@ export function readColumns(raw: string | null): Record<OptionalColumn, boolean>
 
 // ---------------------------------------------------------------- what the row menu offers
 
-export type RowAction = 'open' | 'compare' | 'submit' | 'approve' | 'publish' | 'return' | 'clone' | 'export' | 'archive' | 'delete';
+export type RowAction = 'open' | 'compare' | 'submit' | 'approve' | 'publish' | 'return' | 'clone' | 'withdraw' | 'export' | 'archive' | 'delete';
 /** The actions a version's menu offers: what its status allows and what the person may do (the gateway checks both again). */
 export function rowActions(status: VersionStatus, can: (permission: string) => boolean, o: { comparable: boolean }): RowAction[] {
   const a: RowAction[] = ['open'];
@@ -97,6 +97,7 @@ export function rowActions(status: VersionStatus, can: (permission: string) => b
   if (status === 'APPROVED' && can('forecast:publish')) a.push('publish');
   if ((status === 'SUBMITTED' || status === 'APPROVED') && (can('forecast:approve') || can('forecast:submit'))) a.push('return');
   if ((status === 'PUBLISHED' || status === 'ARCHIVED') && can('forecast:create')) a.push('clone');
+  if (status === 'PUBLISHED' && (can('forecast:publish') || can('forecast:delete'))) a.push('withdraw');       // a live version is taken out of use (archived) before it can be deleted
   a.push('export');
   if ((status === 'DRAFT' || status === 'SUBMITTED' || status === 'APPROVED') && (can('forecast:approve') || can('forecast:delete'))) a.push('archive');
   if (status !== 'PUBLISHED' && can('forecast:delete')) a.push('delete');
@@ -127,3 +128,6 @@ export function shortWhen(iso: string, now = new Date()): string {
   if (sameDay(d, yesterday)) return 'Yesterday';
   return `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() === now.getFullYear() ? '' : ` ${d.getFullYear()}`}`;
 }
+
+/** The versions of a forecast that can be deleted in one go: everything that is not live. */
+export const deletable = <V extends VersionLike>(members: V[]): V[] => members.filter((v) => v.status !== 'PUBLISHED').sort((a, b) => b.seq - a.seq);

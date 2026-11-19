@@ -28,6 +28,8 @@ const SETTINGS_TTL_MS = 15_000;
 const mapCache = new Map<string, { at: number; maps: FieldMap[] }>();
 const ruleCache = new Map<string, { at: number; rule: EventRule; unflushed: number }>();
 /** Test-only: forget what has been cached, and what was last written about each connector. */
+/** Drops what is remembered about a connector's event-type rules, so a rule that has just been set is used by the next message, not after the cache runs out. */
+export function forgetRules(connectorId: string): void { for (const k of ruleCache.keys()) if (k.startsWith(`${connectorId}|`)) ruleCache.delete(k); }
 export const _resetSubscriberCachesForTests = () => { mapCache.clear(); ruleCache.clear(); forgetAllConnectors(); };
 
 async function loadFieldMaps(connectorId: string, tenantId: string, preset?: Preset): Promise<FieldMap[]> {

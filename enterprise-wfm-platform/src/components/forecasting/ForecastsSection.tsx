@@ -7,9 +7,10 @@ import React, { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { api, CHANNEL_LABEL, download, isNew, MODEL_LABEL, STATUS_LABEL, type VersionMeta, type VersionStatus, when } from "../../services/api";
 import { useForecast } from "../../services/forecastStore";
-import { COLUMNS_KEY, OPTIONAL_COLUMNS, defaultBase, groupFamilies, horizonLabel, originOf, readColumns, rowActions, shortWhen, type Family, type OptionalColumn, type RowAction } from "../../services/forecastLineage";
+import { COLUMNS_KEY, OPTIONAL_COLUMNS, defaultBase, deletable, groupFamilies, horizonLabel, originOf, readColumns, rowActions, shortWhen, type Family, type OptionalColumn, type RowAction } from "../../services/forecastLineage";
 import { OTHER_MEASURES } from "../../services/accuracyTerms";
 import { publishLines } from "../../services/liveForecasts";
+import { UsageNote, type Usage } from "./UsageNote";
 import { useApi } from "./hooks";
 import { Empty } from "./ui";
 import { Confirm } from "../configuration/groups/shared";
@@ -23,7 +24,7 @@ const modelName = (m?: string | null) => (m ? (m === "mixed" ? "Mixed by queue" 
 const customName = (n: string) => !/^(Short|Long)-term v\d+/.test(n);
 const isAuto = (n: string) => / · auto refresh$/.test(n);
 
-type Pending = { kind: "publish" | "archive" | "return" | "delete"; v: VersionMeta };
+type Pending = { kind: "publish" | "archive" | "return" | "delete" | "withdraw"; v: VersionMeta };
 
 export function ForecastsSection() {
   const { groups, group, setGroupId, setVersionId, go, can, reload, setNotice } = useForecast();
@@ -35,6 +36,9 @@ export function ForecastsSection() {
   const [cols, setCols] = useState(() => readColumns(localStorage.getItem(COLUMNS_KEY)));
   const [showCols, setShowCols] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
+  const usage = useApi<Usage>(pending && (pending.kind === "withdraw" || pending.kind === "delete") ? `/forecast/versions/${pending.v.id}/usage` : null, [pending?.v.id, pending?.kind]);
+  const [cleanup, setCleanup] = useState<{ members: VersionMeta[]; name: string } | null>(null);          // clearing out a forecast's versions that are not live
+  const [cleanTicked, setCleanTicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [cmp, setCmp] = useState<{ v: VersionMeta; members: VersionMeta[]; base: string } | null>(null);
@@ -74,7 +78,7 @@ export function ForecastsSection() {
       else if (a === "approve") await post(v, "approve", {}, `Approved v${v.seq}. Publish it to drive the schedule.`);
       else if (a === "clone") { setBusy(true); const c = await api<VersionMeta>(`/forecast/versions/${v.id}/clone`, { method: "POST" }); setNotice({ kind: "ok", text: `Created ${c.name}. Adjust it, then submit it for approval.` }); await refresh(); setOpen((o) => new Set(o).add(`${v.wfmGroupId}|${v.kind}`)); setBusy(false); }
       else if (a === "export") await download(`/forecast/versions/${v.id}/export.csv`, `forecast-v${v.seq}.csv`);
-      else { setError(""); setPending({ kind: a === "publish" ? "publish" : a === "return" ? "return" : a === "archive" ? "archive" : "delete", v }); }
+      else { setError(""); setPending({ kind: a === "publish" ? "publish" : a === "return" ? "return" : a === "archive" ? "archive" : a === "withdraw" ? "withdraw" : "delete", v }); }
     } catch (e: any) { setBusy(false); setNotice({ kind: "err", text: e.message }); }
   };
   const confirm = async (reason: string) => {
@@ -82,6 +86,7 @@ export function ForecastsSection() {
     if (kind === "publish") await post(v, "publish", {}, `Published v${v.seq}. Staffing coverage and the auto-scheduler now use it for ${horizonLabel(v.fromDay, v.toDay)}.${v.kind === "SHORT" && publishLines(v, all.data ?? []).replaces.length ? " The live version for the same period is archived." : ""}`);
     else if (kind === "return") await post(v, "reject", { reason }, `Returned v${v.seq} to draft.`);
     else if (kind === "archive") await post(v, "archive", { reason }, `Archived v${v.seq}. Clone it to work on it again.`);
+    else if (kind === "withdraw") await post(v, "withdraw", { reason }, `Withdrew v${v.seq}. It is archived and kept: you can clone it, or delete it from its menu.`);
     else {
       setBusy(true); setError("");
       try { await api(`/forecast/versions/${v.id}`, { method: "DELETE" }); setPending(null); setNotice({ kind: "ok", text: `Deleted v${v.seq}.` }); await refresh(); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
@@ -90,10 +95,10 @@ export function ForecastsSection() {
 
   const LABEL: Record<RowAction, (v: VersionMeta) => string> = {
     open: () => "Open", compare: () => "Compare…", submit: () => "Submit for approval", approve: () => "Approve", publish: () => "Publish…", return: () => "Return to draft…",
-    clone: () => "Clone to edit", export: () => "Export CSV", archive: () => "Archive…", delete: () => "Delete…",
+    clone: () => "Clone to edit", withdraw: () => "Withdraw…", export: () => "Export CSV", archive: () => "Archive…", delete: () => "Delete…",
   };
   const menu = (v: VersionMeta, members: VersionMeta[], who: string, family = false) => (
-    <RowMenu label={`Actions for ${who}`} items={[...rowActions(v.status, can, { comparable: members.length > 1 }).map((a) => ({ label: LABEL[a](v), onClick: () => void run(v, members, a), danger: a === "delete" })), ...(family ? [{ label: "Auto-refresh…", onClick: () => setRefreshFor({ groupId: v.wfmGroupId, kind: v.kind as "SHORT" | "LONG" }), danger: false }] : [])]} />
+    <RowMenu label={`Actions for ${who}`} items={[...rowActions(v.status, can, { comparable: members.length > 1 }).map((a) => ({ label: LABEL[a](v), onClick: () => void run(v, members, a), danger: a === "delete" })), ...(family && can("forecast:delete") && deletable(members).length > 0 ? [{ label: `Clear out ${deletable(members).length} not live…`, onClick: () => { setCleanTicked(new Set(deletable(members).map((x) => x.id))); setCleanup({ members: deletable(members), name: who }); }, danger: true }] : []), ...(family ? [{ label: "Auto-refresh…", onClick: () => setRefreshFor({ groupId: v.wfmGroupId, kind: v.kind as "SHORT" | "LONG" }), danger: false }] : [])]} />
   );
 
   const cell = "px-3 py-2.5 align-middle whitespace-nowrap overflow-hidden text-ellipsis";
@@ -244,9 +249,34 @@ export function ForecastsSection() {
         <Confirm title={`Archive v${pending.v.seq}?`} confirmLabel="Archive" reason busy={busy} error={error} onCancel={() => setPending(null)} onConfirm={(r) => void confirm(r)}>
           <p>It leaves the working list but is kept. Clone it to work on it again. The live version cannot be archived: publish another one to replace it.</p>
         </Confirm>)}
+      {pending?.kind === "withdraw" && (
+        <Confirm title={`Withdraw v${pending.v.seq}?`} confirmLabel="Withdraw" reason danger busy={busy} error={error} onCancel={() => setPending(null)} onConfirm={(r) => void confirm(r)}>
+          <p>It stops being the live forecast for {horizonLabel(pending.v.fromDay, pending.v.toDay)} and is archived. Nothing is deleted: it can be cloned, or deleted afterwards.</p>
+          <UsageNote usage={usage.data} verb="withdraw" />
+        </Confirm>)}
+      {cleanup && (
+        <Confirm title={`Clear out versions of ${cleanup.name}`} confirmLabel={`Delete ${cleanTicked.size}`} reason danger busy={busy} error={error} disabled={cleanTicked.size === 0} onCancel={() => { setCleanup(null); setError(""); }}
+          onConfirm={async (reason) => {
+            setBusy(true); setError("");
+            try {
+              const r = await api<{ deleted: number; skipped: { name: string; reason: string }[] }>("/forecast/versions/delete", { method: "POST", body: { ids: [...cleanTicked], reason } });
+              setCleanup(null); setNotice({ kind: "ok", text: `Deleted ${r.deleted} ${r.deleted === 1 ? "version" : "versions"}.${r.skipped.length ? ` ${r.skipped.length} left as they were: ${r.skipped.slice(0, 3).map((x) => `${x.name} (${x.reason})`).join("; ")}.` : ""}` }); await refresh();
+            } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+          }}>
+          <p>The versions that are not live. Untick any you want to keep. The live version is never touched.</p>
+          <div className="mt-2 max-h-56 space-y-1 overflow-auto rounded-md border border-[#E5E5E0] p-2">
+            {cleanup.members.map((m) => (
+              <label key={m.id} className="flex cursor-pointer items-center gap-2 text-[13px]">
+                <input type="checkbox" checked={cleanTicked.has(m.id)} onChange={() => setCleanTicked((t) => { const n = new Set(t); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })} />
+                <span className="font-medium">v{m.seq}</span><span className="text-[#6B6B6B]">{STATUS_LABEL[m.status]} · {horizonLabel(m.fromDay, m.toDay)}</span>
+              </label>
+            ))}
+          </div>
+        </Confirm>)}
       {pending?.kind === "delete" && (
         <Confirm title={`Delete v${pending.v.seq}?`} confirmLabel="Delete" danger busy={busy} error={error} onCancel={() => setPending(null)} onConfirm={() => void confirm("")}>
           <p>"{pending.v.name}" and its numbers are removed for good. Archive it instead to keep it.</p>
+          <UsageNote usage={usage.data} verb="delete" />
         </Confirm>)}
     </div>
   );

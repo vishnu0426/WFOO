@@ -3,6 +3,7 @@
  * The link works once: choosing a password uses it up, and the person then signs in as usual.
  */
 import React, { useEffect, useState } from 'react';
+import { PasswordInput } from '../common/PasswordInput';
 import { api } from '../../services/api';
 
 interface Link { valid: boolean; username?: string; name?: string; organisation?: string; code?: string }
@@ -84,11 +85,11 @@ export const SetPasswordView: React.FC = () => {
       </div>
       <label className="block text-[12px] font-semibold text-[#171717]">
         New password
-        <input type="password" value={next} onChange={(e) => setNext(e.target.value)} autoFocus autoComplete="new-password" className={field} />
+        <PasswordInput wrapperClassName="mt-1" value={next} onChange={(e) => setNext(e.target.value)} autoFocus autoComplete="new-password" className={field.replace('mt-1', '')} />
       </label>
       <label className="block text-[12px] font-semibold text-[#171717]">
         New password again
-        <input type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" className={field} />
+        <PasswordInput wrapperClassName="mt-1" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" className={field.replace('mt-1', '')} />
       </label>
       <p className="text-[11px] text-[#6B6B6B]">At least 8 characters, mixing letters with numbers or symbols. Not your username and not a common word or number run.</p>
       {error && <div role="alert" className="text-[12px] text-[#BC3F3F] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2">{error}</div>}

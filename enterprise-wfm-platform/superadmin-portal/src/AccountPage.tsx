@@ -1,5 +1,6 @@
 /** Super Admin account: profile, password and signed-in devices. */
 import React, { useEffect, useState } from 'react';
+import { PasswordInput } from './PasswordInput';
 import QRCode from 'qrcode';
 
 type Api = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -175,15 +176,15 @@ export const AccountPage: React.FC<{ api: Api; onProfileSaved: (displayName: str
         <form onSubmit={changePassword} className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4" autoComplete="off">
           <div className="md:col-span-2 max-w-sm">
             <label className="block text-[12px] font-semibold text-[#171717] mb-1" htmlFor="acc-cur">Current password</label>
-            <input id="acc-cur" type="password" autoComplete="current-password" className={inputCls} value={cur} onChange={(e) => setCur(e.target.value)} />
+            <PasswordInput id="acc-cur" autoComplete="current-password" className={inputCls} value={cur} onChange={(e) => setCur(e.target.value)} />
           </div>
           <div>
             <label className="block text-[12px] font-semibold text-[#171717] mb-1" htmlFor="acc-new">New password</label>
-            <input id="acc-new" type="password" autoComplete="new-password" className={inputCls} value={next} onChange={(e) => setNext(e.target.value)} />
+            <PasswordInput id="acc-new" autoComplete="new-password" className={inputCls} value={next} onChange={(e) => setNext(e.target.value)} />
           </div>
           <div>
             <label className="block text-[12px] font-semibold text-[#171717] mb-1" htmlFor="acc-again">Confirm new password</label>
-            <input id="acc-again" type="password" autoComplete="new-password" className={inputCls} value={again} onChange={(e) => setAgain(e.target.value)} />
+            <PasswordInput id="acc-again" autoComplete="new-password" className={inputCls} value={again} onChange={(e) => setAgain(e.target.value)} />
           </div>
           <ul className="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-[12px]">
             {RULES.map(([label, ok]) => (
@@ -228,7 +229,7 @@ export const AccountPage: React.FC<{ api: Api; onProfileSaved: (displayName: str
                 <form onSubmit={mfaChange} className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-lg" autoComplete="off">
                   <div>
                     <label className="block text-[12px] font-semibold text-[#171717] mb-1" htmlFor="mfa-pw">Password</label>
-                    <input id="mfa-pw" type="password" className={inputCls} value={mfaPw} onChange={(e) => setMfaPw(e.target.value)} autoComplete="current-password" />
+                    <PasswordInput id="mfa-pw" className={inputCls} value={mfaPw} onChange={(e) => setMfaPw(e.target.value)} autoComplete="current-password" />
                   </div>
                   <div>
                     <label className="block text-[12px] font-semibold text-[#171717] mb-1" htmlFor="mfa-off">Code from your app</label>

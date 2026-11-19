@@ -12,6 +12,8 @@ import { useForecast } from "../../services/forecastStore";
 import { useApi, useVersionFull } from "./hooks";
 import { TracePanel, useTrace } from "./Trace";
 import { useVersionActions } from "./useVersionActions";
+import { Confirm } from "../configuration/groups/shared";
+import { UsageNote, type Usage } from "./UsageNote";
 import { ChartTooltip } from "./ChartTooltip";
 import { Banner, Busy, Empty } from "./ui";
 import { ContextBar } from "./ContextBar";
@@ -24,6 +26,8 @@ import { DateField, Metric, OutlineButton, PageHeader, PrimaryButton, Section, S
 export function DashboardSection() {
   const { groups, group, setGroupId, versions, version, setVersionId, kind, setKind, can, go, reload, setNotice, view } = useForecast();
   const act = useVersionActions();
+  const [withdrawing, setWithdrawing] = useState(false);
+  const usage = useApi<Usage>(withdrawing && version ? `/forecast/versions/${version.id}/usage` : null, [withdrawing, version?.id]);
   const { full } = useVersionFull(version);
   const [pin, setPin] = useState<number | null>(null); // the chart point being explained
   const [busy, setBusy] = useState(false);
@@ -141,6 +145,7 @@ export function DashboardSection() {
           {act.publish && <PrimaryButton onClick={act.publish} disabled={act.busy}>Publish</PrimaryButton>}
           {act.returnToDraft && <OutlineButton onClick={act.returnToDraft} disabled={act.busy}>Return to draft</OutlineButton>}
           {act.clone && <OutlineButton onClick={act.clone} disabled={act.busy}>Clone to edit</OutlineButton>}
+          {act.withdraw && <button onClick={() => setWithdrawing(true)} disabled={act.busy} className="h-9 rounded-md px-3 text-critical transition-colors hover:bg-background disabled:opacity-50">Withdraw</button>}
           {act.remove && <button onClick={act.remove} disabled={act.busy} className="h-9 rounded-md px-3 text-critical transition-colors hover:bg-background disabled:opacity-50">Delete</button>}
           {version && can("forecast:create") && (
             <OutlineButton onClick={reforecast} disabled={busy}><RefreshCw className={`size-3.5 ${busy ? "animate-spin" : ""}`} /> Reforecast</OutlineButton>
@@ -172,6 +177,12 @@ export function DashboardSection() {
     <div>
       {header}
       <ContextBar shownGrain={win?.grain ?? "30"} />
+      {withdrawing && version && act.withdraw && (
+        <Confirm title={`Withdraw v${version.seq}?`} confirmLabel="Withdraw" reason danger busy={act.busy} onCancel={() => setWithdrawing(false)} onConfirm={async (r) => { await act.withdraw!(r); setWithdrawing(false); }}>
+          <p>It stops being the live forecast for {version.fromDay} to {version.toDay} and is archived. Nothing is deleted: it can be cloned, or deleted afterwards.</p>
+          <UsageNote usage={usage.data} verb="withdraw" />
+        </Confirm>
+      )}
 
       {res.error && <div className="px-6 pt-3"><Banner kind="err">{res.error}</Banner></div>}
 

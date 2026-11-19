@@ -681,7 +681,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
       </div>}
 
       {tab === "rules" && <>
-        {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} />}
+        {preset?.writesTo === "agent_state" && <EventTypeRules connectorId={connector.id} canWrite={canWrite} onSaved={onChanged} />}
         {connector.category === "ACD" && preset?.writesTo !== "agent_state" && <EntityMatching connectorId={connector.id} entityType="queue" canWrite={canWrite} />}
         {(connector.category === "CRM" || connector.category === "HRMS" || preset?.writesTo === "agent_state") && <EntityMatching connectorId={connector.id} entityType="employee" canWrite={canWrite} />}
       </>}
@@ -692,7 +692,7 @@ export const ConnectorDetail: React.FC<{ feeds?: boolean; connector: Connector; 
 /** What a raw event type (e.g. EVT_AGENT_READY) means, for the messages that carry no state of their own --
  * logins, logouts, heartbeats. A new event type starts PENDING and every message of that type is dropped
  * until someone sets it here; this is the only place that can resolve a PENDING rule. */
-const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean }> = ({ connectorId, canWrite }) => {
+const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean; onSaved?: () => void }> = ({ connectorId, canWrite, onSaved }) => {
   const [tick, setTick] = useState(0);
   const rules = useApi<EventRule[]>(`/integrations/${connectorId}/event-rules`, [connectorId, tick]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -711,7 +711,7 @@ const EventTypeRules: React.FC<{ connectorId: string; canWrite: boolean }> = ({ 
       await api(`/integrations/${connectorId}/event-rules/${encodeURIComponent(eventType)}`, {
         method: "PUT", body: { action: form.mode, state: form.mode === "STATE" ? form.state.trim() : null, reason: form.mode === "STATE" ? (form.reason.trim() || null) : null },
       });
-      setEditing(null); setTick((t) => t + 1);
+      setEditing(null); setTick((t) => t + 1); onSaved?.();      // the connector's own status line is read again: the "waiting for a rule" error goes at once
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 

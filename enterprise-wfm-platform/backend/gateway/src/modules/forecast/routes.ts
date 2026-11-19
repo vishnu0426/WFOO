@@ -434,7 +434,7 @@ forecast.patch('/versions/:id/adjustments', requires('forecast:adjust'), async (
 // ---------------------------------------------------------------- lifecycle: Draft -> Submitted -> Approved -> Published (-> Archived)
 
 type Status = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'PUBLISHED' | 'ARCHIVED';
-async function move(req: any, res: any, from: Status[], to: Status, action: 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'ARCHIVE', reasonRequired = false) {
+async function move(req: any, res: any, from: Status[], to: Status, action: 'SUBMIT' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'ARCHIVE' | 'WITHDRAW', reasonRequired = false) {
   const p = me(req), id = String(req.params.id);
   const reason = String(req.body?.reason ?? '').trim();
   if (reasonRequired && reason.length < 3) throw bad('A reason is required');
@@ -464,12 +464,13 @@ async function move(req: any, res: any, from: Status[], to: Status, action: 'SUB
       REJECT: { set: 'submitted_by = NULL, submitted_by_id = NULL, submitted_at = NULL, approved_by = NULL, approved_at = NULL', params: [] },
       PUBLISH: { set: 'published_by = $2, published_at = now()', params: [p.name] },
       ARCHIVE: { set: 'rev = rev', params: [] },
+      WITHDRAW: { set: 'rev = rev', params: [] },
     };
     await tx.exec(`UPDATE forecast_versions SET status = '${to}', ${upd[action].set} WHERE tenant_id = :t AND id = $1`, [id, ...upd[action].params]);
-    await audit(tx, p, req, { action: action === 'ARCHIVE' ? 'UPDATE' : action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to }, diffSummary: action === 'ARCHIVE' ? 'archived' : replaced.length ? `replaced ${replaced.join(', ')} (same period)` : undefined });
+    await audit(tx, p, req, { action: action === 'ARCHIVE' || action === 'WITHDRAW' ? 'UPDATE' : action, entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: reason || undefined, before: { status: v.status }, after: { status: to }, diffSummary: action === 'WITHDRAW' ? 'withdrawn from use (archived)' : action === 'ARCHIVE' ? 'archived' : replaced.length ? `replaced ${replaced.join(', ')} (same period)` : undefined });
     return tx.one<any>('SELECT * FROM forecast_versions WHERE tenant_id = :t AND id = $1', [id]);
   });
-  if (action === 'PUBLISH') { await dropCache(p.tenantId, 'sched:*'); }
+  if (action === 'PUBLISH' || action === 'WITHDRAW') { await dropCache(p.tenantId, 'sched:*'); }
   publish(p.tenantId, ['forecast', action.toLowerCase()], { id, name: out.name, status: out.status, by: p.name });
   res.json({ ...versionDto(out), replaced });
 }
@@ -477,6 +478,35 @@ forecast.post('/versions/:id/submit', requires('forecast:submit'), (req, res) =>
 forecast.post('/versions/:id/approve', requires('forecast:approve'), (req, res) => move(req, res, ['SUBMITTED'], 'APPROVED', 'APPROVE'));
 forecast.post('/versions/:id/reject', requiresAny('forecast:approve', 'forecast:submit'), (req, res) => move(req, res, ['SUBMITTED', 'APPROVED'], 'DRAFT', 'REJECT', true));
 forecast.post('/versions/:id/publish', requires('forecast:publish'), (req, res) => move(req, res, ['APPROVED'], 'PUBLISHED', 'PUBLISH'));
+/** Take a live version out of use: it is archived, with a reason, and kept. Schedules built on it keep what they have; they just no longer have a live forecast to follow. Delete is then possible. */
+forecast.post('/versions/:id/withdraw', requiresAny('forecast:publish', 'forecast:delete'), (req, res) => move(req, res, ['PUBLISHED'], 'ARCHIVED', 'WITHDRAW', true));
+/** What depends on a version: the schedules built on it. Said before it is withdrawn or deleted. */
+forecast.get('/versions/:id/usage', requires('forecast:read'), async (req, res) => {
+  const p = me(req), id = String(req.params.id);
+  res.json(await withTenant(p.tenantId, async (tx) => {
+    const v = await loadVersion(tx, id);
+    const items = await tx.q<any>('SELECT id, name, status, period_start::text AS period_start, period_end::text AS period_end FROM schedule_versions WHERE tenant_id = :t AND forecast_version_id = $1 ORDER BY created_at DESC LIMIT 20', [id]);
+    const [{ n }] = await tx.q<{ n: number }>('SELECT count(*)::int AS n FROM schedule_versions WHERE tenant_id = :t AND forecast_version_id = $1', [id]);
+    return { id, name: v.name, status: v.status, schedules: { count: n, published: items.filter((x: any) => x.status === 'PUBLISHED').length, items: items.map((x: any) => ({ id: x.id, name: x.name, status: x.status, from: x.periodStart, to: x.periodEnd })) } };
+  }));
+});
+/** Delete several versions in one go (one reason on record for all). A live version is never deleted here: it is reported as skipped, with what to do. */
+forecast.post('/versions/delete', requires('forecast:delete'), async (req, res) => {
+  const p = me(req), b = parse(z.object({ ids: z.array(uuid).min(1).max(200), reason: z.string().trim().min(3, 'is required').max(300) }), req.body);
+  const out = await withTenant(p.tenantId, async (tx) => {
+    const deleted: string[] = [], skipped: { id: string; name: string; reason: string }[] = [];
+    for (const id of [...new Set(b.ids)]) {
+      const v = await tx.one<any>('SELECT * FROM forecast_versions WHERE tenant_id = :t AND id = $1 FOR UPDATE', [id]);
+      if (!v) { skipped.push({ id, name: 'Unknown', reason: 'Not found' }); continue; }
+      if (v.status === 'PUBLISHED') { skipped.push({ id, name: v.name, reason: 'It is live. Withdraw it first.' }); continue; }
+      await tx.exec('DELETE FROM forecast_versions WHERE tenant_id = :t AND id = $1', [id]);
+      await audit(tx, p, req, { action: 'DELETE', entityType: 'FORECAST_VERSION', entityId: id, entityName: v.name, reason: b.reason, before: versionDto(v), diffSummary: `deleted with ${b.ids.length} others` });
+      deleted.push(id);
+    }
+    return { deleted: deleted.length, skipped };
+  });
+  res.json(out);
+});
 /** Put a version that is not live away without deleting it (a reason is required; the live version cannot be archived, publish another to replace it). Clone it to work on it again. */
 forecast.post('/versions/:id/archive', requiresAny('forecast:approve', 'forecast:delete'), (req, res) => move(req, res, ['DRAFT', 'SUBMITTED', 'APPROVED'], 'ARCHIVED', 'ARCHIVE', true));
 

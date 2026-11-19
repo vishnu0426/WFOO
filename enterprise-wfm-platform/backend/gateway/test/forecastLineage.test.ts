@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultBase, groupFamilies, horizonLabel, originOf, readColumns, rowActions, shortWhen, updatedAt } from '../../../src/services/forecastLineage.ts';
+import { defaultBase, deletable, groupFamilies, horizonLabel, originOf, readColumns, rowActions, shortWhen, updatedAt } from '../../../src/services/forecastLineage.ts';
 
 let n = 0;
 const v = (over: any): any => ({ id: `id${++n}`, seq: 1, wfmGroupId: 'g1', name: 'Short-term v1', kind: 'SHORT', status: 'DRAFT', fromDay: '2026-11-04', toDay: '2026-12-15', parentVersionId: null, createdBy: 'Admin', createdAt: '2026-11-01T10:00:00Z', submittedAt: null, approvedAt: null, publishedAt: null, ...over });
@@ -84,7 +84,7 @@ describe('the row menu', () => {
     assert.deepEqual(rowActions('DRAFT', all, { comparable: true }), ['open', 'compare', 'submit', 'export', 'archive', 'delete']);
     assert.deepEqual(rowActions('SUBMITTED', all, { comparable: true }), ['open', 'compare', 'approve', 'return', 'export', 'archive', 'delete']);
     assert.deepEqual(rowActions('APPROVED', all, { comparable: false }), ['open', 'publish', 'return', 'export', 'archive', 'delete']);
-    assert.deepEqual(rowActions('PUBLISHED', all, { comparable: true }), ['open', 'compare', 'clone', 'export'], 'the live version cannot be archived or deleted');
+    assert.deepEqual(rowActions('PUBLISHED', all, { comparable: true }), ['open', 'compare', 'clone', 'withdraw', 'export'], 'the live version cannot be archived or deleted: it is withdrawn first');
     assert.deepEqual(rowActions('ARCHIVED', all, { comparable: true }), ['open', 'compare', 'clone', 'export', 'delete']);
   });
   it('offers only what the person may do', () => {
@@ -117,5 +117,13 @@ describe('a short "updated"', () => {
     assert.equal(shortWhen(new Date(2026, 9, 5, 10, 0).toISOString(), now), '5 Oct');
     assert.equal(shortWhen(new Date(2025, 11, 30, 10, 0).toISOString(), now), '30 Dec 2025');
     assert.equal(shortWhen('nonsense', now), '–');
+  });
+});
+
+describe('clearing out a forecast', () => {
+  it('offers every version that is not live, newest first, and never the live one', () => {
+    const vs = [v({ id: 'a', seq: 1, status: 'ARCHIVED' }), v({ id: 'b', seq: 2, status: 'PUBLISHED' }), v({ id: 'c', seq: 3, status: 'DRAFT' }), v({ id: 'd', seq: 4, status: 'APPROVED' })];
+    assert.deepEqual(deletable(vs).map((x) => x.id), ['d', 'c', 'a']);
+    assert.deepEqual(deletable([v({ id: 'z', seq: 1, status: 'PUBLISHED' })]), []);
   });
 });

@@ -3,6 +3,7 @@
  * administrator). The gateway refuses everything else until a new password has been chosen, so there is nothing to skip.
  */
 import React, { useState } from 'react';
+import { PasswordInput } from '../common/PasswordInput';
 import { KeyRound } from 'lucide-react';
 import { api, storeSession, Session } from '../../services/api';
 
@@ -43,15 +44,15 @@ export const ChangePasswordView: React.FC<{ session: Session; onChanged: (sessio
         </div>
         <label className="block text-[12px] font-semibold text-[#171717]">
           Temporary password
-          <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus autoComplete="current-password" className={field} />
+          <PasswordInput wrapperClassName="mt-1" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus autoComplete="current-password" className={field.replace('mt-1', '')} />
         </label>
         <label className="block text-[12px] font-semibold text-[#171717]">
           New password
-          <input type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" className={field} />
+          <PasswordInput wrapperClassName="mt-1" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" className={field.replace('mt-1', '')} />
         </label>
         <label className="block text-[12px] font-semibold text-[#171717]">
           New password again
-          <input type="password" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" className={field} />
+          <PasswordInput wrapperClassName="mt-1" value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" className={field.replace('mt-1', '')} />
         </label>
         <p className="text-[11px] text-[#6B6B6B]">At least 8 characters, mixing letters with numbers or symbols. Not your username, not a common word or number run, and not the temporary password.</p>
         {error && <div className="text-[12px] text-[#BC3F3F] bg-[#FCEBEC] border border-[#C84A4A]/20 rounded px-3 py-2">{error}</div>}

@@ -7,6 +7,8 @@ import React, { useEffect, useState } from 'react';
 import { LogIn } from 'lucide-react';
 import { api, ApiError, storeSession, Session } from '../../services/api';
 import { orgFromAddress, type OrgSource } from '../../services/orgAddress';
+import { PasswordInput } from '../common/PasswordInput';
+import { ForgotPassword, type ResetChannel } from './ForgotPassword';
 
 const ORG_KEY = 'wfm_tenant';                                // the organisation signed in to last on this device
 const FROM_SUBDOMAIN = (import.meta as any).env?.VITE_ORG_FROM_SUBDOMAIN === 'true';
@@ -69,6 +71,16 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
     return () => clearTimeout(id);
   }, [orgCode, resolving]);
 
+  // "Forgot your password?" is offered when the organisation has turned reset by email or SMS on
+  const [reset, setReset] = useState<ResetChannel[]>([]);
+  const [forgot, setForgot] = useState(false);
+  useEffect(() => {
+    if (resolving || !orgCode) { setReset([]); return undefined; }
+    let live = true;
+    const id = setTimeout(() => { api<{ channels: ResetChannel[] }>('/auth/password-reset/options', { method: 'POST', body: { tenant: orgCode } }).then((r) => live && setReset(r.channels ?? [])).catch(() => live && setReset([])); }, 300);
+    return () => { live = false; clearTimeout(id); };
+  }, [orgCode, resolving]);
+
   const change = () => { localStorage.removeItem(ORG_KEY); setNeedCode(true); setKnown(null); setTenant(''); setSso(null); setCodeError(''); setError(''); };
   const checkTyped = async () => {
     const c = tenant.trim();
@@ -114,6 +126,7 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
   };
 
   const field = 'w-full mt-1 p-2 border border-[#E5E5E0] rounded text-[13px] font-normal';
+  if (forgot && reset.length > 0) return <ForgotPassword orgCode={orgCode} orgName={known?.name} channels={reset} initialUsername={username} onCancel={() => setForgot(false)} onDone={(u) => { setUsername(u); setPassword(''); setForgot(false); setError(''); }} />;
   return (
     <div className="min-h-screen bg-[#FAFAF8] flex items-center justify-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm bg-white border border-[#E5E5E0] rounded-lg shadow-xs p-6 space-y-4">
@@ -165,8 +178,10 @@ export const LoginView: React.FC<{ onLogin: (session: Session) => void }> = ({ o
         </label>
         <label className="block text-[12px] font-semibold text-[#171717]">
           Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" className={field} />
+          <PasswordInput wrapperClassName="mt-1" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" className={field.replace('mt-1', '')} />
         </label>
+
+        {reset.length > 0 && orgCode && <button type="button" onClick={() => setForgot(true)} className="-mt-2 text-[12px] text-[#6B6B6B] hover:text-[#171717] underline">Forgot your password?</button>}
 
         {sso?.enabled && (
           <a href={`/api/v1/auth/sso/${encodeURIComponent(orgCode || '_')}/start`} className="w-full px-4 py-2 rounded border border-[#171717] text-[#171717] hover:bg-[#FAFAF8] text-[13px] font-semibold flex items-center justify-center gap-2">

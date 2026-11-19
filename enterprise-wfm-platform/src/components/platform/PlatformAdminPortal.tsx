@@ -7,6 +7,7 @@
  * Features Interactive Hierarchical Tree View (Platform to Organisations to Workspaces & Admins).
  */
 import { ZoneSelect } from '../common/ZoneSelect';
+import { PasswordInput } from '../common/PasswordInput';
 import React, { useEffect, useState } from 'react';
 import {
   ShieldAlert, Building2, Plus, Users, Globe, Check, AlertCircle,
@@ -999,8 +1000,8 @@ export const PlatformAdminPortal: React.FC = () => {
               <label className="block text-[12px] font-semibold text-[#171717] mb-1">
                 Password
               </label>
-              <input
-                type="password"
+              <PasswordInput
+                
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
                 placeholder="************"
@@ -2981,8 +2982,8 @@ export const PlatformAdminPortal: React.FC = () => {
                     </div>
                     <div>
                       <label className="block text-[#737373] text-[11px] font-semibold mb-1">Admin Password (min 8 chars)</label>
-                      <input
-                        type="password"
+                      <PasswordInput
+                        
                         placeholder="********"
                         value={newOrgForm.adminPassword}
                         onChange={(e) => setNewOrgForm({ ...newOrgForm, adminPassword: e.target.value })}
@@ -3657,8 +3658,8 @@ export const PlatformAdminPortal: React.FC = () => {
 
               <div>
                 <label className="block text-[12px] font-semibold text-[#171717] mb-1">Password (min 8 characters)</label>
-                <input
-                  type="password"
+                <PasswordInput
+                  
                   required
                   minLength={8}
                   value={newAdminForm.password}

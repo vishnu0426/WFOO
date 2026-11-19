@@ -36,6 +36,9 @@ export function useVersionActions() {
     returnToDraft: canReturn && (st === "SUBMITTED" || st === "APPROVED") ? () => step("reject", "Returned to draft.", "Why is it being returned to draft?") : null,
     clone: can("forecast:create") && (st === "PUBLISHED" || st === "ARCHIVED")
       ? () => run(async () => { const v = await api(`/forecast/versions/${version!.id}/clone`, { method: "POST" }); await reload(v.id); }, "Draft copy created. Adjust it, then submit it for approval.") : null,
+    /** Take the live version out of use (it is archived and kept). Asked for with a reason, after the screen has shown what depends on it. */
+    withdraw: (can("forecast:publish") || can("forecast:delete")) && st === "PUBLISHED"
+      ? (reason: string) => run(async () => { await api(`/forecast/versions/${version!.id}/withdraw`, { method: "POST", body: { reason } }); await reload(version!.id); }, "Withdrawn. It is archived and kept: you can clone it, or delete it.") : null,
     remove: can("forecast:delete") && version && st !== "PUBLISHED"
       ? () => { if (!confirm(`Delete "${version!.name}"?`)) return; run(async () => { await api(`/forecast/versions/${version!.id}`, { method: "DELETE" }); setVersionId(null); await reload(); }, "Forecast deleted."); } : null,
     exportAll: version ? () => run(() => download(`/forecast/versions/${version.id}/export.csv`, `forecast-v${version.seq}.csv`)) : null,

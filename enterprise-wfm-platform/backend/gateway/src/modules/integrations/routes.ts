@@ -24,7 +24,8 @@ import { ingestLive, LiveRows } from '../ingestionRoutes.ts';
 import { ingestAgentEvents } from '../intradayRoutes.ts';
 import { PRESETS, presetById, presetsByCategory, configSchemaFor, type Category } from './presets.ts';
 import { mapFields, suggestEntityMatches, type FieldMap } from './mapping.ts';
-import { startSubscription, stopSubscription, testNatsConnection } from './natsSubscriber.ts';
+import { forgetRules, startSubscription, stopSubscription, testNatsConnection } from './natsSubscriber.ts';
+import { currentError, WAITING_RULE_SQL } from './staleError.ts';
 import { applyLiveRows, loadFieldMaps, pullSupport, recordRun, runConnector, stageBackfillRows, summariseLive, testDatabaseQuery, testRestPull } from './runner.ts';
 import { checkPresetConfig, relayIntervalMinutes } from './pullRules.ts';
 import { readinessOf } from './readiness.ts';
@@ -39,7 +40,7 @@ const uuid = z.string().uuid();
 
 const connectorDto = (c: any, memberCount?: number) => ({
   id: c.id, wfmGroupId: c.wfmGroupId, category: c.category, method: c.method, preset: c.preset, name: c.name, status: c.status,
-  config: redactConfig(c.config), lastReceivedAt: c.lastReceivedAt, lastError: c.lastError, lastSample: c.lastSample ?? null, connectedAt: c.connectedAt ?? null,
+  config: redactConfig(c.config), lastReceivedAt: c.lastReceivedAt, lastError: c.pendingRules === undefined ? c.lastError : currentError(c.lastError, c.pendingRules), lastSample: c.lastSample ?? null, connectedAt: c.connectedAt ?? null,
   backfillStatus: c.backfillStatus, backfillThrough: c.backfillThrough, hasWebhookSecret: !!c.webhookSecret, createdBy: c.createdBy, createdAt: c.createdAt,
   scheduleMin: c.scheduleMin ?? null, scheduleAt: c.scheduleAt ?? null, scheduleDays: c.scheduleDays ?? null, nextRunAt: c.nextRunAt ?? null, ...pullSupport(presetById(c.preset), c.config ?? {}),
 });
@@ -68,6 +69,7 @@ integrationsAdmin.get('/', requires('config:read'), async (req, res) => {
   const p = me(req), groupId = req.query.groupId ? parse(uuid, req.query.groupId) : null;
   const rows = await withTenant(p.tenantId, (tx) => tx.q<any>(
     `SELECT c.*, c.backfill_through::text AS backfill_through,
+            (SELECT count(*)::int FROM integration_event_rules e WHERE e.tenant_id = c.tenant_id AND e.connector_id = c.id AND e.action = 'PENDING') AS pending_rules,
             (SELECT coalesce(sum(r.rows_ok), 0)::int FROM integration_runs r WHERE r.tenant_id = c.tenant_id AND r.connector_id = c.id AND r.started_at > now() - interval '24 hours') AS rows_24h
        FROM integration_connectors c WHERE c.tenant_id = :t AND ($1::uuid IS NULL OR c.wfm_group_id = $1 OR c.wfm_group_id IS NULL) ORDER BY c.name`, [groupId]));
   res.json(rows.map((r) => ({ ...connectorDto(r), rows24h: r.method === 'STREAM_SUBSCRIBE' ? null : r.rows24h })));      // a stream keeps no per-delivery history, so it has no count to show
@@ -89,7 +91,7 @@ integrationsAdmin.post('/inspect-certificate', requires('config:read'), async (r
 
 integrationsAdmin.get('/:id', requires('config:read'), async (req, res) => {
   const p = me(req), id = parse(uuid, req.params.id);
-  const c = await withTenant(p.tenantId, (tx) => tx.one<any>('SELECT *, backfill_through::text AS backfill_through FROM integration_connectors WHERE tenant_id = :t AND id = $1', [id]));
+  const c = await withTenant(p.tenantId, (tx) => tx.one<any>("SELECT *, backfill_through::text AS backfill_through, (SELECT count(*)::int FROM integration_event_rules e WHERE e.tenant_id = integration_connectors.tenant_id AND e.connector_id = integration_connectors.id AND e.action = 'PENDING') AS pending_rules FROM integration_connectors WHERE tenant_id = :t AND id = $1", [id]));
   if (!c) throw notFound('Connector');
   res.json(connectorDto(c));
 });
@@ -324,8 +326,10 @@ integrationsAdmin.put('/:id/event-rules/:eventType', requires('config:write'), a
       `INSERT INTO integration_event_rules (tenant_id, connector_id, event_type, action, state, reason) VALUES (:t, $1, $2, $3, $4, $5)
        ON CONFLICT (connector_id, event_type) DO UPDATE SET action = EXCLUDED.action, state = EXCLUDED.state, reason = EXCLUDED.reason`,
       [id, eventType, b.action, b.action === 'STATE' ? b.state : null, b.action === 'STATE' ? (b.reason ?? null) : null]);
+    await tx.exec(`UPDATE integration_connectors SET last_error = NULL WHERE tenant_id = :t AND id = $1 AND ${WAITING_RULE_SQL} AND NOT EXISTS (SELECT 1 FROM integration_event_rules r WHERE r.tenant_id = :t AND r.connector_id = $1 AND r.action = 'PENDING')`, [id]);
     await audit(tx, p, req, { action: 'UPDATE', entityType: 'INTEGRATION_CONNECTOR', entityId: id, entityName: c.name, diffSummary: `Event type '${eventType}' set to ${b.action}${b.state ? ` (${b.state})` : ''}` });
   });
+  forgetRules(id);
   res.json({ ok: true });
 });
 
